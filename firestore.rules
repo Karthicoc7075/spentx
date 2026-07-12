@@ -1,0 +1,261 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    /** LLD §6 — viewer share doc id: {purposeId}_{viewerUid} */
+    function purposeShareDocId(purposeId, viewerUid) {
+      return purposeId + '_' + viewerUid;
+    }
+
+    function isSharedViewer(ownerId, purposeId) {
+      return request.auth != null
+        && request.auth.uid != ownerId
+        && exists(/databases/$(database)/documents/purposeShares/$(purposeShareDocId(purposeId, request.auth.uid)))
+        && get(/databases/$(database)/documents/purposeShares/$(purposeShareDocId(purposeId, request.auth.uid))).data.ownerId == ownerId;
+    }
+
+    function hasViewerGrant(ownerId) {
+      return request.auth != null
+        && request.auth.uid != ownerId
+        && exists(/databases/$(database)/documents/viewerGrants/$(request.auth.uid + '__' + ownerId));
+    }
+
+    // --- User profile (settings, KPI config) ---
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /{document=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // --- Core financial collections (top-level, userId-scoped) ---
+    //
+    // NOTE on `resource == null ||`: the app does plain getDoc() lookups by a
+    // deterministic/candidate document id (e.g. "does a plan already exist
+    // for this month?") and expects a clean "not found" when it doesn't.
+    // Firestore evaluates security rules on `get` even when the document is
+    // absent — and if a rule dereferences `resource.data` while `resource`
+    // is null, the SDK surfaces that as `permission-denied` ("Missing or
+    // insufficient permissions"), not as "not found". Checking
+    // `resource == null` first is the documented Firestore pattern to allow
+    // reads of not-yet-created documents without exposing any real data
+    // (there's nothing to read when the doc doesn't exist).
+
+    match /purposes/{purposeId} {
+      allow read: if resource == null
+                   || isOwner(resource.data.userId)
+                   || isSharedViewer(resource.data.userId, purposeId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    match /accounts/{accountId} {
+      allow read: if resource == null
+                   || isOwner(resource.data.userId)
+                   || hasViewerGrant(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    match /categories/{categoryId} {
+      allow read: if resource == null
+                   || isOwner(resource.data.userId)
+                   || hasViewerGrant(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if resource == null
+                   || isOwner(resource.data.userId)
+                   || isSharedViewer(resource.data.userId, resource.data.purpose);
+      allow create: if isOwner(request.resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+    }
+
+    match /snapshots/{snapshotId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /monthlyPlans/{planId} {
+      allow read: if resource == null
+                   || isOwner(resource.data.userId)
+                   || isSharedViewer(resource.data.userId, resource.data.purposeId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /planTemplates/{templateId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /investments/{investmentId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    // --- Sharing ---
+
+    match /viewerGrants/{grantId} {
+      allow read: if request.auth != null && (resource == null || (
+        resource.data.viewerUid == request.auth.uid
+        || resource.data.ownerId == request.auth.uid
+      ));
+      allow create, update: if request.auth != null
+        && request.resource.data.viewerUid == request.auth.uid;
+      allow delete: if request.auth != null && (
+        resource.data.ownerId == request.auth.uid
+        || resource.data.viewerUid == request.auth.uid
+      );
+    }
+
+    match /purposeShares/{shareId} {
+      allow read: if request.auth != null && (resource == null || (
+        resource.data.ownerId == request.auth.uid
+        || resource.data.viewerUid == request.auth.uid
+        || (
+          request.auth.token.email != null
+          && resource.data.viewerEmail == request.auth.token.email
+        )
+      ));
+      allow create: if request.auth != null && (
+        (
+          request.resource.data.ownerId == request.auth.uid
+          && request.resource.data.role == 'viewer'
+        )
+        || (
+          // Share-link claim: possession of a valid (unguessable) link token
+          // grants this uid a viewer claim for exactly the owner + purpose
+          // named on the link. Used by anonymous no-login viewers.
+          request.resource.data.viewerUid == request.auth.uid
+          && request.resource.data.role == 'viewer'
+          && shareId == purposeShareDocId(request.resource.data.purposeId, request.auth.uid)
+          && request.resource.data.linkToken is string
+          && exists(/databases/$(database)/documents/shareLinks/$(request.resource.data.linkToken))
+          && get(/databases/$(database)/documents/shareLinks/$(request.resource.data.linkToken)).data.ownerId == request.resource.data.ownerId
+          && get(/databases/$(database)/documents/shareLinks/$(request.resource.data.linkToken)).data.purposeId == request.resource.data.purposeId
+        )
+      );
+      allow update: if request.auth != null && (
+        resource.data.ownerId == request.auth.uid
+        || (
+          request.auth.token.email != null
+          && resource.data.viewerEmail == request.auth.token.email
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewerUid'])
+        )
+      );
+      allow delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    // View-only share links. The doc id is a long random token; possession
+    // of the token IS the credential, so single-doc `get` is open (the id
+    // cannot be enumerated because `list` is owner-only).
+    match /shareLinks/{token} {
+      allow get: if true;
+      allow list: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.ownerId == request.auth.uid;
+      allow delete: if request.auth != null
+        && resource.data.ownerId == request.auth.uid;
+      allow update: if false;
+    }
+
+    // --- Outings ---
+
+    match /outings/{outingId} {
+      allow read: if request.auth != null && (resource == null || (
+        resource.data.createdBy == request.auth.uid
+        || (resource.data.participants != null
+          && request.auth.uid in resource.data.participants)
+      ));
+      allow create: if request.auth != null
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update, delete: if request.auth != null
+        && resource.data.createdBy == request.auth.uid;
+    }
+
+    match /outingExpenses/{expenseId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /outingSettlements/{settlementId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /friends/{friendId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /contributors/{contributorId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    // --- Outgoing email queue (Firebase "Trigger Email" extension) ---
+    // The client may only enqueue a message; it can't read, edit, or delete
+    // the queue. The extension processes docs server-side with admin
+    // privileges (which bypass these rules) and writes back delivery state.
+    match /mail/{mailId} {
+      allow create: if request.auth != null;
+      allow read, update, delete: if false;
+    }
+
+    // --- Admin / system collections ---
+
+    match /defaultCategories/{categoryId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin();
+    }
+
+    match /globalSettings/{docId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin();
+    }
+
+    match /aiInsights/{insightId} {
+      allow read: if resource == null || isOwner(resource.data.userId);
+      allow update, delete: if isOwner(resource.data.userId);
+      allow create: if isOwner(request.resource.data.userId);
+    }
+
+    match /smsTemplateRules/{ruleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin();
+    }
+
+    match /smsDetectionRules/{ruleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin();
+    }
+
+    match /smsBlockRules/{ruleId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && isAdmin();
+    }
+  }
+}
