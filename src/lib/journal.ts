@@ -70,7 +70,7 @@ export function filterTransactionsForWeek(
   const end = getWeekEnd(weekStart);
 
   return transactions.filter((transaction) => {
-    const date = new Date(transaction.date);
+    const date = new Date(transaction.transactionDate);
     return date >= start && date <= end;
   });
 }
@@ -95,7 +95,7 @@ export function calculateWeeklyPlanAdherence(
 
   const weekSpend = filterTransactionsForWeek(transactions, weekStart)
     .filter((transaction) => transaction.type === "expense")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   if (weeklyBudget <= 0) return 0;
   if (weekSpend <= weeklyBudget) {
@@ -113,11 +113,11 @@ export function getStandoutTransactions(
 ) {
   return filterTransactionsForWeek(transactions, weekStart)
     .filter((transaction) => transaction.type === "expense")
-    .sort((a, b) => b.amount - a.amount)
+    .sort((a, b) => b.totalAmount - a.totalAmount)
     .slice(0, limit)
     .map(
       (transaction) =>
-        `${transaction.merchant} · ${transaction.category} · ₹${transaction.amount.toLocaleString("en-IN")}`,
+        `${transaction.merchant} · ${transaction.category} · ₹${transaction.totalAmount.toLocaleString("en-IN")}`,
     );
 }
 

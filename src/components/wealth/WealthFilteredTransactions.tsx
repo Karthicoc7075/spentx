@@ -18,14 +18,18 @@ import {
   getTransactionBalanceAfter,
   getWealthFilterLabel,
 } from "@/lib/wealth";
-import { formatCurrency, formatDateTime } from "@/lib/utils";
+import {
+  compareTransactionsNewestFirst,
+  formatCurrency,
+  formatDateTime,
+  transactionDateKey,
+} from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import type { Account, Investment, Transaction, WealthFilter } from "@/types";
+import type { Account, Transaction, WealthFilter } from "@/types";
 
 type WealthFilteredTransactionsProps = {
   transactions: Transaction[];
   accounts: Account[];
-  investments: Investment[];
   filter: WealthFilter;
   onClearFilter: () => void;
 };
@@ -33,20 +37,17 @@ type WealthFilteredTransactionsProps = {
 export function WealthFilteredTransactions({
   transactions,
   accounts,
-  investments,
   filter,
   onClearFilter,
 }: WealthFilteredTransactionsProps) {
   const filtered = useMemo(
-    () => filterWealthTransactions(transactions, filter, accounts, investments),
-    [accounts, filter, investments, transactions],
+    () => filterWealthTransactions(transactions, filter, accounts),
+    [accounts, filter, transactions],
   );
 
   const sorted = useMemo(
     () =>
-      [...filtered].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-      ),
+      [...filtered].sort(compareTransactionsNewestFirst),
     [filtered],
   );
 
@@ -62,27 +63,35 @@ export function WealthFilteredTransactions({
     );
   }, [accounts, balanceAccountName, transactions]);
 
-  if (filter.type === "all") return null;
-
-  const filterLabel = getWealthFilterLabel(filter, accounts);
+  const filterLabel = getWealthFilterLabel(filter);
+  const isFiltered = filter.type !== "all";
 
   return (
-    <div className="rounded-2xl border bg-card">
+    <div className="sx-surface">
       <div className="flex flex-row items-center justify-between gap-3 border-b px-6 py-4">
         <div>
-          <h3 className="text-base font-semibold text-foreground">Transactions</h3>
+          <h3 className="text-base font-semibold text-foreground">
+            {isFiltered ? "Filtered transactions" : "All account activity"}
+          </h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Filtered by selected segment.
+            {isFiltered
+              ? "Full detail list for the selected segment or account."
+              : "Full detail list of ledger activity. Click Bank or Cash above to narrow."}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" variant="outline">
-            Showing: {filterLabel}
+          <Badge
+            className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+            variant="outline"
+          >
+            {sorted.length} · {filterLabel}
           </Badge>
-          <Button variant="ghost" onClick={onClearFilter}>
-            <X className="mr-1 size-3.5" />
-            Clear filter
-          </Button>
+          {isFiltered ? (
+            <Button variant="ghost" onClick={onClearFilter}>
+              <X className="mr-1 size-3.5" />
+              Clear filter
+            </Button>
+          ) : null}
         </div>
       </div>
       <div className="p-0">
@@ -91,12 +100,13 @@ export function WealthFilteredTransactions({
             No transactions found for this selection.
           </p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="max-h-[32rem] overflow-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead>Merchant</TableHead>
+                  <TableHead>Category</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Account</TableHead>
@@ -108,15 +118,18 @@ export function WealthFilteredTransactions({
               <TableBody>
                 {sorted.map((transaction) => (
                   <TableRow key={transaction.id}>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {formatDateTime(transaction.date)}
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatDateTime(transactionDateKey(transaction))}
                     </TableCell>
                     <TableCell className="font-medium">
                       {transaction.merchant}
                     </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {transaction.category || "—"}
+                    </TableCell>
                     <TableCell
                       className={cn(
-                        "font-semibold",
+                        "font-semibold tabular-nums",
                         transaction.type === "income"
                           ? "text-emerald-500"
                           : "text-rose-500",
@@ -132,7 +145,7 @@ export function WealthFilteredTransactions({
                       {transaction.account}
                     </TableCell>
                     {balanceAccountName ? (
-                      <TableCell className="text-right text-xs font-medium">
+                      <TableCell className="text-right text-xs font-medium tabular-nums">
                         {formatCurrency(
                           balanceMap.get(transaction.id) ?? 0,
                         )}

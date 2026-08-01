@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   fetchProjectorSettings,
   saveProjectorSettings,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { FutureSelfInputs } from "@/types";

@@ -83,7 +83,6 @@ export const cacheKeys = {
   planTemplates: "planTemplates",
   incomeStreams: "incomeStreams",
   incomeTargets: "incomeTargets",
-  investments: "investments",
   savingsGoals: "savingsGoals",
   projectorSettings: "projectorSettings",
   reflections: "reflections",
@@ -104,10 +103,6 @@ export function hydrateQueryCaches(queryClient: QueryClient, userId: string) {
     {
       queryKey: queryKeys.incomeTargets(userId),
       cacheKey: cacheKeys.incomeTargets,
-    },
-    {
-      queryKey: queryKeys.investments(userId),
-      cacheKey: cacheKeys.investments,
     },
     {
       queryKey: queryKeys.savingsGoals(userId),

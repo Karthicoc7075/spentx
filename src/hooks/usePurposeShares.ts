@@ -6,11 +6,14 @@ import {
   fetchPurposeShares,
   linkPurposeSharesForViewer,
   revokePurposeShare,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
+import { usePathname } from "next/navigation";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 
 export function usePurposeShares() {
+  const pathname = usePathname();
+  const isBypassedRoute = pathname.startsWith("/share") || pathname.startsWith("/admin");
   const { user, isConfigured, isReady } = useAuthReady();
   const queryClient = useQueryClient();
 
@@ -18,22 +21,39 @@ export function usePurposeShares() {
     queryKey: queryKeys.purposeShares(user?.id),
     queryFn: async () => {
       if (!user?.id || !user.email) return [];
-      await linkPurposeSharesForViewer(user.id, user.email);
+      try {
+        await linkPurposeSharesForViewer(user.id, user.email);
+      } catch {
+        // Non-fatal: viewer linking can fail before invite policies are applied.
+      }
       return fetchPurposeShares(user.id, user.email);
     },
-    enabled: (isReady || !isConfigured) && Boolean(user?.id && user.email),
+    enabled: (isReady || !isConfigured) && Boolean(user?.id && user.email) && !isBypassedRoute,
   });
 
-  async function inviteViewer(viewerEmail: string, purposeId: string) {
-    const share = await createPurposeShare(user?.id, viewerEmail, purposeId);
+  async function inviteViewer(
+    viewerEmail: string,
+    purposeId: string,
+    linkToken?: string,
+    contributorId?: string | null,
+    expiresAt?: string | null,
+  ) {
+    const share = await createPurposeShare(
+      user?.id,
+      viewerEmail,
+      purposeId,
+      linkToken,
+      contributorId,
+      expiresAt,
+    );
     await queryClient.invalidateQueries({
       queryKey: queryKeys.purposeShares(user?.id),
     });
     return share;
   }
 
-  async function removeShare(shareId: string) {
-    await revokePurposeShare(user?.id, shareId);
+  async function removeShare(shareId: string, purposeId?: string, viewerEmail?: string) {
+    await revokePurposeShare(user?.id, shareId, purposeId, viewerEmail);
     await queryClient.invalidateQueries({
       queryKey: queryKeys.purposeShares(user?.id),
     });

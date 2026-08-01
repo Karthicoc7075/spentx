@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { defaultIncomeTargets } from "@/lib/growth";
-import { fetchIncomeTargets, saveIncomeTargets } from "@/lib/firebase";
+import { fetchIncomeTargets, saveIncomeTargets } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { IncomeTargets } from "@/types";

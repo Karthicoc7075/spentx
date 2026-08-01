@@ -24,7 +24,7 @@ export function MonthlyComparisonTimeline({ data }: MonthlyComparisonTimelinePro
   const hasActivity = chartData.some((item) => item.income > 0 || item.expense > 0);
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-6">
+    <div className="sx-surface p-6">
       <div className="mb-4">
         <h3 className="text-base font-semibold text-foreground">Monthly Comparison</h3>
         <p className="mt-1 text-sm text-muted-foreground">

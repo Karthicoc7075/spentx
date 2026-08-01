@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/server/with-route-logging";
 
-export async function POST(request: Request) {
+async function handler(request: Request) {
   try {
     const { messages, financialContext } = await request.json();
     
@@ -75,3 +76,5 @@ Rules:
     );
   }
 }
+
+export const POST = withRouteLogging("ai", "route_handler", handler);

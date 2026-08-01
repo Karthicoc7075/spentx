@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { usePathname } from "next/navigation";
 import {
   createContext,
   ReactNode,
@@ -21,7 +22,6 @@ import {
   fetchFriends,
   fetchIncomeStreams,
   fetchIncomeTargets,
-  fetchInvestments,
   fetchMonthlyPlan,
   fetchPlanTemplates,
   fetchProjectorSettings,
@@ -31,9 +31,11 @@ import {
   fetchTransactions,
   saveOuting,
   subscribeToOutings,
+  subscribeToOutingExpenseChanges,
   subscribeToTransactions,
   deleteOuting,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
+import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
 import { getCurrentPlanMonth } from "@/lib/plan";
 import { useAutoBackup } from "@/hooks/useAutoBackup";
 import { useApplyUserPreferences } from "@/hooks/useApplyUserPreferences";
@@ -49,8 +51,9 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { withoutMockTransactions } from "@/lib/mock-data";
 import { transactionMatchesPurpose } from "@/lib/purposes";
+import { useShareSession } from "@/providers/share-provider";
 import { useViewerAccess } from "@/providers/viewer-provider";
-import type { Outing, Transaction } from "@/types";
+import type { FriendSplit, Outing, Transaction } from "@/types";
 
 type AppDataContextValue = {
   transactions: Transaction[];
@@ -83,9 +86,21 @@ function assertCanMutate(isReadOnlyViewer: boolean) {
 }
 
 export function AppDataProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  // Admin portal never needs the personal ledger/outings/prefetch storm —
+  // those pages only call admin RPCs. Skipping here cuts 15–30 proxy calls
+  // on every /admin refresh.
+  const isAdminRoute = pathname.startsWith("/admin");
+  const isShareRoute = pathname.startsWith("/share");
   const { user, isConfigured, isReady } = useAuthReady();
   const { dataOwnerId, isReadOnlyViewer, sharedPurposeIds } = useViewerAccess();
-  const effectiveUserId = dataOwnerId ?? user?.id;
+  const share = useShareSession();
+  // Anonymous share sessions have no auth.uid(), so every direct
+  // fetch/subscribe/prefetch below (all owner-RLS-gated) would just fail —
+  // forcing effectiveUserId to undefined makes this provider a clean no-op
+  // for share sessions; useTransactions' RPC-backed React Query layer is
+  // the sole data source there instead.
+  const effectiveUserId = share || isAdminRoute || isShareRoute ? undefined : (dataOwnerId ?? user?.id);
   const queryClient = useQueryClient();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
@@ -97,12 +112,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const transactionsRef = useRef<Transaction[]>([]);
 
   // Automatic backups (weekly + debounced on-change). Only for the signed-in
-  // owner — read-only viewers must not back up someone else's data.
-  useAutoBackup(isReadOnlyViewer ? undefined : user?.id);
+  // owner — read-only viewers must not back up someone else's data. Admins
+  // on /admin also skip (no personal-data edits there).
+  useAutoBackup(isReadOnlyViewer || isAdminRoute ? undefined : user?.id);
 
   // Apply the viewer's own display preferences (currency, private mode)
-  // to the app-wide formatCurrency singleton.
-  useApplyUserPreferences(user?.id);
+  // to the app-wide formatCurrency singleton. Not needed on admin routes.
+  useApplyUserPreferences(isAdminRoute ? undefined : user?.id);
 
   const filterViewerTransactions = useCallback(
     (items: Transaction[]) => {
@@ -231,6 +247,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     );
 
     let unsubscribeOutings: () => void = () => {};
+    let unsubscribeOutingExpenses: () => void = () => {};
     if (!isReadOnlyViewer) {
       unsubscribeOutings = subscribeToOutings(
         user?.id,
@@ -241,6 +258,32 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         },
         () => setOutingsLoading(false),
       );
+      // Mobile outing-expense edits: NW/Wealth already use expenses (correct);
+      // Transactions shows a separate "Outing total" rollup row — rewrite it
+      // immediately so the list amount matches outing detail.
+      unsubscribeOutingExpenses = subscribeToOutingExpenseChanges(user?.id, () => {
+        void (async () => {
+          try {
+            await syncAllOutingRollups(user?.id);
+          } catch {
+            // Fall through to cache invalidation so the page still recovers.
+          }
+          if (cancelled) return;
+          await Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.outingExpenses(user?.id),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.allOutingExpenses(user?.id),
+            }),
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.transactions(user?.id),
+            }),
+          ]);
+          const fetched = await fetchTransactions(userId);
+          if (!cancelled) hydrateTransactions(fetched);
+        })();
+      });
     } else {
       setOutings([]);
       setOutingsLoading(false);
@@ -250,6 +293,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       unsubscribeTransactions();
       unsubscribeOutings();
+      unsubscribeOutingExpenses();
     };
   }, [
     effectiveUserId,
@@ -331,11 +375,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         () => fetchIncomeTargets(userId),
       ),
       prefetchWithCache(
-        queryKeys.investments(userId),
-        cacheKeys.investments,
-        () => fetchInvestments(userId),
-      ),
-      prefetchWithCache(
         queryKeys.savingsGoals(userId),
         cacheKeys.savingsGoals,
         () => fetchSavingsGoals(userId),
@@ -395,9 +434,20 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     },
     onSuccess: (_, variables) => {
       setTransactions((current) => {
-        const next = current.map((t) =>
-          t.id === variables.id ? { ...t, ...variables.transaction } : t,
-        );
+        const next = current.map((t) => {
+          if (t.id !== variables.id) return t;
+          const merged = { ...t, ...variables.transaction };
+          const dateValue =
+            variables.transaction.transactionDate ??
+            variables.transaction.date ??
+            t.transactionDate ??
+            t.date;
+          return {
+            ...merged,
+            date: dateValue,
+            transactionDate: dateValue,
+          };
+        });
         transactionsRef.current = next;
         if (user?.id) {
           queryClient.setQueryData(queryKeys.transactions(user.id), next);
@@ -423,6 +473,21 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         }
         return next;
       });
+      // Drop the friend split (if any) that pointed at this transaction so
+      // Friends / Friend detail don't keep showing a ghost balance.
+      if (user?.id) {
+        queryClient.setQueryData(
+          queryKeys.allFriendSplits(user.id),
+          (current: FriendSplit[] | undefined) =>
+            (current ?? []).filter((split) => split.transactionId !== id),
+        );
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.allFriendSplits(user.id),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.allFriendSettlements(user.id),
+        });
+      }
     },
   });
 
@@ -451,7 +516,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     } finally {
       setTransactionsLoading(false);
     }
-  }, [queryClient, user?.id]);
+  }, [effectiveUserId, filterViewerTransactions, queryClient]);
 
   const value = useMemo<AppDataContextValue>(
     () => ({
@@ -465,20 +530,60 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       deleteTransaction: deleteMutation.mutateAsync,
       addOuting: async (outing) => {
         assertCanMutate(isReadOnlyViewer);
+        // Only one active outing at a time (matches mobile).
+        if (outing.status === "active") {
+          const hasActive = outings.some(
+            (o) => o.status === "active" && o.isActive !== false,
+          );
+          if (hasActive) {
+            throw new Error(
+              "An outing is already active. End it before creating another.",
+            );
+          }
+        }
         const saved = await saveOuting(user?.id, {
           ...outing,
           id: crypto.randomUUID(),
           userId: user?.id,
         });
+        // Keep in-memory list in sync so /outings/[id] finds the new row
+        // immediately (don't wait for realtime).
+        setOutings((current) => [
+          saved,
+          ...current.filter((item) => item.id !== saved.id),
+        ]);
+        queryClient.setQueryData<Outing[]>(
+          queryKeys.outings(user?.id),
+          (current = []) => [
+            saved,
+            ...current.filter((item) => item.id !== saved.id),
+          ],
+        );
         return saved;
       },
-      updateOuting: (outing) => {
+      updateOuting: async (outing) => {
         assertCanMutate(isReadOnlyViewer);
-        return saveOuting(user?.id, outing);
+        const saved = await saveOuting(user?.id, outing);
+        setOutings((current) =>
+          current.map((item) => (item.id === saved.id ? saved : item)),
+        );
+        queryClient.setQueryData<Outing[]>(
+          queryKeys.outings(user?.id),
+          (current = []) =>
+            current.map((item) => (item.id === saved.id ? saved : item)),
+        );
+        return saved;
       },
-      removeOuting: (outingId) => {
+      removeOuting: async (outingId) => {
         assertCanMutate(isReadOnlyViewer);
-        return deleteOuting(user?.id, outingId).then(() => undefined);
+        await deleteOuting(user?.id, outingId);
+        setOutings((current) =>
+          current.filter((item) => item.id !== outingId),
+        );
+        queryClient.setQueryData<Outing[]>(
+          queryKeys.outings(user?.id),
+          (current = []) => current.filter((item) => item.id !== outingId),
+        );
       },
       isTransactionsMutating:
         addMutation.isPending ||
@@ -493,6 +598,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       lastSyncedAt,
       outings,
       outingsLoading,
+      queryClient,
       reloadTransactions,
       transactions,
       transactionsError,

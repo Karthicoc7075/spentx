@@ -8,16 +8,34 @@ import {
   type DashboardKpiKey,
   useDashboardKpiConfig,
 } from "@/hooks/useDashboardKpiConfig";
-import { computeNetWorthByPurpose } from "@/lib/dashboard";
+import {
+  computeNetWorthByPurpose,
+  getAccountBalance,
+} from "@/lib/wealth";
 import { kpiIcons } from "@/lib/dashboard-kpi-meta";
-import { getAccountBalance } from "@/lib/wealth";
 import { cn, formatCurrency } from "@/lib/utils";
-import type { Account, KpiData, KpiDelta, Purpose, Transaction } from "@/types";
+import type {
+  Account,
+  KpiData,
+  KpiDelta,
+  OutingExpense,
+  Purpose,
+  Transaction,
+} from "@/types";
 
 type DashboardKpiRowProps = {
+  readonly isReadOnlyViewer: boolean;
   kpis: KpiData | null;
   accounts: Account[];
+  /** Full, unfiltered-by-active-filter ledger — the "Per Purpose" Net Worth
+   * breakdown needs every purpose's own data, not just the currently
+   * selected one. */
   transactions: Transaction[];
+  /** Purpose/Category-narrowed (but date-unrestricted) ledger — same set
+   * the Net Worth KPI is built from. Used for Cash in Hand / Bank Balance
+   * so those cards agree with Net Worth under the active filter. Falls
+   * back to `transactions` when omitted. */
+  balanceTransactions?: Transaction[];
   purposes: Purpose[];
   investmentsTotal: number;
   periodLabel: string;
@@ -25,6 +43,7 @@ type DashboardKpiRowProps = {
   configOpen?: boolean;
   showComparison?: boolean;
   onConfigOpenChange?: (open: boolean) => void;
+  unlinkedOutingExpenses?: OutingExpense[];
 };
 
 function shortDelta(delta: KpiDelta) {
@@ -73,9 +92,11 @@ function DeltaPill({
 }
 
 export function DashboardKpiRow({
+  isReadOnlyViewer,
   kpis,
   accounts,
   transactions,
+  balanceTransactions,
   purposes,
   investmentsTotal,
   periodLabel,
@@ -83,37 +104,49 @@ export function DashboardKpiRow({
   configOpen = false,
   showComparison = true,
   onConfigOpenChange,
+  unlinkedOutingExpenses = [],
 }: DashboardKpiRowProps) {
+  const balanceLedger = balanceTransactions ?? transactions;
   const { activeKeys, setActiveKeys, resetToDefault } = useDashboardKpiConfig();
   const [netWorthView, setNetWorthView] = useState<"combined" | "per-purpose">(
     "combined",
   );
 
   const perPurposeNetWorth = useMemo(
-    () => computeNetWorthByPurpose(accounts, transactions, purposes),
-    [accounts, purposes, transactions],
+    () =>
+      computeNetWorthByPurpose(
+        accounts,
+        transactions,
+        purposes,
+        unlinkedOutingExpenses,
+      ),
+    [accounts, purposes, transactions, unlinkedOutingExpenses],
   );
 
   const cashBalance = useMemo(
     () =>
       accounts
-        .filter((account) => account.type === "cash" && account.is_active !== false)
+        .filter((account) => account.type === "cash" && account.isActive !== false)
         .reduce(
-          (sum, account) => sum + getAccountBalance(account, transactions),
+          (sum, account) =>
+            sum +
+            getAccountBalance(account, balanceLedger, unlinkedOutingExpenses),
           0,
         ),
-    [accounts, transactions],
+    [accounts, balanceLedger, unlinkedOutingExpenses],
   );
 
   const bankBalance = useMemo(
     () =>
       accounts
-        .filter((account) => account.type === "bank" && account.is_active !== false)
+        .filter((account) => account.type === "bank" && account.isActive !== false)
         .reduce(
-          (sum, account) => sum + getAccountBalance(account, transactions),
+          (sum, account) =>
+            sum +
+            getAccountBalance(account, balanceLedger, unlinkedOutingExpenses),
           0,
         ),
-    [accounts, transactions],
+    [accounts, balanceLedger, unlinkedOutingExpenses],
   );
 
   function renderCard(key: DashboardKpiKey, index: number) {
@@ -129,14 +162,15 @@ export function DashboardKpiRow({
       return (
         <div
           key={key}
-          className="group relative flex flex-col justify-between rounded-2xl border border-border bg-card p-5 transition-colors duration-200 hover:border-foreground/20"
+          className="sx-surface-interactive group relative flex flex-col justify-between p-5"
           style={cardStyle}
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium text-muted-foreground">
               Net Worth
             </span>
-            <div className="inline-flex rounded-lg bg-muted p-0.5 text-[10px] ring-1 ring-inset ring-border">
+            {
+              !isReadOnlyViewer && (<div className="inline-flex rounded-lg bg-muted p-0.5 text-[10px] ring-1 ring-inset ring-border">
               <button
                 className={cn(
                   "rounded-[6px] px-2 py-1 font-medium transition-colors",
@@ -161,7 +195,8 @@ export function DashboardKpiRow({
               >
                 Per Purpose
               </button>
-            </div>
+            </div>)
+            }
           </div>
 
           {netWorthView === "combined" ? (
@@ -187,10 +222,10 @@ export function DashboardKpiRow({
                       className="size-2 rounded-full"
                       style={{ backgroundColor: item.color }}
                     />
-                    <span className="text-foreground">{item.name}</span>
+                    <span className="text-foreground">{item.purposeName}</span>
                   </span>
                   <span className="font-semibold tabular-nums">
-                    {formatCurrency(item.netWorth)}
+                    {formatCurrency(item.total)}
                   </span>
                 </div>
               ))}
@@ -255,7 +290,7 @@ export function DashboardKpiRow({
     return (
       <div
         key={key}
-        className="group relative flex flex-col justify-between rounded-2xl border border-border bg-card p-5 transition-colors duration-200 hover:border-foreground/20"
+        className="sx-surface-interactive group relative flex flex-col justify-between p-5"
         style={cardStyle}
       >
         <div className="flex items-center justify-between gap-2">

@@ -1,83 +1,92 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { BalanceSnapshotPanel } from "@/components/wealth/BalanceSnapshotPanel";
-import { InvestmentSummaryCard } from "@/components/wealth/InvestmentSummaryCard";
-import { InvestmentsTable } from "@/components/wealth/InvestmentsTable";
-import { LogSnapshotModal } from "@/components/wealth/LogSnapshotModal";
-import { NetWorthHistoryChart } from "@/components/wealth/NetWorthHistoryChart";
 import { QuickAccountTransfer } from "@/components/wealth/QuickAccountTransfer";
-import { WealthFilteredTransactions } from "@/components/wealth/WealthFilteredTransactions";
 import { WealthNetWorthIndicator } from "@/components/wealth/WealthNetWorthIndicator";
 import { WealthSegmentCards } from "@/components/wealth/WealthSegmentCards";
+import { DailySnapshotCard } from "@/components/wealth/DailySnapshotCard";
+import { useDailySnapshot } from "@/hooks/useDailySnapshot";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAccounts } from "@/hooks/useAccounts";
-import { useInvestments } from "@/hooks/useInvestments";
+import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
 import {
   computeNetWorthBreakdown,
   computeNetWorthByPurpose,
-  getInvestmentSummary,
-  getNetWorthHistory,
 } from "@/lib/wealth";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
+import { useOutings } from "@/hooks/useOutings";
+import { buildTransactionsListRows } from "@/lib/outings";
 import type { WealthFilter } from "@/types";
 
 export function WealthPage() {
   const { notify } = useToast();
   const { purposes } = usePurposes();
   const {
-    transactions,
+    transactions: rawTransactions,
     addTransaction,
     error: transactionsError,
   } = useTransactions();
+  const { expenses: outingExpenses } = useAllOutingExpenses();
+  const { outings } = useOutings();
   const { accounts, isLoading: accountsLoading } = useAccounts();
-  const {
-    investments,
-    isLoading: investmentsLoading,
-    addInvestment,
-    updateInvestment,
-    removeInvestment,
-  } = useInvestments();
 
   const [filter, setFilter] = useState<WealthFilter>({ type: "all" });
   const [netWorthView, setNetWorthView] = useState<"combined" | "by-purpose">(
     "combined",
   );
 
+  const transactions = useMemo(
+    () => buildTransactionsListRows(rawTransactions, outingExpenses, outings),
+    [rawTransactions, outingExpenses, outings],
+  );
+
   // Spec §8.3 — net worth only counts active accounts; archived accounts
   // are excluded (they're soft-deleted, not gone, so their transactions
   // still exist, but their balance shouldn't count toward net worth).
   const activeAccounts = useMemo(
-    () => accounts.filter((account) => account.is_active !== false),
+    () => accounts.filter((account) => account.isActive !== false),
     [accounts],
   );
 
+  const unlinkedOutingExpenses = useMemo(
+    () =>
+      outingExpenses.filter(
+        (e) => !e.linkedTransactionId && e.source !== "bank-detected",
+      ),
+    [outingExpenses],
+  );
+
   const netWorthBreakdown = useMemo(
-    () => computeNetWorthBreakdown(activeAccounts, transactions, investments),
-    [activeAccounts, transactions, investments],
+    () =>
+      computeNetWorthBreakdown(
+        activeAccounts,
+        transactions,
+        unlinkedOutingExpenses,
+      ),
+    [activeAccounts, transactions, unlinkedOutingExpenses],
   );
 
   const purposeBreakdown = useMemo(
-    () => computeNetWorthByPurpose(activeAccounts, transactions, purposes),
-    [activeAccounts, transactions, purposes],
+    () =>
+      computeNetWorthByPurpose(
+        activeAccounts,
+        transactions,
+        purposes,
+        unlinkedOutingExpenses,
+      ),
+    [activeAccounts, transactions, purposes, unlinkedOutingExpenses],
   );
 
-  const netWorthHistory = useMemo(
-    () => getNetWorthHistory(activeAccounts, transactions, investments, 12),
-    [activeAccounts, transactions, investments],
-  );
+  const isLoading = accountsLoading && accounts.length === 0;
 
-  const investmentSummary = useMemo(
-    () => getInvestmentSummary(investments),
-    [investments],
-  );
-
-  const isLoading =
-    (accountsLoading && accounts.length === 0) ||
-    (investmentsLoading && investments.length === 0);
+  const dailySnapshot = useDailySnapshot({
+    accounts: activeAccounts,
+    transactions,
+    unlinkedOutingExpenses,
+  });
 
   async function handleTransfer({
     fromAccount,
@@ -90,34 +99,53 @@ export function WealthPage() {
     amount: number;
     date: string;
   }) {
-    await addTransaction({
-      type: "expense",
-      amount,
-      merchant: `Transfer to ${toAccount}`,
-      category: "Settlements",
-      account: fromAccount,
-      purpose: "personal",
-      source: "manual",
-      date: new Date(date).toISOString(),
-      note: `Internal transfer to ${toAccount}`,
-    });
+    try {
+      // Same encoding as Flutter: category Settlements + tags transfer /
+      // transfer_to so both clients detect transfers without double-counting.
+      const transferTags = ["transfer", `transfer_to:${toAccount}`];
+      await addTransaction({
+        type: "expense",
+        amount,
+        totalAmount: amount,
+        merchant: `Transfer to ${toAccount}`,
+        category: "Settlements",
+        account: fromAccount,
+        purpose: "personal",
+        source: "manual",
+        date: new Date(date).toISOString(),
+        note: `Internal transfer to ${toAccount}`,
+        tags: transferTags,
+        paymentMethod: "UPI",
+      });
 
-    await addTransaction({
-      type: "income",
-      amount,
-      merchant: `Transfer from ${fromAccount}`,
-      category: "Settlements",
-      account: toAccount,
-      purpose: "personal",
-      source: "manual",
-      date: new Date(date).toISOString(),
-      note: `Internal transfer from ${fromAccount}`,
-    });
+      await addTransaction({
+        type: "income",
+        amount,
+        totalAmount: amount,
+        merchant: `Transfer from ${fromAccount}`,
+        category: "Settlements",
+        account: toAccount,
+        purpose: "personal",
+        source: "manual",
+        date: new Date(date).toISOString(),
+        note: `Internal transfer from ${fromAccount}`,
+        tags: transferTags,
+        paymentMethod: "UPI",
+      });
 
-    notify({
-      title: "Transfer recorded",
-      description: `${formatCurrency(amount)} moved from ${fromAccount} to ${toAccount}.`,
-    });
+      notify({
+        title: "Transfer recorded",
+        description: `${formatCurrency(amount)} moved from ${fromAccount} to ${toAccount}.`,
+      });
+    } catch (transferError) {
+      notify({
+        title: "Couldn't record transfer",
+        description:
+          transferError instanceof Error ? transferError.message : "Try again.",
+        variant: "destructive",
+      });
+      throw transferError;
+    }
   }
 
   return (
@@ -126,11 +154,10 @@ export function WealthPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-normal">Wealth</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Verify what you own against what the app computes.
+            Your available money across bank accounts and cash.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <LogSnapshotModal transactions={transactions} />
           <QuickAccountTransfer accounts={accounts} onTransfer={handleTransfer} />
         </div>
       </div>
@@ -144,12 +171,11 @@ export function WealthPage() {
       {isLoading ? (
         <div className="space-y-6">
           <Skeleton className="h-36" />
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, index) => (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Array.from({ length: 2 }).map((_, index) => (
               <Skeleton key={index} className="h-28" />
             ))}
           </div>
-          <Skeleton className="h-72" />
         </div>
       ) : (
         <>
@@ -165,31 +191,10 @@ export function WealthPage() {
             accounts={accounts}
             activeFilter={filter}
             breakdown={netWorthBreakdown}
-            investmentCount={investments.length}
             onFilter={setFilter}
           />
 
-          <BalanceSnapshotPanel accounts={accounts} transactions={transactions} />
-
-          <NetWorthHistoryChart data={netWorthHistory} />
-
-          <InvestmentSummaryCard summary={investmentSummary} />
-
-          <InvestmentsTable
-            investments={investments}
-            isLoading={investmentsLoading}
-            onAdd={addInvestment}
-            onDelete={removeInvestment}
-            onUpdate={updateInvestment}
-          />
-
-          <WealthFilteredTransactions
-            accounts={accounts}
-            filter={filter}
-            investments={investments}
-            transactions={transactions}
-            onClearFilter={() => setFilter({ type: "all" })}
-          />
+          <DailySnapshotCard accounts={activeAccounts} snapshot={dailySnapshot} />
         </>
       )}
     </div>

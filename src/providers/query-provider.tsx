@@ -14,7 +14,12 @@ export function QueryProvider({ children }: { children: ReactNode }) {
             refetchOnWindowFocus: false,
             refetchOnMount: false,
             refetchOnReconnect: false,
-
+            retry: 1,
+            retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
+            structuralSharing: true,
+          },
+          mutations: {
+            retry: 0,
           },
         },
       }),

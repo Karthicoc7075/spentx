@@ -5,7 +5,7 @@ import {
   deleteContributor,
   fetchContributors,
   saveContributor,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { Contributor } from "@/types";
@@ -20,7 +20,11 @@ export function useContributors() {
     enabled: isReady || !isConfigured,
   });
 
-  const contributors = query.data ?? [];
+  // Archived (soft-deleted) contributors stay in Postgres for historical
+  // transaction references but are hidden from every picker/list.
+  const contributors = (query.data ?? []).filter(
+    (item) => item.isActive !== false,
+  );
 
   async function addContributor(name: string) {
     const trimmed = name.trim();

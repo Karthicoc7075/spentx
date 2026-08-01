@@ -3,7 +3,6 @@ import {
   AppConfig,
   Category,
   Friend,
-  Investment,
   Outing,
   OutingExpense,
   OutingSettlement,
@@ -11,6 +10,7 @@ import {
   SavingsGoal,
   Transaction,
   UserSettings,
+  NotificationPreferences,
 } from "@/types";
 
 const today = new Date();
@@ -149,7 +149,7 @@ export function withoutMockTransactions(transactions: Transaction[]) {
 
 /** Seeded on sign-up per LLD §9.0 — Cash only */
 export const defaultSignupAccounts: Account[] = [
-  { id: "acc-cash", name: "Cash", type: "cash", openingBalance: 0, is_active: true },
+  { id: "acc-cash", name: "Cash", type: "cash", openingBalance: 0, isActive: true },
 ];
 
 /** Used when re-seeding demo / legacy workspaces */
@@ -207,6 +207,7 @@ export const defaultCategories: Category[] = [
   { id: "cat-inc-6", name: "Gifts Received", type: "income", color: "#ec4899", isDefault: true },
   { id: "cat-inc-7", name: "Interest", type: "income", color: "#14b8a6", isDefault: true },
   { id: "cat-inc-8", name: "Other Income", type: "income", color: "#94a3b8", isDefault: true },
+  { id: "cat-inc-9", name: "Friend Returns", type: "income", color: "#22c55e", isDefault: true },
   // Expense
   { id: "cat-exp-1", name: "Food & Dining", type: "expense", color: "#f97316", icon: "utensils", isDefault: true },
   { id: "cat-exp-2", name: "Groceries", type: "expense", color: "#22c55e", isDefault: true },
@@ -222,7 +223,7 @@ export const defaultCategories: Category[] = [
   { id: "cat-exp-12", name: "Personal Care", type: "expense", color: "#f43f5e", isDefault: true },
   { id: "cat-exp-13", name: "Gifts & Donations", type: "expense", color: "#f59e0b", isDefault: true },
   { id: "cat-exp-14", name: "Miscellaneous", type: "expense", color: "#94a3b8", isDefault: true },
-  { id: "cat-exp-15", name: "Investment", type: "expense", color: "#6366f1", isDefault: true },
+  { id: "cat-exp-15", name: "Investment", type: "expense", color: "#6366f1", isDefault: true, isInvestment: true },
 ];
 
 export const defaultPurposes: Purpose[] = [
@@ -230,24 +231,40 @@ export const defaultPurposes: Purpose[] = [
     id: "personal",
     name: "Personal",
     color: "#6366F1",
-    is_active: true,
+    isDefault: true,
+    canDelete: false,
+    isActive: true,
   },
   {
-    id: "home",
-    name: "Home/Family",
+    id: "family",
+    name: "Family",
     color: "#14B8A6",
-    is_active: true,
+    isDefault: false,
+    canDelete: false,
+    isActive: true,
   },
 ];
 
+export const defaultNotificationPreferences: NotificationPreferences = {
+  dailySummary: true,
+  weeklySummary: true,
+  monthlySummary: true,
+  salaryAlerts: true,
+  budgetAlerts: true,
+  dailyLimitAlerts: true,
+  burnRateAlerts: true,
+  settlementReminders: true,
+  snapshotReminders: true,
+};
+
 export const defaultUserSettings: UserSettings = {
   theme: "dark",
-  currency: "INR",
   notifications: true,
-  defaultAccount: "",
+  notificationPreferences: defaultNotificationPreferences,
+  defaultAccountId: "",
   monthlySafeSpendingAlert: true,
   privateMode: false,
-  autoSync: true,
+  includeOutingExpenses: true,
 };
 
 /** @deprecated Use defaultUserSettings */
@@ -262,23 +279,6 @@ export const defaultAppConfig: AppConfig = {
   maxPurposesLimit: 5,
   maxAccountsLimit: 10,
 };
-
-export const mockInvestments: Investment[] = [
-  {
-    id: "inv-1",
-    name: "Nifty 50 Index Fund",
-    type: "mutual-fund",
-    investedAmount: 50000,
-    currentValue: 62000,
-  },
-  {
-    id: "inv-2",
-    name: "HDFC Fixed Deposit",
-    type: "fd",
-    investedAmount: 100000,
-    currentValue: 108500,
-  },
-];
 
 export const mockFriends: Friend[] = [
   {

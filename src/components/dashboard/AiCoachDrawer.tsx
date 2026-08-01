@@ -19,7 +19,8 @@ import {
   withWelcomeMessage,
   type UiChatMessage,
 } from "@/lib/ai-chat";
-import { cn } from "@/lib/utils";
+import { sumPlanned } from "@/lib/plan";
+import { cn, transactionDateKey } from "@/lib/utils";
 import type { MonthlyPlan, Transaction } from "@/types";
 
 const quickPrompts = [
@@ -48,9 +49,9 @@ export function AiCoachDrawer({ plan, transactions }: AiCoachDrawerProps) {
   const financialContext = useMemo(
     () => ({
       expectedIncome: plan?.expectedIncome ?? 0,
-      totalPlanned: plan?.totalPlanned ?? 0,
+      totalPlanned: plan ? sumPlanned(plan.allocations) : 0,
       transactions: transactions.slice(0, 20).map((transaction) => ({
-        date: transaction.date,
+        date: transactionDateKey(transaction),
         merchant: transaction.merchant,
         category: transaction.category,
         amount: transaction.amount,

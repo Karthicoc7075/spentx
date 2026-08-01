@@ -2,11 +2,13 @@ import {
   defaultAnalyticsFilters,
   filterAnalyticsTransactions,
 } from "@/lib/analytics";
+import { buildCategoryTotals } from "@/lib/category-totals";
+import { sumInvestments } from "@/lib/investments";
 import {
-  isSpendingExpense,
-  sumInvestments,
-  sumSpendingExpenses,
-} from "@/lib/investments";
+  filterUnlinkedOutingExpenses,
+  sumPeriodExpense,
+  sumPeriodIncome,
+} from "@/lib/period-totals";
 import { getCurrentPlanMonth } from "@/lib/plan";
 import {
   getActivePurposes,
@@ -14,12 +16,15 @@ import {
   PERSONAL_PURPOSE_ID,
   transactionMatchesPurpose,
 } from "@/lib/purposes";
+import { narrowTransactionsToFilter } from "@/lib/utils";
+import { computeNetWorthBreakdown } from "@/lib/wealth";
 import type {
   Account,
   Category,
   DashboardData,
   DashboardDatePreset,
   KpiDelta,
+  OutingExpense,
   Purpose,
   Transaction,
 } from "@/types";
@@ -44,7 +49,7 @@ function filterByMonth(
   const { start, end } = monthRangeFor(month, monthOffset);
 
   return transactions.filter((transaction) => {
-    const date = new Date(transaction.date);
+    const date = new Date(transaction.transactionDate);
     return date >= start && date <= end;
   });
 }
@@ -57,19 +62,16 @@ export function filterLastNDays(transactions: Transaction[], days: number) {
   start.setHours(0, 0, 0, 0);
 
   return transactions.filter((transaction) => {
-    const date = new Date(transaction.date);
+    const date = new Date(transaction.transactionDate);
     return date >= start && date <= end;
   });
 }
 
+// Income/Expense KPIs — delegated to period-totals (shared with Transactions).
+// Net worth still uses isBalanceExcludedTransaction in wealth.ts.
 function sumByType(transactions: Transaction[], type: Transaction["type"]) {
-  if (type === "expense") {
-    return sumSpendingExpenses(transactions);
-  }
-
-  return transactions
-    .filter((transaction) => transaction.type === type)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  if (type === "income") return sumPeriodIncome(transactions);
+  return sumPeriodExpense(transactions);
 }
 
 function buildDelta(current: number, previous: number): KpiDelta {
@@ -112,47 +114,17 @@ function buildSparkline(
     const day = index + 1;
     const cutoff = new Date(year, monthIndex, day, 23, 59, 59, 999);
     const subset = transactions.filter(
-      (transaction) => new Date(transaction.date) <= cutoff,
+      (transaction) => new Date(transaction.transactionDate) <= cutoff,
     );
     const income = sumByType(subset, "income");
     const expense = sumByType(subset, "expense");
-    const netWorth =
-      accounts.reduce((sum, account) => sum + account.openingBalance, 0) +
-      income -
-      expense;
+    const netWorth = computeNetWorthBreakdown(accounts, subset).total;
 
     if (metric === "income") return income;
     if (metric === "expense") return expense;
     if (metric === "savings") return income - expense;
     return netWorth;
   });
-}
-
-export function buildCategoryTotals(
-  monthTransactions: Transaction[],
-  categories: Category[],
-) {
-  const colorByName = new Map(
-    categories.map((category) => [category.name, category.color]),
-  );
-  const totals = new Map<string, number>();
-
-  for (const transaction of monthTransactions) {
-    if (!isSpendingExpense(transaction)) continue;
-    totals.set(
-      transaction.category,
-      (totals.get(transaction.category) ?? 0) + transaction.amount,
-    );
-  }
-
-  return Array.from(totals.entries())
-    .map(([name, value]) => ({
-      name,
-      color: colorByName.get(name) ?? "#64748b",
-      value,
-    }))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 5);
 }
 
 function buildTrendForLastNDays(transactions: Transaction[], days: number) {
@@ -162,7 +134,7 @@ function buildTrendForLastNDays(transactions: Transaction[], days: number) {
     const date = new Date();
     date.setDate(date.getDate() - (days - 1 - index));
     const sameDay = scoped.filter((transaction) => {
-      const transactionDate = new Date(transaction.date);
+      const transactionDate = new Date(transaction.transactionDate);
       return transactionDate.toDateString() === date.toDateString();
     });
 
@@ -190,7 +162,7 @@ function buildTrendForDateRange(
     const date = new Date(start);
     date.setDate(start.getDate() + index);
     const sameDay = transactions.filter((transaction) => {
-      const transactionDate = new Date(transaction.date);
+      const transactionDate = new Date(transaction.transactionDate);
       return transactionDate.toDateString() === date.toDateString();
     });
 
@@ -275,10 +247,18 @@ export type TrendSeries = {
   type: "income" | "expense";
 };
 
-const PERSONAL_INCOME_COLOR = "#10b981";
-const PERSONAL_EXPENSE_COLOR = "#ef4444";
-const TREND_INCOME_COLORS = ["#6366f1", "#14b8a6", "#8b5cf6"] as const;
-const TREND_EXPENSE_COLORS = ["#8b7fd4", "#f97316", "#ec4899"] as const;
+// Income always reads as the app's success/green token, expense as its
+// destructive/red token — `var(--success)`/`var(--destructive)` pull the
+// live CSS custom properties so dark mode is handled automatically instead
+// of a second hardcoded hex path. When multiple purposes render on the same
+// trend chart at once, each purpose still needs a visually distinct line —
+// so non-personal purposes shift to a different shade within the same green/
+// red family rather than an unrelated hue, keeping "income = green family,
+// expense = red family" true everywhere on the chart.
+const PERSONAL_INCOME_COLOR = "var(--success)";
+const PERSONAL_EXPENSE_COLOR = "var(--destructive)";
+const TREND_INCOME_COLORS = ["var(--success)", "#059669", "#34d399"] as const;
+const TREND_EXPENSE_COLORS = ["var(--destructive)", "#dc2626", "#fb7185"] as const;
 
 function getPurposeTrendColors(purpose: Purpose, index: number) {
   if (purpose.id === PERSONAL_PURPOSE_ID) {
@@ -289,7 +269,7 @@ function getPurposeTrendColors(purpose: Purpose, index: number) {
   }
 
   return {
-    income: purpose.color ?? TREND_INCOME_COLORS[index % TREND_INCOME_COLORS.length],
+    income: TREND_INCOME_COLORS[index % TREND_INCOME_COLORS.length],
     expense: TREND_EXPENSE_COLORS[index % TREND_EXPENSE_COLORS.length],
   };
 }
@@ -346,10 +326,10 @@ export function buildMultiPurposeTrend(
 
     for (const purpose of scopedPurposes) {
       const sameDay = transactions.filter((transaction) => {
-        const transactionDate = new Date(transaction.date);
+        const transactionDate = new Date(transaction.transactionDate);
         return (
           transactionDate.toDateString() === date.toDateString() &&
-          transactionMatchesPurpose(transaction.purpose, purpose.id, purposes)
+          transactionMatchesPurpose(transaction.purposeId, purpose.id, purposes)
         );
       });
 
@@ -369,31 +349,8 @@ export function buildMultiPurposeTrend(
   return { data, series };
 }
 
-export function computeNetWorthByPurpose(
-  accounts: Account[],
-  transactions: Transaction[],
-  purposes: Purpose[],
-) {
-  const opening = accounts.reduce((sum, account) => sum + account.openingBalance, 0);
-
-  return getActivePurposes(purposes).map((purpose) => {
-    const scoped = transactions.filter((transaction) =>
-      transactionMatchesPurpose(transaction.purpose, purpose.id, purposes),
-    );
-    const income = sumByType(scoped, "income");
-    const expense = sumByType(scoped, "expense");
-
-    return {
-      purposeId: purpose.id,
-      name: purpose.name,
-      color: purpose.color ?? "#64748b",
-      netWorth:
-        openingBalanceForPurpose(opening, purpose.id) + income - expense,
-      income,
-      expense,
-    };
-  });
-}
+/** @deprecated Use computeNetWorthByPurpose from `@/lib/wealth` (same formula as Wealth). */
+export { computeNetWorthByPurpose } from "@/lib/wealth";
 
 export function buildDashboardChartSnapshot(
   transactions: Transaction[],
@@ -403,7 +360,7 @@ export function buildDashboardChartSnapshot(
   const scoped = filterLastNDays(transactions, days);
   return {
     incomeExpenseTrend: buildTrendForLastNDays(transactions, days),
-    topCategories: buildCategoryTotals(scoped, categories),
+    topCategories: buildCategoryTotals(scoped, categories, 5),
   };
 }
 
@@ -414,44 +371,78 @@ export function buildDashboardData(
   categories: Category[] = [],
   range: { dateFrom: string; dateTo: string },
   month = getCurrentPlanMonth(),
+  unlinkedOutingExpenses: OutingExpense[] = [],
+  options: { includeOutingExpenses?: boolean } = {},
+  purposeFilter: { purposeId: string; categories: string[] } = {
+    purposeId: "",
+    categories: [],
+  },
+  purposes: Purpose[] = [],
 ): DashboardData {
+  const includeOutingExpenses = options.includeOutingExpenses ?? false;
+
+  // Purpose/Category-narrowed but NOT date-restricted — Net Worth and the
+  // previous-period comparison deltas both need "all activity matching the
+  // active filter", independent of the currently selected date range (Net
+  // Worth is a cumulative balance, not a period metric; the comparison
+  // period is a different date range entirely). `scopedTransactions` above
+  // is already narrowed by filterAnalyticsTransactions, but it's also
+  // clipped to the current date range, so it can't be reused for either.
+  const narrowedAllTransactions = narrowTransactionsToFilter(
+    allTransactions,
+    purposeFilter,
+    purposes,
+  );
+
   const previousRange = getPreviousDateRange(range.dateFrom, range.dateTo);
   const previousPeriod = filterByDateRange(
-    allTransactions,
+    narrowedAllTransactions,
     previousRange.dateFrom,
     previousRange.dateTo,
   );
 
-  const periodIncome = sumByType(scopedTransactions, "income");
-  const periodExpense = sumByType(scopedTransactions, "expense");
-  const periodInvested = sumInvestments(scopedTransactions);
-  const previousIncome = sumByType(previousPeriod, "income");
-  const previousExpense = sumByType(previousPeriod, "expense");
+  // Same formulas as Transactions strip — never drift (9990 vs 8990).
+  const unlinked = includeOutingExpenses
+    ? filterUnlinkedOutingExpenses(unlinkedOutingExpenses)
+    : [];
+  const periodIncome = sumPeriodIncome(scopedTransactions, range);
+  const periodExpense = sumPeriodExpense(scopedTransactions, {
+    range,
+    unlinkedOutingExpenses: unlinked,
+    categories,
+    includeOutingExpenses,
+  });
+  const periodInvested = sumInvestments(scopedTransactions, categories);
+  const previousIncome = sumPeriodIncome(previousPeriod, previousRange);
+  const previousExpense = sumPeriodExpense(previousPeriod, {
+    range: previousRange,
+    unlinkedOutingExpenses: unlinked,
+    categories,
+    includeOutingExpenses,
+  });
   const periodSavings = periodIncome - periodExpense;
   const previousSavings = previousIncome - previousExpense;
 
   const rangeStart = new Date(range.dateFrom);
-  const previousNetWorth =
-    accounts.reduce((sum, account) => sum + account.openingBalance, 0) +
-    sumByType(
-      allTransactions.filter(
-        (transaction) => new Date(transaction.date) < rangeStart,
-      ),
-      "income",
-    ) -
-    sumByType(
-      allTransactions.filter(
-        (transaction) => new Date(transaction.date) < rangeStart,
-      ),
-      "expense",
-    );
-
-  const totalIncome = sumByType(allTransactions, "income");
-  const totalExpense = sumByType(allTransactions, "expense");
-  const netWorth =
-    accounts.reduce((sum, account) => sum + account.openingBalance, 0) +
-    totalIncome -
-    totalExpense;
+  // Same formula as Wealth page (per-account balances) — never invent a
+  // second net-worth definition that drifts from mobile / Wealth. Uses the
+  // purpose/category-narrowed (but date-unrestricted) ledger so Net Worth
+  // reflects the active filter — e.g. Purpose = Family only counts Family's
+  // own income/expense splits, not the whole household's.
+  const netWorth = computeNetWorthBreakdown(
+    accounts,
+    narrowedAllTransactions,
+    unlinkedOutingExpenses,
+  ).total;
+  const previousNetWorth = computeNetWorthBreakdown(
+    accounts,
+    narrowedAllTransactions.filter(
+      (transaction) =>
+        new Date(transaction.transactionDate ?? transaction.date ?? 0) <
+        rangeStart,
+    ),
+    unlinkedOutingExpenses,
+  ).total;
 
   const savingsRate =
     periodIncome > 0 ? Math.round((periodSavings / periodIncome) * 100) : 0;
@@ -464,7 +455,7 @@ export function buildDashboardData(
   );
   const averageDailySpend = Math.round(periodExpense / daysElapsed);
 
-  const categoryTotals = buildCategoryTotals(scopedTransactions, categories);
+  const categoryTotals = buildCategoryTotals(scopedTransactions, categories, 5);
   const topCategory = categoryTotals[0] ?? null;
   const expenseRatio =
     periodIncome > 0
@@ -472,7 +463,7 @@ export function buildDashboardData(
       : 0;
 
   const recentTransactions = [...scopedTransactions]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime())
     .slice(0, 10);
 
   const highlights = recentTransactions.slice(0, 3).map((transaction, index) => ({
@@ -483,7 +474,7 @@ export function buildDashboardData(
         : index === 2
           ? ("warning" as const)
           : ("danger" as const),
-    timestamp: transaction.date,
+    timestamp: transaction.transactionDate,
   }));
 
   return {
@@ -501,7 +492,7 @@ export function buildDashboardData(
       incomeDelta: buildDelta(periodIncome, previousIncome),
       expenseDelta: buildDelta(periodExpense, previousExpense),
       savingsDelta: buildDelta(periodSavings, previousSavings),
-      netWorthSparkline: buildSparkline(allTransactions, month, "net", accounts),
+      netWorthSparkline: buildSparkline(narrowedAllTransactions, month, "net", accounts),
       incomeSparkline: buildSparkline(scopedTransactions, month, "income", accounts),
       expenseSparkline: buildSparkline(scopedTransactions, month, "expense", accounts),
       savingsSparkline: buildSparkline(scopedTransactions, month, "savings", accounts),
@@ -521,7 +512,7 @@ export function buildDashboardData(
       range.dateFrom,
       range.dateTo,
     ),
-    incomeExpenseTrend30: buildTrendForLastNDays(allTransactions, 30),
+    incomeExpenseTrend30: buildTrendForLastNDays(narrowedAllTransactions, 30),
     topCategories: categoryTotals,
   };
 }

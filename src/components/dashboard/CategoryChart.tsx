@@ -41,8 +41,8 @@ export function CategoryChart({ data }: CategoryChartProps) {
   const svgWidth = BAR_COUNT * (BAR_WIDTH + BAR_GAP) - BAR_GAP;
 
   return (
-    <div className="flex flex-col gap-5">
-      <div>
+    <div className="flex h-full min-h-0 flex-col gap-5">
+      <div className="shrink-0">
         <svg
           className="w-full"
           height={CHART_HEIGHT}
@@ -70,34 +70,37 @@ export function CategoryChart({ data }: CategoryChartProps) {
         </div>
       </div>
 
-      <div className="grid divide-y divide-border">
-        {data.map((item) => {
-          const pct = total ? Math.round((item.value / total) * 100) : 0;
-          return (
-            <div
-              key={item.name}
-              className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
-            >
-              <span className="inline-flex min-w-0 items-center gap-2.5">
-                <span
-                  className="size-2.5 shrink-0 rounded-[4px]"
-                  style={{ backgroundColor: item.color }}
-                />
-                <span className="truncate text-sm font-medium text-muted-foreground">
-                  {item.name}
+      {/* Extra categories scroll inside the panel so height matches Cash Flow. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        <div className="grid divide-y divide-border">
+          {data.map((item) => {
+            const pct = total ? Math.round((item.value / total) * 100) : 0;
+            return (
+              <div
+                key={item.name}
+                className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+              >
+                <span className="inline-flex min-w-0 items-center gap-2.5">
+                  <span
+                    className="size-2.5 shrink-0 rounded-[4px]"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="truncate text-sm font-medium text-muted-foreground">
+                    {item.name}
+                  </span>
                 </span>
-              </span>
-              <span className="flex shrink-0 items-baseline gap-2">
-                <span className="text-lg font-bold tracking-tight tabular-nums">
-                  {formatCurrency(item.value)}
+                <span className="flex shrink-0 items-baseline gap-2">
+                  <span className="text-lg font-bold tracking-tight tabular-nums">
+                    {formatCurrency(item.value)}
+                  </span>
+                  <span className="text-xs font-medium text-muted-foreground">
+                    {pct}%
+                  </span>
                 </span>
-                <span className="text-xs font-medium text-muted-foreground">
-                  {pct}%
-                </span>
-              </span>
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

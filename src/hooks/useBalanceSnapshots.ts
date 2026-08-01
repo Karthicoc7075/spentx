@@ -5,7 +5,7 @@ import {
   deleteBalanceSnapshot,
   fetchBalanceSnapshots,
   saveBalanceSnapshot,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { BalanceSnapshot } from "@/types";

@@ -51,13 +51,13 @@ export function getDaysLeftInMonth(referenceDate: Date, month?: string) {
 }
 
 export function isTransactionInMonth(transaction: Transaction, month: string) {
-  const date = new Date(transaction.date);
+  const date = new Date(transaction.transactionDate);
   const { year, monthIndex } = parsePlanMonth(month);
   return date.getFullYear() === year && date.getMonth() === monthIndex;
 }
 
 export function isTransactionOnDate(transaction: Transaction, referenceDate: Date) {
-  const date = new Date(transaction.date);
+  const date = new Date(transaction.transactionDate);
   return (
     date.getFullYear() === referenceDate.getFullYear() &&
     date.getMonth() === referenceDate.getMonth() &&
@@ -77,9 +77,9 @@ export function sumMonthExpenses(
       (transaction) =>
         isSpendingExpense(transaction) &&
         isTransactionInMonth(transaction, month) &&
-        new Date(transaction.date) <= cutoff,
+        new Date(transaction.transactionDate) <= cutoff,
     )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 export function sumTodayExpenses(
@@ -94,7 +94,7 @@ export function sumTodayExpenses(
         isTransactionInMonth(transaction, month) &&
         isTransactionOnDate(transaction, referenceDate),
     )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 function buildRecoveryAdvice(

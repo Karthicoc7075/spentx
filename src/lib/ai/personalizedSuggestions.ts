@@ -32,7 +32,7 @@ function getMonthExpenses(transactions: Transaction[], monthOffset = 0) {
 
   return transactions.filter((transaction) => {
     if (transaction.type !== "expense") return false;
-    const date = new Date(transaction.date);
+    const date = new Date(transaction.transactionDate);
     return date >= start && date <= end;
   });
 }
@@ -42,7 +42,7 @@ function sumByCategory(transactions: Transaction[]) {
   for (const transaction of transactions) {
     totals.set(
       transaction.category,
-      (totals.get(transaction.category) ?? 0) + transaction.amount,
+      (totals.get(transaction.category) ?? 0) + transaction.totalAmount,
     );
   }
   return totals;
@@ -52,17 +52,17 @@ function getWeekendSpend(transactions: Transaction[]) {
   return transactions
     .filter((transaction) => {
       if (transaction.type !== "expense") return false;
-      const day = new Date(transaction.date).getDay();
+      const day = new Date(transaction.transactionDate).getDay();
       return day === 0 || day === 6;
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 function getLateNightFoodSpend(transactions: Transaction[]) {
   return transactions
     .filter((transaction) => {
       if (transaction.type !== "expense") return false;
-      const date = new Date(transaction.date);
+      const date = new Date(transaction.transactionDate);
       const hour = date.getHours();
       const merchant = transaction.merchant.toLowerCase();
       const isLateNight = hour >= 21 || hour < 2;
@@ -71,7 +71,7 @@ function getLateNightFoodSpend(transactions: Transaction[]) {
         FOOD_CATEGORIES.includes(transaction.category);
       return isLateNight && isDelivery;
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 function getHomeCookingSavings(transactions: Transaction[]) {
@@ -79,17 +79,17 @@ function getHomeCookingSavings(transactions: Transaction[]) {
   const lastMonth = getMonthExpenses(transactions, -1);
   const thisGroceries = thisMonth
     .filter((transaction) => transaction.category === "Groceries")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
   const lastDining = lastMonth
     .filter((transaction) =>
       ["Dining", "Food"].includes(transaction.category),
     )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
   const thisDining = thisMonth
     .filter((transaction) =>
       ["Dining", "Food"].includes(transaction.category),
     )
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   if (lastDining > thisDining && thisGroceries > 0) {
     return lastDining - thisDining;
@@ -137,7 +137,7 @@ export function buildPersonalizedSuggestions({
   }
 
   const weekendSpend = getWeekendSpend(thisMonth);
-  const weekdaySpend = thisMonth.reduce((sum, transaction) => sum + transaction.amount, 0) - weekendSpend;
+  const weekdaySpend = thisMonth.reduce((sum, transaction) => sum + transaction.totalAmount, 0) - weekendSpend;
   if (weekendSpend > weekdaySpend * 0.6 && weekendSpend > 2000) {
     suggestions.push({
       id: "weekend-overspend",
@@ -149,7 +149,7 @@ export function buildPersonalizedSuggestions({
 
   if (monthlyPlan) {
     const plannedTotal = sumPlanned(monthlyPlan.allocations);
-    const monthSpend = thisMonth.reduce((sum, transaction) => sum + transaction.amount, 0);
+    const monthSpend = thisMonth.reduce((sum, transaction) => sum + transaction.totalAmount, 0);
     const topAllocation = [...monthlyPlan.allocations].sort(
       (a, b) => b.plannedAmount - a.plannedAmount,
     )[0];
@@ -233,7 +233,7 @@ export function getTransactionTip(
   if (category === "Shopping") {
     const shoppingThisMonth = getMonthExpenses(transactions, 0)
       .filter((transaction) => transaction.category === "Shopping")
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
     if (shoppingThisMonth > 3000) {
       return {

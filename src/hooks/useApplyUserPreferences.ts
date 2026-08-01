@@ -2,19 +2,18 @@
 
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchUserSettings } from "@/lib/firebase";
+import { fetchUserSettings } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
-import { setActiveCurrency, setGlobalPrivateMode } from "@/lib/utils";
+import { setGlobalPrivateMode } from "@/lib/utils";
 import { useAuthReady } from "@/hooks/useAuthReady";
 
 /**
- * Applies the user's display preferences (currency, Private Hiding Mode) to the
- * app-wide formatCurrency singleton, so every amount across the app reflects
- * what's chosen in Settings. Mounted once in AppDataProvider.
+ * Applies the user's display preferences (Private Hiding Mode) to the app-wide
+ * formatCurrency singleton, so every amount across the app reflects what's
+ * chosen in Settings. Mounted once in AppDataProvider.
  *
- * Applying on load covers a returning user; Settings applies the same setters
- * synchronously on change so the current view updates immediately, and other
- * pages pick up the new value when they next render (e.g. on navigation).
+ * Currency is fixed to INR (spec Step 8.2), so only Private Hiding Mode is
+ * applied here now.
  */
 export function useApplyUserPreferences(userId?: string) {
   const { isConfigured, isReady } = useAuthReady();
@@ -26,12 +25,10 @@ export function useApplyUserPreferences(userId?: string) {
     staleTime: 60_000,
   });
 
-  const currency = settings?.currency;
   const privateMode = settings?.privateMode;
 
   useEffect(() => {
-    if (currency === undefined) return;
-    setActiveCurrency(currency);
+    if (privateMode === undefined) return;
     setGlobalPrivateMode(Boolean(privateMode));
-  }, [currency, privateMode]);
+  }, [privateMode]);
 }

@@ -5,8 +5,10 @@ import {
   deleteOutingExpense,
   fetchOutingExpenses,
   saveOutingExpense,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
+import { afterOutingExpensesChanged } from "@/lib/outing-ledger-sync";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { OutingExpense } from "@/types";
 
@@ -20,6 +22,11 @@ export function useOutingExpenses(outingId?: string) {
     enabled: (isReady || !isConfigured) && Boolean(outingId),
   });
 
+  async function refreshAfterExpenseChange() {
+    await afterOutingExpensesChanged(user?.id, outingId);
+    await invalidateFinancialData(queryClient, user?.id, { outingId });
+  }
+
   async function addExpense(
     expense: Omit<OutingExpense, "id" | "userId" | "createdAt" | "updatedAt">,
   ) {
@@ -32,6 +39,7 @@ export function useOutingExpenses(outingId?: string) {
       queryKeys.outingExpenses(user?.id, outingId),
       (current = []) => [saved, ...current.filter((item) => item.id !== saved.id)],
     );
+    await refreshAfterExpenseChange();
     return saved;
   }
 
@@ -42,6 +50,7 @@ export function useOutingExpenses(outingId?: string) {
       (current = []) =>
         current.map((item) => (item.id === saved.id ? saved : item)),
     );
+    await refreshAfterExpenseChange();
     return saved;
   }
 
@@ -51,6 +60,7 @@ export function useOutingExpenses(outingId?: string) {
       queryKeys.outingExpenses(user?.id, outingId),
       (current = []) => current.filter((item) => item.id !== expenseId),
     );
+    await refreshAfterExpenseChange();
   }
 
   return {

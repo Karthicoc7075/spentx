@@ -1,18 +1,12 @@
 "use client";
 
-import {
-  Banknote,
-  Landmark,
-  Smartphone,
-  TrendingUp,
-} from "lucide-react";
+import { Banknote, Landmark, TrendingUp } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Account, NetWorthBreakdown, WealthFilter } from "@/types";
 
 type WealthSegmentCardsProps = {
   breakdown: NetWorthBreakdown;
   accounts: Account[];
-  investmentCount: number;
   activeFilter: WealthFilter;
   onFilter: (filter: WealthFilter) => void;
 };
@@ -35,54 +29,48 @@ const segments = [
       count === 1 ? "1 account" : `${count} accounts`,
   },
   {
-    segment: "wallet" as const,
-    label: "Wallets",
-    key: "wallet" as const,
-    icon: Smartphone,
-    countLabel: (count: number) => (count === 0 ? "—" : `${count} account${count === 1 ? "" : "s"}`),
-  },
-  {
-    segment: "investments" as const,
+    segment: "investment" as const,
     label: "Investments",
-    key: "investments" as const,
+    key: "investmentValue" as const,
     icon: TrendingUp,
     countLabel: (count: number) =>
-      count === 1 ? "1 holding" : `${count} holdings`,
-    note: "Not included in net worth.",
+      count > 0 ? `${count} accounts` : "Investment categories",
   },
 ];
 
 export function WealthSegmentCards({
   breakdown,
   accounts,
-  investmentCount,
   activeFilter,
   onFilter,
 }: WealthSegmentCardsProps) {
   const accountCounts = {
-    bank: accounts.filter((account) => account.type === "bank").length,
+    bank: accounts.filter(
+      (account) => account.type === "bank" || account.type === "wallet",
+    ).length,
     cash: accounts.filter((account) => account.type === "cash").length,
-    wallet: accounts.filter((account) => account.type === "wallet").length,
-    investments: investmentCount,
+    investment: accounts.filter(
+      (account) =>
+        account.type === "investment" ||
+        account.type === "mutual_fund" ||
+        account.type === "stocks",
+    ).length,
   };
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-3">
       {segments.map((card) => {
         const Icon = card.icon;
         const isActive =
           activeFilter.type === "segment" &&
           activeFilter.segment === card.segment;
-        const count =
-          card.segment === "investments"
-            ? investmentCount
-            : accountCounts[card.segment];
+        const count = accountCounts[card.segment];
 
         return (
           <button
             key={card.segment}
             className={cn(
-              "rounded-2xl border border-border bg-card p-5 text-left transition-all hover:border-primary/40",
+              "sx-surface-interactive p-5 text-left",
               isActive && "border-primary/50 ring-2 ring-primary/15",
             )}
             type="button"
@@ -108,7 +96,6 @@ export function WealthSegmentCards({
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               {card.countLabel(count)}
-              {card.note ? ` · ${card.note}` : ""}
             </p>
           </button>
         );

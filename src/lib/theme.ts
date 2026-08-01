@@ -2,9 +2,11 @@ export type Theme = "light" | "dark" | "system";
 
 export const THEME_STORAGE_KEY = "spentx-theme";
 
+export const DEFAULT_THEME: Theme = "dark";
+
 export function getSystemTheme(): "light" | "dark" {
   if (typeof window === "undefined") {
-    return "light";
+    return "dark";
   }
 
   return window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -26,13 +28,13 @@ export function applyTheme(theme: Theme) {
 
 export function readStoredTheme(): Theme {
   if (typeof window === "undefined") {
-    return "light";
+    return DEFAULT_THEME;
   }
 
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   return stored === "light" || stored === "dark" || stored === "system"
     ? stored
-    : "light";
+    : DEFAULT_THEME;
 }
 
 export function storeTheme(theme: Theme) {

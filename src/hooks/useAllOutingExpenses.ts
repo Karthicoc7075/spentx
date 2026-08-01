@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { fetchOutingExpenses } from "@/lib/firebase";
+import { fetchOutingExpenses } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 

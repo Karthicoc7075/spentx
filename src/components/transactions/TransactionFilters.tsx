@@ -1,9 +1,11 @@
 "use client";
 
 import { ListFilter, RotateCcw, Search } from "lucide-react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CategoryFilterDropdown } from "@/components/shared/CategoryFilterDropdown";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useCategories } from "@/hooks/useCategories";
 import { useContributors } from "@/hooks/useContributors";
@@ -15,8 +17,30 @@ import { cn } from "@/lib/utils";
 import type {
   DashboardDatePreset,
   GlobalFilters,
+  Transaction,
   TransactionType,
 } from "@/types";
+
+/** Minimal shape the Account/Contributor <select>s actually read. */
+type NamedOption = { id: string; name: string };
+
+/** Shared-view accounts/contributors come from the shared purpose's own
+ * transactions (already scoped server-side), not the owner's full lists —
+ * the owner's accounts/contributors tables have no anonymous-viewer RLS
+ * exception at all, and even if they did, an account/contributor with no
+ * transactions in this purpose isn't a meaningful filter option here. */
+function deriveNamedOptions(
+  transactions: Transaction[],
+  pick: (transaction: Transaction) => string | undefined,
+): NamedOption[] {
+  const seen = new Map<string, NamedOption>();
+  for (const transaction of transactions) {
+    const name = pick(transaction)?.trim();
+    if (!name || seen.has(name)) continue;
+    seen.set(name, { id: name, name });
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const datePresets: Array<{ value: DashboardDatePreset; label: string }> = [
   { value: "this-month", label: "This month" },
@@ -50,27 +74,43 @@ type TransactionFiltersProps = {
     value: GlobalFilters[K],
   ) => void;
   resetFilters: () => void;
+  /** True only on the anonymous /share/[token]/transactions route — not
+   * the owner's page, and not the separate signed-in "claimed viewer"
+   * flow, which still uses the owner's own routes/filters as-is. */
+  isSharedView?: boolean;
+  /** The shared purpose's own transactions, used to scope the Account/
+   * Contributor options when isSharedView is true. Unused otherwise. */
+  transactions?: Transaction[];
 };
 
 export function TransactionFilters({
   filters,
   updateFilter,
   resetFilters,
+  isSharedView = false,
+  transactions = [],
 }: TransactionFiltersProps) {
-  const { accounts } = useAccounts();
+  const { accounts: ownerAccounts } = useAccounts();
   const { categories } = useCategories();
-  const { contributors } = useContributors();
+  const { contributors: ownerContributors } = useContributors();
   const { purposes } = usePurposes();
   const activePurposes = getActivePurposes(purposes);
 
-  const visibleCategories =
-    filters.transactionType === "income"
-      ? categories.filter((category) => category.type === "income")
-      : filters.transactionType === "expense"
-        ? categories.filter((category) => category.type === "expense")
-        : categories;
+  const accounts: NamedOption[] = isSharedView
+    ? deriveNamedOptions(transactions, (t) => t.accountName || t.account)
+    : ownerAccounts;
+  const contributors: NamedOption[] = isSharedView
+    ? deriveNamedOptions(transactions, (t) => t.contributorSource)
+    : ownerContributors;
+  const showContributorFilter = contributors.length > 1;
 
-  const selectedCategory = filters.categories[0] ?? "";
+  // With only one contributor, "All" and "Me" are equivalent — don't leave a
+  // stale non-"All" value applied once the control that set it disappears.
+  useEffect(() => {
+    if (!showContributorFilter && filters.contributorSource) {
+      updateFilter("contributorSource", "");
+    }
+  }, [showContributorFilter, filters.contributorSource, updateFilter]);
 
   function applyDatePreset(preset: DashboardDatePreset) {
     const specificMonth = filters.specificMonth || getCurrentPlanMonth();
@@ -89,22 +129,21 @@ export function TransactionFilters({
 
   function setTransactionType(value: "" | TransactionType) {
     updateFilter("transactionType", value);
-    updateFilter("categories", []);
   }
 
   const activeFilterCount = [
     filters.search,
-    filters.purposeId,
+    isSharedView ? "" : filters.purposeId,
     filters.categories[0],
     filters.account,
     filters.transactionType,
     filters.contributorSource,
-    filters.source,
+    isSharedView ? "" : filters.source,
     filters.dashboardDatePreset !== "this-month" ? "date" : "",
   ].filter(Boolean).length;
 
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card p-5">
+    <div className="sx-surface flex flex-col gap-4 p-5">
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -162,7 +201,12 @@ export function TransactionFilters({
       </div>
 
       {/* Filter selects */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div
+        className={cn(
+          "grid gap-3 sm:grid-cols-2 lg:grid-cols-3",
+          isSharedView ? "xl:grid-cols-4" : "xl:grid-cols-6",
+        )}
+      >
         <div className="grid gap-1.5">
           <Label className="text-xs text-muted-foreground" htmlFor="date-preset">
             Date
@@ -183,47 +227,37 @@ export function TransactionFilters({
           </select>
         </div>
 
-        <div className="grid gap-1.5">
-          <Label className="text-xs text-muted-foreground" htmlFor="purpose-filter">
-            Purpose
-          </Label>
-          <select
-            id="purpose-filter"
-            className={selectClassName}
-            value={filters.purposeId}
-            onChange={(event) => updateFilter("purposeId", event.target.value)}
-          >
-            <option value="">All</option>
-            {activePurposes.map((purpose) => (
-              <option key={purpose.id} value={purpose.id}>
-                {purpose.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!isSharedView ? (
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground" htmlFor="purpose-filter">
+              Purpose
+            </Label>
+            <select
+              id="purpose-filter"
+              className={selectClassName}
+              value={filters.purposeId}
+              onChange={(event) => updateFilter("purposeId", event.target.value)}
+            >
+              <option value="">All</option>
+              {activePurposes.map((purpose) => (
+                <option key={purpose.id} value={purpose.id}>
+                  {purpose.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
         <div className="grid gap-1.5">
           <Label className="text-xs text-muted-foreground" htmlFor="category-filter">
             Category
           </Label>
-          <select
-            id="category-filter"
-            className={selectClassName}
-            value={selectedCategory}
-            onChange={(event) =>
-              updateFilter(
-                "categories",
-                event.target.value ? [event.target.value] : [],
-              )
-            }
-          >
-            <option value="">All categories</option>
-            {visibleCategories.map((category) => (
-              <option key={category.id} value={category.name}>
-                {category.name}
-              </option>
-            ))}
-          </select>
+          <CategoryFilterDropdown
+            triggerId="category-filter"
+            categories={categories}
+            selected={filters.categories}
+            onChange={(next) => updateFilter("categories", next)}
+          />
         </div>
 
         <div className="grid gap-1.5">
@@ -245,50 +279,54 @@ export function TransactionFilters({
           </select>
         </div>
 
-        <div className="grid gap-1.5">
-          <Label
-            className="text-xs text-muted-foreground"
-            htmlFor="contributor-filter"
-          >
-            Contributor
-          </Label>
-          <select
-            id="contributor-filter"
-            className={selectClassName}
-            value={filters.contributorSource}
-            onChange={(event) =>
-              updateFilter(
-                "contributorSource",
-                event.target.value as GlobalFilters["contributorSource"],
-              )
-            }
-          >
-            <option value="">All</option>
-            {contributors.map((contributor) => (
-              <option key={contributor.id} value={contributor.name}>
-                {contributor.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {showContributorFilter ? (
+          <div className="grid gap-1.5">
+            <Label
+              className="text-xs text-muted-foreground"
+              htmlFor="contributor-filter"
+            >
+              Contributor
+            </Label>
+            <select
+              id="contributor-filter"
+              className={selectClassName}
+              value={filters.contributorSource}
+              onChange={(event) =>
+                updateFilter(
+                  "contributorSource",
+                  event.target.value as GlobalFilters["contributorSource"],
+                )
+              }
+            >
+              <option value="">All</option>
+              {contributors.map((contributor) => (
+                <option key={contributor.id} value={contributor.name}>
+                  {contributor.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
 
-        <div className="grid gap-1.5">
-          <Label className="text-xs text-muted-foreground" htmlFor="source-filter">
-            Source
-          </Label>
-          <select
-            id="source-filter"
-            className={selectClassName}
-            value={filters.source}
-            onChange={(event) => updateFilter("source", event.target.value)}
-          >
-            {sourceOptions.map((source) => (
-              <option key={source.value || "all"} value={source.value}>
-                {source.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!isSharedView ? (
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground" htmlFor="source-filter">
+              Source
+            </Label>
+            <select
+              id="source-filter"
+              className={selectClassName}
+              value={filters.source}
+              onChange={(event) => updateFilter("source", event.target.value)}
+            >
+              {sourceOptions.map((source) => (
+                <option key={source.value || "all"} value={source.value}>
+                  {source.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </div>
 
       {filters.dashboardDatePreset === "custom" ? (

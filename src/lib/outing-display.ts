@@ -5,7 +5,7 @@ import {
   getCurrentUserMember,
 } from "@/lib/outings";
 
-export type OutingListFilter = "all" | "active" | "completed" | "planned";
+export type OutingListFilter = "all" | "active" | "completed" | "archived" | "planned";
 
 const CATEGORY_COLOR_MAP: Record<string, string> = {
   Trip: "oklch(0.52 0.17 156)",
@@ -59,7 +59,9 @@ export function getOutingStatusLabel(outing: Outing) {
   if (isOutingPlanned(outing)) return "Planned";
   if (outing.status === "active") return "Active";
   if (outing.status === "completed") return "Completed";
-  return "Cancelled";
+  if (outing.status === "archived") return "Archived";
+  if (outing.status === "cancelled") return "Cancelled";
+  return "Active";
 }
 
 export function filterOutings(
@@ -70,10 +72,14 @@ export function filterOutings(
   const query = searchQuery.trim().toLowerCase();
 
   return outings.filter((outing) => {
+    // Hidden trips auto-created for a "Friend split" on a normal transaction
+    // — never shown in the regular Outings list.
+    if (outing.isQuickSplit) return false;
     if (filter === "active" && (outing.status !== "active" || isOutingPlanned(outing))) {
       return false;
     }
     if (filter === "completed" && outing.status !== "completed") return false;
+    if (filter === "archived" && outing.status !== "archived") return false;
     if (filter === "planned" && !isOutingPlanned(outing)) return false;
     if (!query) return true;
 

@@ -5,7 +5,7 @@ import {
   deleteIncomeStream,
   fetchIncomeStreams,
   saveIncomeStream,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { IncomeStream } from "@/types";

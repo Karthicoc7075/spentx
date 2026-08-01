@@ -1,4 +1,5 @@
 import { toCalendarDate } from "@/lib/date-filters";
+import { transactionMatchesAccount } from "@/lib/wealth";
 import type { Account, Transaction } from "@/types";
 
 export function getAccountOpeningDate(
@@ -14,8 +15,10 @@ export function getAccountOpeningDate(
   }
 
   const accountTransactions = transactions
-    .filter((transaction) => transaction.account === account.name)
-    .map((transaction) => toCalendarDate(transaction.date))
+    .filter((transaction) => transactionMatchesAccount(transaction, account))
+    .map((transaction) =>
+      toCalendarDate(transaction.transactionDate ?? transaction.date ?? ""),
+    )
     .filter(Boolean)
     .sort();
 

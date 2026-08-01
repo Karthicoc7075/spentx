@@ -24,7 +24,7 @@ export function NetWorthHistoryChart({ data }: NetWorthHistoryChartProps) {
   }
 
   return (
-    <div className="rounded-2xl border bg-card p-6">
+    <div className="sx-surface p-6">
       <div className="mb-4">
         <h3 className="text-base font-semibold text-foreground">Net Worth History</h3>
         <p className="mt-1 text-sm text-muted-foreground">

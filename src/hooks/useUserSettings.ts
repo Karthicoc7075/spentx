@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { fetchUserSettings } from "@/lib/firebase";
+import { fetchUserSettings } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { defaultUserSettings } from "@/lib/mock-data";
 import { useAuthReady } from "@/hooks/useAuthReady";

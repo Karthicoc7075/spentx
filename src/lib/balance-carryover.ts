@@ -4,25 +4,28 @@ import {
   isAccountActiveOnDate,
 } from "@/lib/accounts";
 import { isOnOrBeforeCalendarDate } from "@/lib/date-filters";
+import { compareTransactionsNewestFirst } from "@/lib/utils";
 import type { Account, Transaction } from "@/types";
 
 export function computeRunningBalance(
   openingBalance: number,
   transactions: Transaction[],
 ) {
-  const sorted = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...transactions].sort((a, b) =>
+    compareTransactionsNewestFirst(b, a),
+  );
   let balance = openingBalance;
 
   return sorted.map((transaction) => {
     if (transaction.type === "income") {
-      balance += transaction.amount;
+      balance += transaction.totalAmount;
     } else {
-      balance -= transaction.amount;
+      balance -= transaction.totalAmount;
     }
 
     return {
       transactionId: transaction.id,
-      date: transaction.date,
+      date: transaction.transactionDate,
       balance,
     };
   });
@@ -41,7 +44,7 @@ export function getTransactionsThroughDate(
   asOfDate: string,
 ) {
   return transactions.filter((transaction) =>
-    isOnOrBeforeCalendarDate(transaction.date, asOfDate),
+    isOnOrBeforeCalendarDate(transaction.transactionDate, asOfDate),
   );
 }
 
@@ -72,10 +75,10 @@ export function getBalanceBreakdownAsOfDate(
   const excludedAfterDate = transactions.length - throughDate.length;
   const incomeThroughDate = throughDate
     .filter((transaction) => transaction.type === "income")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
   const expenseThroughDate = throughDate
     .filter((transaction) => transaction.type === "expense")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   return {
     openingBalance: effectiveOpening,

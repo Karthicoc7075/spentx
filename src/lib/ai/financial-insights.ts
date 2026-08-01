@@ -8,8 +8,9 @@ import {
   countDaysOverSafeLimit,
   resolveFinalHealthScore,
 } from "@/lib/financial-health";
-import { isSpendingExpense } from "@/lib/investments";
+import { isSpendingExpense, isTransferTransaction } from "@/lib/investments";
 import { formatPlanMonth, sumPlanned } from "@/lib/plan";
+import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import type {
   AiInsight,
   FinancialInsightContext,
@@ -30,10 +31,19 @@ export function aiInsightDocId(
   return `${userId}_${month}_${type}`;
 }
 
+// The Opening Balance transaction is always income-typed and is already
+// baked into account.openingBalance wherever that seed is added — excluding
+// it here keeps every income figure derived from sumByType free of
+// double-counting.
 function sumByType(transactions: Transaction[], type: Transaction["type"]) {
   return transactions
-    .filter((transaction) => transaction.type === type)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .filter(
+      (transaction) =>
+        transaction.type === type &&
+        transaction.category !== OPENING_BALANCE_CATEGORY &&
+        !isTransferTransaction(transaction),
+    )
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 function getBurnRateLabel(burnPercent: number) {
@@ -52,10 +62,10 @@ export function buildFinancialInsightContext(
   const monthTransactions = transactions.filter((transaction) =>
     isTransactionInMonth(transaction, month),
   );
-  const expenses = monthTransactions.filter(isSpendingExpense);
+  const expenses = monthTransactions.filter((transaction) => isSpendingExpense(transaction));
   const totalIncome = sumByType(monthTransactions, "income");
   const totalExpense = expenses.reduce(
-    (sum, transaction) => sum + transaction.amount,
+    (sum, transaction) => sum + transaction.totalAmount,
     0,
   );
   const savings = totalIncome - totalExpense;
@@ -64,7 +74,7 @@ export function buildFinancialInsightContext(
   for (const transaction of expenses) {
     categoryTotals.set(
       transaction.category,
-      (categoryTotals.get(transaction.category) ?? 0) + transaction.amount,
+      (categoryTotals.get(transaction.category) ?? 0) + transaction.totalAmount,
     );
   }
 
@@ -105,9 +115,9 @@ export function buildFinancialInsightContext(
   let weekendSpend = 0;
   let weekdaySpend = 0;
   for (const transaction of expenses) {
-    const day = new Date(transaction.date).getDay();
-    if (day === 0 || day === 6) weekendSpend += transaction.amount;
-    else weekdaySpend += transaction.amount;
+    const day = new Date(transaction.transactionDate).getDay();
+    if (day === 0 || day === 6) weekendSpend += transaction.totalAmount;
+    else weekdaySpend += transaction.totalAmount;
   }
   const weekendSpendRatio =
     weekendSpend + weekdaySpend > 0

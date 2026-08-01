@@ -30,7 +30,7 @@ export function resolveStoredPurposes(stored: Purpose[]) {
 export function resolveStoredAccounts(stored: Account[]): Account[] {
   return stored.map((account) => ({
     ...account,
-    is_active: account.is_active ?? true,
+    isActive: account.isActive ?? true,
     openingBalance: account.openingBalance ?? 0,
   }));
 }

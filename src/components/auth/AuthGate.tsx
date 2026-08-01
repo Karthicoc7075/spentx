@@ -1,30 +1,36 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect } from "react";
-import { useFirebase } from "@/providers/firebase-provider";
+import { useSupabaseAuth } from "@/providers/supabase-provider";
 
 type AuthGateProps = {
   children: ReactNode;
   mode: "guest-only" | "require-auth";
 };
 
+const AUTHENTICATED_AUTH_PATHS = ["/auth/reset-password"];
+
 export function AuthGate({ children, mode }: AuthGateProps) {
   const router = useRouter();
-  const { user, isLoading } = useFirebase();
+  const pathname = usePathname();
+  const { user, isLoading } = useSupabaseAuth();
+  const allowAuthenticatedOnAuthRoute = AUTHENTICATED_AUTH_PATHS.some((path) =>
+    pathname.startsWith(path),
+  );
 
   useEffect(() => {
     if (isLoading) return;
 
-    if (mode === "guest-only" && user) {
+    if (mode === "guest-only" && user && !allowAuthenticatedOnAuthRoute) {
       router.replace("/");
     }
 
     if (mode === "require-auth" && !user) {
       router.replace("/auth/sign-in");
     }
-  }, [isLoading, mode, router, user]);
+  }, [allowAuthenticatedOnAuthRoute, isLoading, mode, router, user]);
 
   if (isLoading) {
     return (
@@ -34,7 +40,7 @@ export function AuthGate({ children, mode }: AuthGateProps) {
     );
   }
 
-  if (mode === "guest-only" && user) {
+  if (mode === "guest-only" && user && !allowAuthenticatedOnAuthRoute) {
     return null;
   }
 

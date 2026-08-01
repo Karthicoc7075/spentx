@@ -47,8 +47,8 @@ export function KpiCard({
   return (
     <Card
       className={cn(
-        "rounded-2xl border-border shadow-none transition-colors",
-        onClick && "cursor-pointer hover:border-primary/50",
+        "transition-colors",
+        onClick && "sx-surface-interactive cursor-pointer",
       )}
       onClick={onClick}
     >

@@ -3,6 +3,8 @@
 import { useMemo } from "react";
 import { useCategories } from "@/hooks/useCategories";
 import { useAnalyticsOutingContext } from "@/hooks/useAnalyticsOutingContext";
+import { useUserSettings } from "@/hooks/useUserSettings";
+
 import { useMonthlyPlanQuery } from "@/hooks/useMonthlyPlanQuery";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
@@ -11,6 +13,9 @@ import {
   buildActiveFilterChips,
   computeAnalyticsFilterSummary,
   countActiveFilters,
+  filtersForCategoryBreakdown,
+  filtersForTopMerchants,
+  prepareAnalyticsTransactions,
   sortAnalyticsTransactions,
 } from "@/lib/analytics-filters";
 import {
@@ -29,6 +34,7 @@ import {
 import type { AnalyticsFilters } from "@/types";
 
 export function useAnalyticsData(filters: AnalyticsFilters) {
+  const { settings } = useUserSettings();
   const {
     transactions,
     isLoading: transactionsLoading,
@@ -49,13 +55,25 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
     planPurposeId,
   );
 
+  // Fold outing spend into Analysis only if includeOutingExpenses is enabled
+  const analyticsLedger = useMemo(
+    () =>
+      prepareAnalyticsTransactions(
+        transactions,
+        outingContext.outings ?? [],
+        outingContext.outingExpenses ?? [],
+        settings.includeOutingExpenses ?? true,
+      ),
+    [transactions, outingContext.outings, outingContext.outingExpenses, settings.includeOutingExpenses],
+  );
+
   const filtered = useMemo(
     () =>
       sortAnalyticsTransactions(
-        filterAnalyticsTransactions(transactions, filters, filterContext),
+        filterAnalyticsTransactions(analyticsLedger, filters, filterContext),
         filters.sortBy,
       ),
-    [transactions, filters, filterContext],
+    [analyticsLedger, filters, filterContext],
   );
 
   const filterSummary = useMemo(
@@ -75,24 +93,63 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
 
   const heroStats = useMemo(() => computeHeroStats(filtered), [filtered]);
   const trend = useMemo(
-    () => computeTrendData(transactions, filters, filterContext),
-    [transactions, filters, filterContext],
+    () => computeTrendData(analyticsLedger, filters, filterContext),
+    [analyticsLedger, filters, filterContext],
   );
+  const categoryBreakdownScope = useMemo(
+    () => filtersForCategoryBreakdown(filters),
+    [filters],
+  );
+
+  const categoryBreakdownTransactions = useMemo(
+    () =>
+      filterAnalyticsTransactions(
+        analyticsLedger,
+        categoryBreakdownScope,
+        filterContext,
+      ),
+    [analyticsLedger, categoryBreakdownScope, filterContext],
+  );
+
   const categoryBreakdown = useMemo(
     () =>
       computeCategoryBreakdown(
-        filtered,
+        categoryBreakdownTransactions,
         categories,
-        transactions,
-        filters,
+        analyticsLedger,
+        categoryBreakdownScope,
         filterContext,
       ),
-    [filtered, categories, transactions, filters, filterContext],
+    [
+      categoryBreakdownTransactions,
+      categories,
+      analyticsLedger,
+      categoryBreakdownScope,
+      filterContext,
+    ],
   );
-  const topMerchants = useMemo(() => computeTopMerchants(filtered), [filtered]);
+  const topMerchantsScope = useMemo(
+    () => filtersForTopMerchants(filters),
+    [filters],
+  );
+
+  const topMerchantsTransactions = useMemo(
+    () =>
+      filterAnalyticsTransactions(
+        analyticsLedger,
+        topMerchantsScope,
+        filterContext,
+      ),
+    [analyticsLedger, topMerchantsScope, filterContext],
+  );
+
+  const topMerchants = useMemo(
+    () => computeTopMerchants(topMerchantsTransactions, categories),
+    [topMerchantsTransactions, categories],
+  );
   const planVsActual = useMemo(
-    () => computePlanVsActual(filtered, plan),
-    [filtered, plan],
+    () => computePlanVsActual(transactions, plan, purposes, categories, filters.categories),
+    [transactions, plan, purposes, categories, filters.categories],
   );
   const planSummary = useMemo(
     () => computePlanComparisonSummary(filtered, plan),
@@ -104,13 +161,14 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
   );
 
   const detailedStats = useMemo(
-    () => computeDetailedStats(transactions, filtered, plan, filters),
-    [transactions, filtered, plan, filters],
+    () => computeDetailedStats(analyticsLedger, filtered, plan, filters),
+    [analyticsLedger, filtered, plan, filters],
   );
 
   const monthlyTimeline = useMemo(
-    () => computeMonthlyComparisonTimeline(transactions, filters, filterContext),
-    [transactions, filters, filterContext],
+    () =>
+      computeMonthlyComparisonTimeline(analyticsLedger, filters, filterContext),
+    [analyticsLedger, filters, filterContext],
   );
 
   const isLoading = transactionsLoading && transactions.length === 0;
@@ -125,6 +183,7 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
     trend,
     categoryBreakdown,
     topMerchants,
+    topMerchantsTransactions,
     planVsActual,
     planSummary,
     planAdherence,
@@ -132,7 +191,7 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
     plan,
     isLoading,
     hasLoaded,
-    hasTransactions: transactions.length > 0,
+    hasTransactions: analyticsLedger.length > 0 || transactions.length > 0,
     planLoading,
     error,
     monthlyTimeline,

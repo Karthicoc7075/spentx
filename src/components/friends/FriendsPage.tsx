@@ -1,11 +1,10 @@
 "use client";
 
-import { ArrowRight, Plus, Trash2, UserRound, Users } from "lucide-react";
-import Link from "next/link";
+import { ChevronRight, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -17,16 +16,29 @@ import {
 } from "@/components/ui/table";
 import { useFriends } from "@/hooks/useFriends";
 import { useOutings } from "@/hooks/useOutings";
-import { fetchOutingExpenses, fetchOutingSettlements } from "@/lib/firebase";
-import { computeMemberBalances } from "@/lib/outings";
+import {
+  fetchOutingExpenses,
+  fetchOutingSettlements,
+  normalizeFriendUpis,
+} from "@/lib/supabase-data";
+import { computeNetBalancesByMember } from "@/lib/outings";
+import {
+  computeFriendSplitNetBalances,
+  mergeNetBalances,
+} from "@/lib/friend-splits";
+import { useFriendSplits } from "@/hooks/useFriendSplits";
+import { friendOwesYou, youOweFriend } from "@/lib/settlements";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
+import {
+  FriendFormDialog,
+  type FriendFormValues,
+} from "@/components/friends/FriendFormDialog";
 import { formatCurrency } from "@/lib/utils";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useToast } from "@/providers/toast-provider";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
-
-const inlineInputClass =
-  "h-9 rounded-lg border-transparent bg-transparent px-2.5 shadow-none transition-colors hover:border-input focus-visible:border-ring focus-visible:bg-background";
+import type { Friend } from "@/types";
 
 function friendInitials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -35,16 +47,41 @@ function friendInitials(name: string) {
   return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
 }
 
+function friendUpiList(friend: Friend): string[] {
+  return normalizeFriendUpis(friend).upiIds;
+}
+
 export function FriendsPage() {
+  const router = useRouter();
   const { notify } = useToast();
   const { friends, isLoading, addFriend, updateFriend, removeFriend } =
     useFriends();
   const { outings } = useOutings();
+  const { splits: friendSplits, settlements: friendSettlements } =
+    useFriendSplits();
   const { user } = useAuthReady();
-  const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  const [upiId, setUpiId] = useState("");
-  const [phone, setPhone] = useState("");
+  const [search, setSearch] = useState("");
+  const [removeTarget, setRemoveTarget] = useState<Friend | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  // null = Add mode; a Friend = Edit mode.
+  const [editTarget, setEditTarget] = useState<Friend | null>(null);
+
+  async function handleConfirmRemove() {
+    if (!removeTarget) return;
+    const target = removeTarget;
+    setRemoveTarget(null);
+    try {
+      await removeFriend(target.id);
+      notify({ title: "Friend deleted successfully." });
+    } catch (error) {
+      notify({
+        title: "Couldn't delete friend",
+        description:
+          error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    }
+  }
 
   const { data: allExpenses = [] } = useQuery({
     queryKey: ["allOutingExpenses", user?.id],
@@ -55,51 +92,71 @@ export function FriendsPage() {
     queryFn: () => fetchOutingSettlements(user?.id),
   });
 
-  const selectedFriend = friends.find((friend) => friend.id === selectedFriendId);
+  // A friend's balance spans both trips and one-off friend splits.
+  const netBalancesByMember = useMemo(
+    () =>
+      mergeNetBalances(
+        computeNetBalancesByMember(outings, allExpenses, allSettlements),
+        computeFriendSplitNetBalances(friendSplits, friendSettlements),
+      ),
+    [outings, allExpenses, allSettlements, friendSplits, friendSettlements],
+  );
 
-  const friendBalance = useMemo(() => {
-    if (!selectedFriend) return 0;
-    let total = 0;
-    for (const outing of outings) {
-      const member = outing.members.find(
-        (item) => item.friendId === selectedFriend.id,
-      );
-      if (!member) continue;
-      const expenses = allExpenses.filter((item) => item.outingId === outing.id);
-      const settlements = allSettlements.filter(
-        (item) => item.outingId === outing.id,
-      );
-      const balance = computeMemberBalances(
-        outing.members,
-        expenses,
-        settlements,
-      ).find((item) => item.member.id === member.id)?.balance;
-      total += balance ?? 0;
+  /**
+   * Split into what you owe vs what you're owed — hidden entirely when both
+   * are zero. A member's balance is what they paid minus their share, so a
+   * NEGATIVE friend balance means the friend owes you (see lib/settlements).
+   */
+  const { youOwe, youAreOwed } = useMemo(() => {
+    let owe = 0;
+    let owed = 0;
+    for (const item of netBalancesByMember) {
+      if (friendOwesYou(item.balance)) owed += Math.abs(item.balance);
+      else if (youOweFriend(item.balance)) owe += item.balance;
     }
-    return total;
-  }, [selectedFriend, outings, allExpenses, allSettlements]);
+    return { youOwe: owe, youAreOwed: owed };
+  }, [netBalancesByMember]);
 
-  const friendTrips = useMemo(() => {
-    if (!selectedFriend) return [];
-    return outings.filter((outing) =>
-      outing.members.some((member) => member.friendId === selectedFriend.id),
+  const hasBalance = youOwe >= 0.01 || youAreOwed >= 0.01;
+
+  const outingCountByFriend = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const outing of outings) {
+      for (const member of outing.members) {
+        if (!member.friendId) continue;
+        counts.set(member.friendId, (counts.get(member.friendId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [outings]);
+
+  const visibleFriends = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return friends;
+    return friends.filter((friend) =>
+      friend.name.toLowerCase().includes(query),
     );
-  }, [selectedFriend, outings]);
+  }, [friends, search]);
 
-  async function handleAdd() {
-    if (!name.trim()) {
-      notify({ title: "Name required", description: "Enter a friend name." });
+  function openAddFriend() {
+    setEditTarget(null);
+    setFormOpen(true);
+  }
+
+  function openEditFriend(friend: Friend) {
+    setEditTarget(friend);
+    setFormOpen(true);
+  }
+
+  /** Errors propagate so the dialog can show them and stay open. */
+  async function handleFriendSubmit(values: FriendFormValues) {
+    if (editTarget) {
+      await updateFriend({ ...editTarget, ...values });
+      notify({ title: "Friend updated successfully." });
       return;
     }
-    await addFriend({
-      name: name.trim(),
-      upiId: upiId || undefined,
-      phone: phone || undefined,
-    });
-    notify({ title: "Friend added", description: name.trim() });
-    setName("");
-    setUpiId("");
-    setPhone("");
+    await addFriend(values);
+    notify({ title: "Friend added successfully." });
   }
 
   if (isLoading) {
@@ -113,276 +170,222 @@ export function FriendsPage() {
 
   return (
     <div className="grid gap-6 pb-12">
-      <div className="flex flex-col gap-4 pt-2 lg:flex-row lg:items-end lg:justify-between">
+      <div className="flex flex-col gap-4 pt-2 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Friends</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your friends directory with UPI IDs for quick settlements on
-            shared trips.
+            Manage friends for split expenses and outings.
           </p>
         </div>
-        <div className="inline-flex items-center gap-2 self-start rounded-full bg-accent px-3.5 py-1.5 text-xs font-semibold text-accent-foreground lg:self-end">
-          <Users className="size-3.5" />
-          {friends.length} friend{friends.length === 1 ? "" : "s"} saved
-        </div>
+        <Button className="self-start sm:self-end" onClick={openAddFriend}>
+          <Plus className="size-4" />
+          Add Friend
+        </Button>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-        <div className="grid content-start gap-6">
-          <div className="rounded-2xl border border-border bg-card p-6">
-            <div className="mb-5 flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold tracking-tight">
-                  Add friend
-                </h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Save a friend once, reuse across every outing.
-                </p>
-              </div>
-              <Button onClick={() => void handleAdd()}>
-                <Plus className="size-4" />
-                Add friend
-              </Button>
+      {hasBalance ? (
+        <div className="sx-surface flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Net balance
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">You owe: </span>
+            <span className="font-semibold tabular-nums text-destructive">
+              {formatCurrency(youOwe)}
+            </span>
+          </p>
+          <p className="text-sm">
+            <span className="text-muted-foreground">You are owed: </span>
+            <span className="font-semibold tabular-nums text-success">
+              {formatCurrency(youAreOwed)}
+            </span>
+          </p>
+        </div>
+      ) : null}
+
+      <div className="grid content-start gap-6">
+        <div className="sx-surface overflow-hidden">
+          <div className="flex flex-col gap-3 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">
+                Friends list
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Click a row to see trips and balances.
+              </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="grid gap-1.5">
-                <Label className="text-xs text-muted-foreground">Name</Label>
-                <Input
-                  placeholder="Friend name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs text-muted-foreground">UPI ID</Label>
-                <Input
-                  placeholder="name@upi"
-                  value={upiId}
-                  onChange={(event) => setUpiId(event.target.value)}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs text-muted-foreground">Phone</Label>
-                <Input
-                  placeholder="+91..."
-                  value={phone}
-                  onChange={(event) => setPhone(event.target.value)}
-                />
-              </div>
+            <div className="relative w-full sm:w-56">
+              <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="h-9 pl-8"
+                placeholder="Search friends..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
             </div>
           </div>
-
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
-            <div className="flex items-center justify-between gap-3 px-6 py-4">
-              <div>
-                <h2 className="text-base font-semibold tracking-tight">
-                  Friends directory
-                </h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Click a row to see trips and balances. Edit fields inline.
-                </p>
-              </div>
-            </div>
-            <Table>
-              <TableHeader className="bg-muted/50">
-                <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="h-11 px-4 text-xs font-medium text-muted-foreground">
-                    Name
-                  </TableHead>
-                  <TableHead className="h-11 text-xs font-medium text-muted-foreground">
-                    UPI ID
-                  </TableHead>
-                  <TableHead className="h-11 text-xs font-medium text-muted-foreground">
-                    Phone
-                  </TableHead>
-                  <TableHead className="h-11 w-12" />
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="h-11 px-4 text-xs font-medium text-muted-foreground">
+                  Name
+                </TableHead>
+                <TableHead className="h-11 text-xs font-medium text-muted-foreground">
+                  Phone
+                </TableHead>
+                <TableHead className="h-11 text-xs font-medium text-muted-foreground">
+                  UPI IDs
+                </TableHead>
+                <TableHead className="h-11 text-xs font-medium text-muted-foreground">
+                  Outings
+                </TableHead>
+                <TableHead className="h-11 text-xs font-medium text-muted-foreground">
+                  Balance
+                </TableHead>
+                <TableHead className="h-11 w-24 text-right text-xs font-medium text-muted-foreground">
+                  Actions
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visibleFriends.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    className="py-12 text-center text-sm text-muted-foreground"
+                    colSpan={6}
+                  >
+                    {friends.length === 0
+                      ? "No friends added yet."
+                      : "No friends match your search."}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {friends.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      className="py-12 text-center text-sm text-muted-foreground"
-                      colSpan={4}
-                    >
-                      No friends added yet.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  friends.map((friend) => (
+              ) : (
+                visibleFriends.map((friend) => {
+                  const balance =
+                    netBalancesByMember.find((item) => item.key === friend.id)
+                      ?.balance ?? 0;
+                  const outingCount = outingCountByFriend.get(friend.id) ?? 0;
+                  const upiList = friendUpiList(friend);
+
+                  return (
                     <TableRow
                       key={friend.id}
-                      className={cn(
-                        "cursor-pointer border-border/60 hover:bg-muted/40",
-                        selectedFriendId === friend.id && "bg-accent/40",
-                      )}
-                      onClick={() => setSelectedFriendId(friend.id)}
+                      className="cursor-pointer border-border/60 hover:bg-muted/40"
+                      onClick={() => router.push(`/friends/${friend.id}`)}
                     >
                       <TableCell className="px-4">
                         <div className="flex items-center gap-2.5">
                           <div className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-[10px] font-bold text-foreground">
                             {friendInitials(friend.name)}
                           </div>
-                          <Input
-                            className={inlineInputClass}
-                            value={friend.name}
-                            onClick={(event) => event.stopPropagation()}
-                            onChange={(event) =>
-                              void updateFriend({
-                                ...friend,
-                                name: event.target.value,
-                              })
-                            }
-                          />
+                          <span className="font-medium">{friend.name}</span>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <Input
-                          className={inlineInputClass}
-                          placeholder="name@upi"
-                          value={friend.upiId ?? ""}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) =>
-                            void updateFriend({
-                              ...friend,
-                              upiId: event.target.value,
-                            })
-                          }
-                        />
+                      <TableCell className="text-sm text-muted-foreground">
+                        {friend.phone || "—"}
+                      </TableCell>
+                      <TableCell className="max-w-xs">
+                        {upiList.length === 0 ? (
+                          <span className="text-sm text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {upiList.map((upi) => (
+                              <span
+                                key={upi.toLowerCase()}
+                                className="max-w-full truncate rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] font-medium"
+                              >
+                                {upi}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {outingCount} outing{outingCount === 1 ? "" : "s"}
                       </TableCell>
                       <TableCell>
-                        <Input
-                          className={inlineInputClass}
-                          placeholder="+91..."
-                          value={friend.phone ?? ""}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) =>
-                            void updateFriend({
-                              ...friend,
-                              phone: event.target.value,
-                            })
-                          }
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void removeFriend(friend.id);
-                            notify({ title: "Friend removed" });
-                          }}
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                            Math.abs(balance) < 0.01
+                              ? "bg-muted text-muted-foreground"
+                              : friendOwesYou(balance)
+                                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+                                : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+                          )}
                         >
-                          <Trash2 className="size-4" />
-                        </Button>
+                          {Math.abs(balance) < 0.01
+                            ? "Settled"
+                            : `${formatCurrency(Math.abs(balance))} ${
+                                friendOwesYou(balance) ? "owes you" : "you owe"
+                              }`}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-0.5">
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`View ${friend.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              router.push(`/friends/${friend.id}`);
+                            }}
+                          >
+                            <ChevronRight className="size-4" />
+                          </Button>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Edit ${friend.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openEditFriend(friend);
+                            }}
+                          >
+                            <Pencil className="size-4" />
+                          </Button>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            aria-label={`Delete ${friend.name}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setRemoveTarget(friend);
+                            }}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-
-        <div className="h-fit rounded-2xl border border-border bg-card">
-          <div className="px-6 py-4">
-            <h2 className="text-base font-semibold tracking-tight">
-              Friend detail
-            </h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Trip history and settlement balance.
-            </p>
-          </div>
-          <div className="border-t border-border/60 p-6">
-            {!selectedFriend ? (
-              <div className="flex flex-col items-center justify-center rounded-xl bg-muted/40 px-6 py-14 text-center">
-                <div className="mb-3 flex size-11 items-center justify-center rounded-full bg-accent text-accent-foreground">
-                  <UserRound className="size-5" />
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Select a friend to view trip history and settlement balance.
-                </p>
-              </div>
-            ) : (
-              <div className="grid gap-5">
-                <div className="flex items-center gap-3.5">
-                  <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground">
-                    {friendInitials(selectedFriend.name)}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-lg font-semibold tracking-tight">
-                      {selectedFriend.name}
-                    </p>
-                    {selectedFriend.upiId ? (
-                      <p className="truncate text-xs text-muted-foreground">
-                        {selectedFriend.upiId}
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-xl bg-muted/50 px-4 py-3.5">
-                  <p className="text-xs font-medium text-muted-foreground">
-                    Net balance across trips
-                  </p>
-                  <div className="mt-1.5 flex items-center gap-2">
-                    <p className="text-2xl font-bold tracking-tight tabular-nums">
-                      {formatCurrency(Math.abs(friendBalance))}
-                    </p>
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                        friendBalance >= 0
-                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
-                          : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
-                      )}
-                    >
-                      {friendBalance >= 0 ? "owes you" : "you owe"}
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="mb-2.5 text-sm font-semibold">Shared trips</p>
-                  {friendTrips.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      No shared trips yet.
-                    </p>
-                  ) : (
-                    <div className="grid gap-2">
-                      {friendTrips.map((trip) => (
-                        <Link
-                          key={trip.id}
-                          className="group flex items-center justify-between gap-3 rounded-xl bg-muted/50 px-3.5 py-3 transition-colors hover:bg-muted"
-                          href={`/outings/${trip.id}`}
-                        >
-                          <span className="truncate text-sm font-medium">
-                            {trip.name}
-                          </span>
-                          <span className="flex shrink-0 items-center gap-2">
-                            <span
-                              className={cn(
-                                "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize",
-                                trip.status === "active"
-                                  ? "bg-accent text-accent-foreground"
-                                  : "bg-muted-foreground/10 text-muted-foreground",
-                              )}
-                            >
-                              {trip.status}
-                            </span>
-                            <ArrowRight className="size-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                          </span>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
         </div>
       </div>
+
+      {/* Remounted per open so the form always starts from fresh values. */}
+      {formOpen ? (
+        <FriendFormDialog
+          key={editTarget?.id ?? "new"}
+          open
+          friend={editTarget}
+          onOpenChange={setFormOpen}
+          onSubmit={handleFriendSubmit}
+        />
+      ) : null}
+
+      <ConfirmDeleteDialog
+        open={Boolean(removeTarget)}
+        itemLabel="Friend"
+        description="Are you sure you want to delete this friend and all related split expenses, settlements and transactions?"
+        detail={removeTarget?.name}
+        onOpenChange={(open) => !open && setRemoveTarget(null)}
+        onConfirm={() => void handleConfirmRemove()}
+      />
     </div>
   );
 }

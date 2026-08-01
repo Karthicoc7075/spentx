@@ -1,90 +1,89 @@
 "use client";
 
-import { CalendarCheck, IndianRupee, Pencil, Save, Trash2 } from "lucide-react";
+import { CreditCard, IndianRupee, Pencil, PiggyBank, Sparkles, Trash2, TrendingUp, Wallet } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AddCategoryModal } from "@/components/plan/AddCategoryModal";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 import { FitsIncomeBanner } from "@/components/plan/FitsIncomeBanner";
 import { PlanAllocationSheet } from "@/components/plan/PlanAllocationSheet";
+import { PlanCategoryCardGrid } from "@/components/plan/PlanCategoryCardGrid";
 import { PlanMonthSelector } from "@/components/plan/PlanMonthSelector";
 import { PlanOverviewPanel } from "@/components/plan/PlanOverviewPanel";
+import { SavedPlansList } from "@/components/plan/SavedPlansList";
 import { PurposeFilterChips } from "@/components/shared/PurposeFilterChips";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDailySafeSpending } from "@/hooks/useDailySafeSpending";
 import { useMonthlyPlan } from "@/hooks/useMonthlyPlan";
-import { formatPlanMonth, getPieChartData, sumPlanned } from "@/lib/plan";
+import {
+  useAllMonthlyPlanActualsQuery,
+  useAllMonthlyPlansQuery,
+} from "@/hooks/useMonthlyPlanQuery";
+import { usePurposes } from "@/hooks/usePurposes";
+import { useTransactions } from "@/hooks/useTransactions";
+import {
+  formatPlanMonth,
+  getPieChartData,
+  getPlanDisplayTitle,
+} from "@/lib/plan";
+import type { MonthlyPlanActuals } from "@/lib/supabase-data";
 import { formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
+import type { MonthlyPlan } from "@/types";
 
 export function PlanPage() {
   const { notify } = useToast();
   const plan = useMonthlyPlan();
+  const { purposes } = usePurposes();
+  const { transactions } = useTransactions();
+  const dailySafeSpending = useDailySafeSpending();
+  const allPlansQuery = useAllMonthlyPlansQuery();
+  const allActualsQuery = useAllMonthlyPlanActualsQuery();
   const [addCategoryOpen, setAddCategoryOpen] = useState(false);
-  const [savePlanOpen, setSavePlanOpen] = useState(false);
-  const [planName, setPlanName] = useState("");
-  const [saveTargetTemplateId, setSaveTargetTemplateId] = useState<string | null>(
-    null,
-  );
-  const [hasStartedPlanning, setHasStartedPlanning] = useState(false);
-
-  const showWorkspace = plan.hasSavedPlan || hasStartedPlanning;
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const sheetOpen = isCreating || plan.isEditing;
 
   useEffect(() => {
-    setHasStartedPlanning(false);
+    setIsCreating(false);
   }, [plan.month, plan.purposeId]);
-
-  useEffect(() => {
-    if (plan.hasSavedPlan) {
-      setHasStartedPlanning(true);
-    }
-  }, [plan.hasSavedPlan]);
-
-  const totalActual = useMemo(
-    () =>
-      Object.values(plan.categorySpentActuals).reduce(
-        (sum, amount) => sum + amount,
-        0,
-      ),
-    [plan.categorySpentActuals],
-  );
 
   const pieData = useMemo(
     () => getPieChartData(plan.allocations),
     [plan.allocations],
   );
 
-  function openSavePlanDialog() {
-    const targetTemplate = plan.templates.find(
-      (template) => template.id === saveTargetTemplateId,
-    );
-    setPlanName(targetTemplate?.name ?? formatPlanMonth(plan.month));
-    setSavePlanOpen(true);
+  const actualsByPlanId = useMemo(() => {
+    const map: Record<string, MonthlyPlanActuals> = {};
+    for (const row of allActualsQuery.data ?? []) {
+      map[row.planId] = row;
+    }
+    return map;
+  }, [allActualsQuery.data]);
+
+  function openSetupSheet() {
+    setIsCreating(true);
+    if (plan.expectedIncome <= 0 && plan.incomeSuggestion > 0) {
+      plan.setExpectedIncome(plan.incomeSuggestion);
+    }
   }
 
-  async function handleSavePlan() {
-    const name = planName.trim() || formatPlanMonth(plan.month);
+  function handleCancelSheet() {
+    if (plan.isEditing) {
+      plan.cancelEditing();
+    } else {
+      setIsCreating(false);
+    }
+  }
+
+  async function handleSetAndSavePlan() {
     try {
       await plan.persistPlan();
-      await plan.persistPlan({
-        asTemplate: true,
-        templateId: saveTargetTemplateId ?? undefined,
-        templateName: name,
-      });
-      setSavePlanOpen(false);
-      setSaveTargetTemplateId(null);
+      setIsCreating(false);
       notify({
         title: plan.hasSavedPlan ? "Plan updated" : "Plan saved",
-        description: saveTargetTemplateId
-          ? `Saved plan "${name}" updated.`
-          : `${name} has been saved and added to your saved plans.`,
+        description: `Your plan for ${formatPlanMonth(plan.month)} has been saved.`,
       });
     } catch {
       notify({
@@ -95,52 +94,96 @@ export function PlanPage() {
     }
   }
 
-  function handleApplySavedPlan(template: (typeof plan.templates)[number]) {
-    plan.applyTemplate(template);
-    plan.startEditing();
-    setHasStartedPlanning(true);
-    setSaveTargetTemplateId(template.id);
+  function handleAutoFillPlan() {
+    if (plan.incomeSuggestion > 0 && plan.expectedIncome === 0) {
+      plan.setExpectedIncome(plan.incomeSuggestion);
+    }
+    plan.autoBalance();
     notify({
-      title: "Plan applied",
-      description: `${template.name} loaded into ${formatPlanMonth(plan.month)}. Edit and save to keep it.`,
+      title: "Plan Auto-Balanced",
+      description: "Category allocations updated based on 3-month spending averages.",
     });
   }
 
-  async function handleDeleteTemplate(template: (typeof plan.templates)[number]) {
-    if (!window.confirm(`Delete saved plan "${template.name}"?`)) return;
+  async function handleQuickAdjust(id: string, delta: number) {
+    const current = plan.allocations.find((a) => a.id === id);
+    if (!current) return;
+    const newAmount = Math.max(0, current.plannedAmount + delta);
+    plan.updateAllocation(id, newAmount);
     try {
-      await plan.deleteTemplate(template.id);
-      if (saveTargetTemplateId === template.id) setSaveTargetTemplateId(null);
+      await plan.persistPlan();
       notify({
-        title: "Saved plan deleted",
-        description: `${template.name} has been removed.`,
+        title: "Category limit updated",
+        description: `${current.category} target limit set to ${formatCurrency(newAmount)}.`,
       });
     } catch {
       notify({
-        title: "Couldn't delete saved plan",
+        title: "Couldn't update limit",
+        description: "Please try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  function handleSelectSavedPlan(savedPlan: MonthlyPlan) {
+    if (savedPlan.month !== plan.month) plan.setMonth(savedPlan.month);
+    if ((savedPlan.purposeId ?? "") !== plan.purposeId) {
+      plan.setPurposeId(savedPlan.purposeId ?? "");
+    }
+    plan.startEditing();
+  }
+
+  async function handleDeletePlan() {
+    setDeleteConfirmOpen(false);
+    try {
+      await plan.deletePlan();
+      notify({
+        title: "Plan deleted successfully.",
+        description: `Your plan for ${formatPlanMonth(plan.month)} has been removed.`,
+      });
+    } catch {
+      notify({
+        title: "Couldn't delete plan",
         description: "Something went wrong. Please try again.",
         variant: "destructive",
       });
     }
   }
 
-  function handleStartPlanning() {
-    setHasStartedPlanning(true);
-    if (plan.expectedIncome <= 0 && plan.incomeSuggestion > 0) {
-      plan.setExpectedIncome(plan.incomeSuggestion);
-    }
-  }
+  const totalSpentSoFar = useMemo(() => {
+    return Object.values(plan.categorySpentActuals).reduce((a, b) => a + b, 0);
+  }, [plan.categorySpentActuals]);
+
+  const totalRemainingBudget = Math.max(0, plan.totalPlanned - totalSpentSoFar);
+  const spentPercentage = plan.totalPlanned > 0 ? Math.min(100, Math.round((totalSpentSoFar / plan.totalPlanned) * 100)) : 0;
+  const remainingPercentage = Math.max(0, 100 - spentPercentage);
+  const unallocatedBuffer = Math.max(0, plan.expectedIncome - plan.totalPlanned);
 
   return (
     <div className="grid gap-6 pb-12">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Monthly Plan</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Set spending limits, track progress.
-        </p>
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Monthly Plan</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Budget spending targets, daily safe allowance, and category progress.
+          </p>
+        </div>
+
+        {plan.hasSavedPlan ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={handleAutoFillPlan}>
+              <Sparkles className="mr-1.5 size-3.5 text-primary" />
+              AI Auto-Fill
+            </Button>
+            <Button size="sm" onClick={plan.startEditing}>
+              <Pencil className="mr-1.5 size-3.5" />
+              Edit Plan
+            </Button>
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border bg-card p-4">
+      <div className="sx-surface flex flex-wrap items-center gap-3 p-4">
         <PlanMonthSelector month={plan.month} onChange={plan.setMonth} />
         <PurposeFilterChips
           showAllOption={false}
@@ -157,15 +200,14 @@ export function PlanPage() {
 
       {plan.isLoading ? (
         <div className="space-y-6">
-          <Skeleton className="h-20" />
-          <Skeleton className="h-28" />
+          <Skeleton className="h-24" />
           <div className="grid gap-6 xl:grid-cols-2">
             <Skeleton className="h-96" />
             <Skeleton className="h-96" />
           </div>
         </div>
-      ) : !showWorkspace ? (
-        <div className="flex flex-col items-center rounded-2xl border border-dashed border-border bg-card px-6 py-16 text-center">
+      ) : !plan.hasSavedPlan ? (
+        <div className="sx-surface flex flex-col items-center border-dashed px-6 py-16 text-center">
           <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
             <IndianRupee className="size-5" />
           </div>
@@ -175,164 +217,182 @@ export function PlanPage() {
           <p className="mt-1.5 text-sm text-muted-foreground">
             Set your expected income and allocate spending across categories.
           </p>
-          <Button className="mt-6" onClick={handleStartPlanning}>
-            Start planning
-          </Button>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button onClick={openSetupSheet}>
+              Setup Plan
+            </Button>
+            <Button variant="outline" onClick={handleAutoFillPlan}>
+              <Sparkles className="mr-1.5 size-4 text-primary" />
+              Auto-Fill from History
+            </Button>
+          </div>
         </div>
       ) : (
         <>
+          {/* Top Row Hero Summary Cards */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+            {/* 1. Expected Income */}
+            <div className="sx-surface p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Expected Income</span>
+                <Wallet className="size-4 text-primary" />
+              </div>
+              <p className="mt-2 text-xl font-bold tracking-tight text-foreground tabular-nums">
+                {formatCurrency(plan.expectedIncome)}
+              </p>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Allocated: {formatCurrency(plan.totalPlanned)}</span>
+                <Badge variant="outline" className="text-[10px] font-medium">
+                  {plan.expectedIncome > 0
+                    ? `${Math.round((plan.totalPlanned / plan.expectedIncome) * 100)}% Set`
+                    : "No Income"}
+                </Badge>
+              </div>
+            </div>
+
+            {/* 2. Total Budgeted */}
+            <div className="sx-surface p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Total Budgeted</span>
+                <IndianRupee className="size-4 text-emerald-500" />
+              </div>
+              <p className="mt-2 text-xl font-bold tracking-tight text-foreground tabular-nums">
+                {formatCurrency(plan.totalPlanned)}
+              </p>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Buffer: {formatCurrency(unallocatedBuffer)}</span>
+                <span className="font-mono text-emerald-600 dark:text-emerald-400 font-medium">
+                  {plan.allocations.filter((a) => a.plannedAmount > 0).length} categories
+                </span>
+              </div>
+            </div>
+
+            {/* 3. Total Spent Amount Card */}
+            <div className="sx-surface p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Total Spent</span>
+                <CreditCard className="size-4 text-rose-500" />
+              </div>
+              <p className="mt-2 text-xl font-bold tracking-tight text-foreground tabular-nums">
+                {formatCurrency(totalSpentSoFar)}
+              </p>
+              <div className="mt-2 flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground">Actual Spent</span>
+                <Badge
+                  variant={spentPercentage >= 100 ? "destructive" : spentPercentage >= 80 ? "outline" : "secondary"}
+                  className="text-[10px] font-semibold"
+                >
+                  {spentPercentage}% Spent
+                </Badge>
+              </div>
+            </div>
+
+            {/* 4. Total Remaining Amount Card */}
+            <div className="sx-surface p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Remaining Budget</span>
+                <PiggyBank className="size-4 text-emerald-500" />
+              </div>
+              <p className="mt-2 text-xl font-bold tracking-tight text-foreground tabular-nums">
+                {formatCurrency(totalRemainingBudget)}
+              </p>
+              <div className="mt-2 flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground">Available Limit</span>
+                <Badge variant="outline" className="text-[10px] font-semibold border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                  {remainingPercentage}% Left
+                </Badge>
+              </div>
+            </div>
+
+            {/* 5. Daily Safe Allowance Card */}
+            <div className="sx-surface p-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Daily Safe Allowance</span>
+                <TrendingUp className="size-4 text-sky-500" />
+              </div>
+              <p className="mt-2 text-xl font-bold tracking-tight text-foreground tabular-nums">
+                {formatCurrency(dailySafeSpending.dailySafeLimit)}
+                <span className="text-xs font-normal text-muted-foreground"> / day</span>
+              </p>
+              <div className="mt-2 flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground">{dailySafeSpending.daysLeft} days left</span>
+                <Badge
+                  variant={dailySafeSpending.status === "overspent" ? "destructive" : "secondary"}
+                  className="text-[10px] font-semibold"
+                >
+                  {dailySafeSpending.status === "overspent" ? "Pacing Exceeded" : "🟢 On Track"}
+                </Badge>
+              </div>
+            </div>
+          </div>
+
           <FitsIncomeBanner
             expectedIncome={plan.expectedIncome}
             totalPlanned={plan.totalPlanned}
           />
 
-          {plan.hasSavedPlan ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-card px-4 py-3">
-              <p className="text-sm text-muted-foreground">
-                {plan.isEditing
-                  ? "Editing this month's plan."
-                  : `Plan saved for ${formatPlanMonth(plan.month)}.`}
-              </p>
-              {plan.isEditing ? (
-                <Button size="sm" variant="outline" onClick={plan.cancelEditing}>
-                  Cancel
-                </Button>
-              ) : (
-                <Button size="sm" variant="outline" onClick={plan.startEditing}>
-                  <Pencil className="mr-2 size-4" />
-                  Edit plan
-                </Button>
-              )}
-            </div>
-          ) : null}
-
-          <div className="rounded-2xl border bg-card p-6">
-            <Label className="text-sm font-medium" htmlFor="expected-income">
-              Expected income this month
-            </Label>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Total income you expect to receive in {formatPlanMonth(plan.month)}.
+          <div className="sx-surface flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              {plan.savedPlan
+                ? getPlanDisplayTitle(plan.savedPlan)
+                : `Plan saved for ${formatPlanMonth(plan.month)}`}
+              .
+              {plan.isActivePlan ? <Badge>Active plan</Badge> : null}
             </p>
-            <div className="relative mt-4 max-w-md">
-              <IndianRupee className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-11 pl-9 font-mono text-lg"
-                disabled={plan.isViewMode}
-                id="expected-income"
-                inputMode="decimal"
-                placeholder="₹ 0"
-                value={plan.expectedIncome || ""}
-                onChange={(event) =>
-                  plan.setExpectedIncome(Number(event.target.value) || 0)
-                }
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={plan.startEditing}>
+                <Pencil className="mr-2 size-4" />
+                Edit plan
+              </Button>
+              <Button
+                disabled={plan.isSaving}
+                size="sm"
+                variant="destructive"
+                onClick={() => setDeleteConfirmOpen(true)}
+              >
+                <Trash2 className="mr-2 size-4" />
+                {plan.isActivePlan ? "Delete active plan" : "Delete plan"}
+              </Button>
+            </div>
+          </div>
+
+          {/* 2-Column Split Desktop Layout */}
+          <div className="grid gap-6 lg:grid-cols-12">
+            <div className="lg:col-span-5">
+              <PlanOverviewPanel
+                activeCategory={plan.activeCategory}
+                allocations={plan.allocations}
+                categorySpentActuals={plan.categorySpentActuals}
+                pieData={pieData}
+                utilization={plan.utilization}
+                onCategorySelect={plan.setActiveCategory}
+                transactions={transactions}
+                totalPlanned={plan.totalPlanned}
+                month={plan.month}
               />
             </div>
-            {plan.incomeSuggestion > 0 ? (
-              <Button
-                className="mt-3"
-                disabled={plan.isViewMode}
-                type="button"
-                variant="outline"
-                onClick={() => plan.setExpectedIncome(plan.incomeSuggestion)}
-              >
-                Use suggested income ({formatCurrency(plan.incomeSuggestion)})
-              </Button>
-            ) : null}
-          </div>
 
-          <div className="grid gap-6 xl:grid-cols-2">
-            <PlanAllocationSheet
-              allocations={plan.allocations}
-              categorySpentActuals={plan.categorySpentActuals}
-              disabled={plan.isViewMode}
-              rolloverBreakdowns={plan.rolloverBreakdowns}
-              totalActual={totalActual}
-              totalPlanned={plan.totalPlanned}
-              onAddCategory={() => setAddCategoryOpen(true)}
-              onAmountChange={plan.updateAllocation}
-              onToggleRollover={plan.toggleRollover}
-            />
-            <PlanOverviewPanel
-              activeCategory={plan.activeCategory}
-              allocations={plan.allocations}
-              categorySpentActuals={plan.categorySpentActuals}
-              pieData={pieData}
-              utilization={plan.utilization}
-              onCategorySelect={plan.setActiveCategory}
-            />
-          </div>
-
-          {!plan.isViewMode ? (
-            <div className="flex justify-end">
-              <Button disabled={plan.isSaving} onClick={openSavePlanDialog}>
-                <Save className="mr-2 size-4" />
-                {saveTargetTemplateId ? "Save changes" : "Save plan"}
-              </Button>
-            </div>
-          ) : null}
-
-          <div className="rounded-2xl border bg-card">
-            <div className="border-b px-6 py-4">
-              <h3 className="text-base font-semibold text-foreground">
-                Saved plans
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Plans you&apos;ve saved. Apply one to {formatPlanMonth(plan.month)}
-                {" "}or any other month.
-              </p>
-            </div>
-            <div className="p-6">
-              {plan.templates.length === 0 ? (
-                <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-                  No saved plans yet. Save this plan to reuse it next month.
-                </p>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {plan.templates.map((template) => (
-                    <div
-                      key={template.id}
-                      className="flex flex-col justify-between rounded-xl border p-4"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-                            <CalendarCheck className="size-4 text-muted-foreground" />
-                            {template.name}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Income {formatCurrency(template.expectedIncome)} · Planned{" "}
-                            {formatCurrency(sumPlanned(template.allocations))}
-                          </p>
-                        </div>
-                        <button
-                          aria-label={`Delete ${template.name}`}
-                          className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          disabled={plan.isSaving}
-                          type="button"
-                          onClick={() => handleDeleteTemplate(template)}
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
-                      </div>
-                      <div className="mt-3 flex gap-2">
-                        <Button
-                          className="flex-1"
-                          disabled={plan.isSaving}
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleApplySavedPlan(template)}
-                        >
-                          Apply to {formatPlanMonth(plan.month)}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="lg:col-span-7">
+              <PlanCategoryCardGrid
+                allocations={plan.allocations}
+                categorySpentActuals={plan.categorySpentActuals}
+                transactions={transactions}
+                onQuickAdjust={handleQuickAdjust}
+                onEditClick={plan.startEditing}
+              />
             </div>
           </div>
         </>
       )}
+
+      <SavedPlansList
+        actualsByPlanId={actualsByPlanId}
+        currentMonth={plan.month}
+        currentPurposeId={plan.purposeId}
+        plans={allPlansQuery.data ?? []}
+        purposes={purposes}
+        onSelect={handleSelectSavedPlan}
+      />
 
       <AddCategoryModal
         open={addCategoryOpen}
@@ -340,58 +400,29 @@ export function PlanPage() {
         onOpenChange={setAddCategoryOpen}
       />
 
-      <Dialog open={savePlanOpen} onOpenChange={setSavePlanOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Save plan</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-2">
-            <div className="grid gap-2">
-              <Label htmlFor="plan-name">Plan name</Label>
-              <Input
-                id="plan-name"
-                placeholder="e.g., Jun 2026"
-                value={planName}
-                onChange={(event) => setPlanName(event.target.value)}
-              />
-            </div>
-            {plan.templates.length > 0 ? (
-              <div className="grid gap-2">
-                <Label htmlFor="save-target">Save as</Label>
-                <select
-                  className="h-10 rounded-md border bg-background px-3 text-sm"
-                  id="save-target"
-                  value={saveTargetTemplateId ?? ""}
-                  onChange={(event) =>
-                    setSaveTargetTemplateId(event.target.value || null)
-                  }
-                >
-                  <option value="">Create new saved plan</option>
-                  {plan.templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      Update &quot;{template.name}&quot;
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setSavePlanOpen(false);
-                setSaveTargetTemplateId(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button disabled={plan.isSaving || !planName.trim()} onClick={handleSavePlan}>
-              {saveTargetTemplateId ? "Save changes" : "Save plan"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <PlanAllocationSheet
+        open={sheetOpen}
+        month={plan.month}
+        expectedIncome={plan.expectedIncome}
+        onExpectedIncomeChange={plan.setExpectedIncome}
+        incomeSuggestion={plan.incomeSuggestion}
+        allocations={plan.allocations}
+        categorySpentActuals={plan.categorySpentActuals}
+        rolloverBreakdowns={plan.rolloverBreakdowns}
+        isSaving={plan.isSaving}
+        onAmountChange={plan.updateAllocation}
+        onToggleRollover={plan.toggleRollover}
+        onAddCategory={() => setAddCategoryOpen(true)}
+        onSave={handleSetAndSavePlan}
+        onCancel={handleCancelSheet}
+      />
+      <ConfirmDeleteDialog
+        open={deleteConfirmOpen}
+        itemLabel="Plan"
+        detail={formatPlanMonth(plan.month)}
+        onOpenChange={setDeleteConfirmOpen}
+        onConfirm={() => void handleDeletePlan()}
+      />
     </div>
   );
 }

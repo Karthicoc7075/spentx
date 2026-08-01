@@ -1,19 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
-import { GoogleAuthButton } from "@/components/auth/GoogleAuthButton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   completeAuthSession,
+  ensureUserWorkspace,
+  resendVerificationEmail,
   signInWithEmail,
-  signInWithGoogle,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import {
   getAuthErrorMessage,
   validateSignInForm,
@@ -23,30 +22,68 @@ import { useToast } from "@/providers/toast-provider";
 
 export function SignInForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { notify } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [showResendVerification, setShowResendVerification] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<SignInFieldErrors>({});
+  const handledQueryRef = useRef(false);
 
-  async function handleGoogleSignIn() {
-    setIsSubmitting(true);
-    try {
-      const credential = await signInWithGoogle();
-      await completeAuthSession(credential.user.uid, {
-        name: credential.user.displayName ?? "SpentX User",
-        email: credential.user.email ?? "",
-        photoURL: credential.user.photoURL ?? undefined,
+  useEffect(() => {
+    if (handledQueryRef.current) return;
+
+    if (searchParams.get("verified") === "1") {
+      handledQueryRef.current = true;
+      notify({
+        title: "Email verified",
+        description: "Your email is confirmed. Sign in to continue.",
       });
-      router.replace("/");
+      router.replace("/auth/sign-in");
+      return;
+    }
+
+    if (searchParams.get("error") === "auth_callback_error") {
+      handledQueryRef.current = true;
+      notify({
+        title: "Verification link expired",
+        description:
+          searchParams.get("message") ??
+          "Request a new verification email and try again.",
+        variant: "destructive",
+      });
+      router.replace("/auth/sign-in");
+    }
+  }, [notify, router, searchParams]);
+
+  async function handleResendVerification() {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      notify({
+        title: "Enter your email",
+        description: "Add the email you signed up with, then resend verification.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsResending(true);
+    try {
+      await resendVerificationEmail(trimmedEmail);
+      notify({
+        title: "Verification email sent",
+        description: "Check your inbox for a new confirmation link.",
+      });
     } catch (error) {
       notify({
-        title: "Sign in failed",
+        title: "Could not resend email",
         description: getAuthErrorMessage(error),
         variant: "destructive",
       });
     } finally {
-      setIsSubmitting(false);
+      setIsResending(false);
     }
   }
 
@@ -60,6 +97,7 @@ export function SignInForm() {
     }
 
     setFieldErrors({});
+    setShowResendVerification(false);
     setIsSubmitting(true);
 
     const trimmedEmail = email.trim();
@@ -67,16 +105,21 @@ export function SignInForm() {
 
     try {
       const credential = await signInWithEmail(trimmedEmail, trimmedPassword);
-      await completeAuthSession(credential.user.uid, {
+      const profile = {
         name: credential.user.displayName ?? "SpentX User",
         email: credential.user.email ?? trimmedEmail,
         photoURL: credential.user.photoURL ?? undefined,
-      });
+      };
+      await ensureUserWorkspace(credential.user.uid, profile);
+      await completeAuthSession(credential.user.uid, profile);
       router.replace("/");
     } catch (error) {
+      const message = getAuthErrorMessage(error);
+      const needsVerification = message.toLowerCase().includes("confirm your email");
+      setShowResendVerification(needsVerification);
       notify({
         title: "Sign in failed",
-        description: getAuthErrorMessage(error),
+        description: message,
         variant: "destructive",
       });
     } finally {
@@ -148,23 +191,25 @@ export function SignInForm() {
           ) : null}
         </div>
 
+        {showResendVerification ? (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+            <p>Your email isn&apos;t verified yet.</p>
+            <Button
+              className="mt-3 h-8 px-3"
+              disabled={isResending}
+              type="button"
+              variant="outline"
+              onClick={handleResendVerification}
+            >
+              {isResending ? "Sending..." : "Resend verification email"}
+            </Button>
+          </div>
+        ) : null}
+
         <Button className="w-full" disabled={isSubmitting} type="submit">
           {isSubmitting ? "Please wait..." : "Sign in"}
         </Button>
       </form>
-
-      <div className="relative">
-        <Separator />
-        <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">
-          or
-        </span>
-      </div>
-
-      <GoogleAuthButton
-        disabled={isSubmitting}
-        label="Sign in with Google"
-        onClick={handleGoogleSignIn}
-      />
     </AuthLayout>
   );
 }

@@ -6,9 +6,8 @@ import {
   useContext,
   useMemo,
 } from "react";
-import { usePurposeShares } from "@/hooks/usePurposeShares";
-import { getViewerShares } from "@/lib/purpose-shares";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { useShareSession } from "@/providers/share-provider";
 
 type ViewerContextValue = {
   isReadOnlyViewer: boolean;
@@ -27,41 +26,20 @@ const ViewerContext = createContext<ViewerContextValue>({
 });
 
 export function ViewerProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuthReady();
-  const { shares, isLoading } = usePurposeShares();
+  const { user, authLoading } = useAuthReady();
+  const isLoading = authLoading;
 
   const value = useMemo<ViewerContextValue>(() => {
-    const viewerShares = getViewerShares(shares, user?.id, user?.email);
-    const ownedShareIds = new Set(
-      shares.filter((share) => share.ownerId === user?.id).map((share) => share.id),
-    );
-    const activeViewerShares = viewerShares.filter(
-      (share) => !ownedShareIds.has(share.id),
-    );
-
-    if (activeViewerShares.length === 0) {
-      return {
-        isReadOnlyViewer: false,
-        dataOwnerId: user?.id,
-        sharedPurposeIds: [],
-        ownerLabel: "",
-        isLoading,
-      };
-    }
-
-    const ownerIds = [...new Set(activeViewerShares.map((share) => share.ownerId))];
-    const ownerId = ownerIds[0];
-
+    // Signed-in users always work in their own workspace. Shared read-only
+    // access is handled on /share/[token], not by switching dataOwnerId here.
     return {
-      isReadOnlyViewer: true,
-      dataOwnerId: ownerId,
-      sharedPurposeIds: [
-        ...new Set(activeViewerShares.map((share) => share.purposeId)),
-      ],
-      ownerLabel: "shared household",
+      isReadOnlyViewer: false,
+      dataOwnerId: user?.id,
+      sharedPurposeIds: [],
+      ownerLabel: "",
       isLoading,
     };
-  }, [isLoading, shares, user?.email, user?.id]);
+  }, [isLoading, user?.id]);
 
   return (
     <ViewerContext.Provider value={value}>{children}</ViewerContext.Provider>
@@ -69,5 +47,22 @@ export function ViewerProvider({ children }: { children: ReactNode }) {
 }
 
 export function useViewerAccess() {
-  return useContext(ViewerContext);
+  const authValue = useContext(ViewerContext);
+  const share = useShareSession();
+
+  // Anonymous /share/[token] visitors never get a Supabase Auth session
+  // (auth.uid() stays null), so they can't flow through the normal
+  // auth-derived ViewerContext value above — a resolved share session
+  // takes over dataOwnerId/sharedPurposeIds instead.
+  if (share) {
+    return {
+      isReadOnlyViewer: true,
+      dataOwnerId: share.ownerId,
+      sharedPurposeIds: [share.purposeId],
+      ownerLabel: share.purposeName,
+      isLoading: false,
+    };
+  }
+
+  return authValue;
 }

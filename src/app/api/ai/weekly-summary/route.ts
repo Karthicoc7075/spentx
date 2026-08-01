@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { generateWeeklySummary } from "@/lib/ai/generateSummary";
 import type { SummaryContext } from "@/lib/ai/generateSummary";
+import { withRouteLogging } from "@/lib/server/with-route-logging";
 
-export async function POST(request: Request) {
+async function handler(request: Request) {
   try {
     const context = (await request.json()) as SummaryContext;
     const summary = await generateWeeklySummary(context);
@@ -14,3 +15,4 @@ export async function POST(request: Request) {
     );
   }
 }
+export const POST = withRouteLogging("ai/weekly-summary", "route_handler", handler);

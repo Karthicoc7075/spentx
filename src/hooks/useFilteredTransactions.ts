@@ -4,26 +4,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   subscribeToFilteredTransactions,
   subscribeToTransactions,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import {
   applyClientTransactionFilters,
-  canUseFirestoreTransactionQuery,
-  toFirestoreTransactionFilters,
+  canUseServerTransactionQuery,
+  toServerTransactionFilters,
 } from "@/lib/transactions-query";
 import { filterTransactions } from "@/lib/utils";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { useViewerAccess } from "@/providers/viewer-provider";
 import type { GlobalFilters, Transaction } from "@/types";
 
 export function useFilteredTransactions(filters: GlobalFilters) {
   const { user, isConfigured, isReady } = useAuthReady();
+  const { dataOwnerId } = useViewerAccess();
+  const effectiveUserId = dataOwnerId ?? user?.id;
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [usesClientFallback, setUsesClientFallback] = useState(false);
   const fallbackRef = useRef(false);
 
-  const firestoreFilters = useMemo(
-    () => toFirestoreTransactionFilters(filters),
+  const serverFilters = useMemo(
+    () => toServerTransactionFilters(filters),
     [
       filters.dateFrom,
       filters.dateTo,
@@ -34,24 +37,24 @@ export function useFilteredTransactions(filters: GlobalFilters) {
     ],
   );
 
-  const useFirestoreQuery = canUseFirestoreTransactionQuery(filters);
+  const useServerQuery = canUseServerTransactionQuery(filters);
 
   useEffect(() => {
     fallbackRef.current = false;
     setUsesClientFallback(false);
   }, [
-    firestoreFilters.dateFrom,
-    firestoreFilters.dateTo,
-    firestoreFilters.transactionType,
-    firestoreFilters.account,
-    firestoreFilters.source,
-    firestoreFilters.categories.join("|"),
+    serverFilters.dateFrom,
+    serverFilters.dateTo,
+    serverFilters.transactionType,
+    serverFilters.account,
+    serverFilters.source,
+    serverFilters.categories.join("|"),
   ]);
 
   useEffect(() => {
     if (isConfigured && !isReady) return;
 
-    const userId = user?.id;
+    const userId = effectiveUserId;
     if (!userId) {
       setTransactions([]);
       setIsLoading(false);
@@ -66,7 +69,7 @@ export function useFilteredTransactions(filters: GlobalFilters) {
 
     function publish(nextTransactions: Transaction[]) {
       const result =
-        useFirestoreQuery && !fallbackRef.current
+        useServerQuery && !fallbackRef.current
           ? applyClientTransactionFilters(nextTransactions, filters)
           : filterTransactions(nextTransactions, filters);
       setTransactions(result);
@@ -87,14 +90,14 @@ export function useFilteredTransactions(filters: GlobalFilters) {
       );
     }
 
-    if (!useFirestoreQuery) {
+    if (!useServerQuery) {
       startFallbackSubscription();
       return () => fallbackUnsubscribe?.();
     }
 
     const unsubscribe = subscribeToFilteredTransactions(
       userId,
-      firestoreFilters,
+      serverFilters,
       publish,
       () => {
         startFallbackSubscription();
@@ -107,11 +110,11 @@ export function useFilteredTransactions(filters: GlobalFilters) {
     };
   }, [
     filters,
-    firestoreFilters,
+    serverFilters,
     isConfigured,
     isReady,
-    useFirestoreQuery,
-    user?.id,
+    useServerQuery,
+    effectiveUserId,
   ]);
 
   return {
@@ -119,6 +122,6 @@ export function useFilteredTransactions(filters: GlobalFilters) {
     isLoading,
     error,
     usesClientFallback,
-    isRealtime: Boolean(user?.id && isConfigured),
+    isRealtime: Boolean(effectiveUserId && isConfigured),
   };
 }

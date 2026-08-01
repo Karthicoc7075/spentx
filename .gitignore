@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 /.pnp
+/Mobile app
 .pnp.*
 .yarn/*
 !.yarn/patches

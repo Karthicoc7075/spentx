@@ -1,8 +1,3 @@
-import { FirebaseError } from "firebase/app";
-
-const firebaseProjectId =
-  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "your-project";
-
 export function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -85,30 +80,55 @@ export function validateForgotPasswordForm(email: string) {
 }
 
 export function getAuthErrorMessage(error: unknown) {
-  if (!(error instanceof FirebaseError)) {
+  if (!error || typeof error !== "object") {
     return "Something went wrong. Try again.";
   }
 
-  switch (error.code) {
+  const code = "code" in error ? String(error.code) : "";
+  const message =
+    "message" in error ? String(error.message) : "Something went wrong. Try again.";
+
+  switch (code) {
     case "auth/invalid-email":
+    case "invalid_email":
       return "Enter a valid email address.";
     case "auth/user-disabled":
       return "This account has been disabled.";
     case "auth/user-not-found":
     case "auth/wrong-password":
     case "auth/invalid-credential":
+    case "invalid_credentials":
       return "Incorrect email or password.";
     case "auth/email-already-in-use":
+    case "user_already_exists":
       return "An account with this email already exists.";
+    case "email_not_confirmed":
+      return "Confirm your email first. Check your inbox for the verification link.";
     case "auth/weak-password":
+    case "weak_password":
       return "Password must be at least 8 characters.";
     case "auth/too-many-requests":
-      return "Too many attempts. Try again later.";
+    case "over_request_rate_limit":
+    case "email_rate_limit_exceeded":
+      return "Too many email attempts. Wait a few minutes, then try again.";
     case "auth/popup-closed-by-user":
       return "Sign-in was cancelled.";
-    case "auth/configuration-not-found":
-      return `Firebase Authentication is not set up for ${firebaseProjectId} yet. Enable Email/Password and Google in the Firebase Console.`;
     default:
-      return error.message;
+      if (message.toLowerCase().includes("email not confirmed")) {
+        return "Confirm your email first. Check your inbox for the verification link.";
+      }
+      if (message.toLowerCase().includes("invalid login credentials")) {
+        return "Incorrect email or password.";
+      }
+      if (message.toLowerCase().includes("rate limit")) {
+        return "Too many email attempts. Wait a few minutes, then try again.";
+      }
+      if (message.toLowerCase().includes("service_role_key")) {
+        return "Server auth is not configured. Add SUPABASE_SERVICE_ROLE_KEY to .env.local.";
+      }
+      if (message.toLowerCase().includes("resend_api_key")) {
+        return "Email delivery is not configured. Add RESEND_API_KEY to .env.local.";
+      }
+      return message;
   }
 }

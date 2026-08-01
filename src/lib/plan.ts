@@ -1,3 +1,5 @@
+import { format, parse } from "date-fns";
+import { isTransferTransaction } from "@/lib/investments";
 import { defaultCategories } from "@/lib/mock-data";
 import type {
   Category,
@@ -55,6 +57,16 @@ export function formatPlanMonthShort(month: string) {
     month: "short",
     year: "numeric",
   });
+}
+
+/** Default saved-plan title, e.g. "July Smart 2026" for 2026-07. */
+export function formatDefaultPlanTitle(month: string) {
+  const date = parse(month, "yyyy-MM", new Date());
+  return `${format(date, "MMMM")} Smart ${format(date, "yyyy")}`;
+}
+
+export function getPlanDisplayTitle(plan: { month: string; title?: string }) {
+  return plan.title?.trim() || formatDefaultPlanTitle(plan.month);
 }
 
 export function getDefaultPlanAllocations(
@@ -117,6 +129,30 @@ export function getPieChartColor(category: string, fallback: string) {
 
 export function sumPlanned(allocations: PlanAllocation[]) {
   return allocations.reduce((sum, item) => sum + item.plannedAmount, 0);
+}
+
+/**
+ * Canonical "actual expense per category for exactly this month" — the
+ * single source both the Plan page and Analysis page's Plan vs Actual
+ * chart must use, so their numbers can never disagree. `transactions`
+ * should already be purpose-scoped by the caller.
+ */
+export function computeCategorySpentActuals(
+  transactions: Transaction[],
+  month: string,
+): Record<string, number> {
+  const map: Record<string, number> = {};
+  transactions.forEach((transaction) => {
+    if (
+      (transaction.transactionDate ?? transaction.date ?? "").startsWith(month) &&
+      transaction.type === "expense" &&
+      !isTransferTransaction(transaction)
+    ) {
+      map[transaction.category] =
+        (map[transaction.category] || 0) + transaction.amount;
+    }
+  });
+  return map;
 }
 
 export function sumPlannedForBuffer(allocations: PlanAllocation[]) {
@@ -197,11 +233,15 @@ export function suggestExpectedIncome(transactions: Transaction[]) {
   if (!salaryTransactions.length) return 0;
 
   const recent = salaryTransactions
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort(
+      (a, b) =>
+        new Date(b.transactionDate).getTime() -
+        new Date(a.transactionDate).getTime(),
+    )
     .slice(0, 3);
 
   const average =
-    recent.reduce((sum, transaction) => sum + transaction.amount, 0) /
+    recent.reduce((sum, transaction) => sum + transaction.totalAmount, 0) /
     recent.length;
 
   return Math.round(average);
@@ -412,7 +452,7 @@ export function getBudgetVsActualSummary(
       totalPlanned,
       totalActual,
       variancePercent: 0,
-      message: "Set category budgets to compare against actual spending.",
+      message: "Set category amounts to compare against actual spending.",
     };
   }
 
@@ -425,7 +465,7 @@ export function getBudgetVsActualSummary(
       totalPlanned,
       totalActual,
       variancePercent,
-      message: `You are currently ${variancePercent}% under your planned budget this month.`,
+      message: `You are currently ${variancePercent}% under your plan this month.`,
     };
   }
 
@@ -434,7 +474,7 @@ export function getBudgetVsActualSummary(
       totalPlanned,
       totalActual,
       variancePercent,
-      message: `You are currently ${Math.abs(variancePercent)}% over your planned budget this month.`,
+      message: `You are currently ${Math.abs(variancePercent)}% over your plan this month.`,
     };
   }
 
@@ -442,7 +482,7 @@ export function getBudgetVsActualSummary(
     totalPlanned,
     totalActual,
     variancePercent,
-    message: "You are exactly on track with your planned budget this month.",
+    message: "You are exactly on track with your plan this month.",
   };
 }
 

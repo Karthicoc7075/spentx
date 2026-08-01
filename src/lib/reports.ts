@@ -62,12 +62,13 @@ export function buildReportFilters(
 }
 
 export function buildFinancialReport({
-  transactions,
+  transactions: rawTransactions,
   categories,
   plan,
   type,
   dateFrom,
   dateTo,
+  includeOutings = true,
 }: {
   transactions: Transaction[];
   categories: Category[];
@@ -75,7 +76,12 @@ export function buildFinancialReport({
   type: ReportType;
   dateFrom?: string;
   dateTo?: string;
+  includeOutings?: boolean;
 }): FinancialReportData {
+  const transactions = includeOutings
+    ? rawTransactions
+    : rawTransactions.filter((tx) => !tx.outingId && !tx.tags?.includes("outing-analytics"));
+
   const filters = buildReportFilters(type, dateFrom, dateTo);
   const filtered = filterAnalyticsTransactions(transactions, filters);
   const hero = computeHeroStats(filtered);
@@ -85,7 +91,7 @@ export function buildFinancialReport({
     transactions,
     filters,
   );
-  const merchants = computeTopMerchants(filtered, 5);
+  const merchants = computeTopMerchants(filtered, categories, 5);
   const planSummary =
     type === "plan-vs-actual"
       ? computePlanComparisonSummary(filtered, plan)

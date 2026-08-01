@@ -9,12 +9,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { signOutUser } from "@/lib/firebase";
-import { useFirebase } from "@/providers/firebase-provider";
+import { signOutUser } from "@/lib/supabase-data";
+import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useToast } from "@/providers/toast-provider";
 
 export function ProfileAvatar() {
-  const { user, isConfigured } = useFirebase();
+  const { user, isConfigured } = useSupabaseAuth();
   const { notify } = useToast();
   const initials = user?.name
     ? user.name

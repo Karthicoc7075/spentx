@@ -21,8 +21,19 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn, formatCurrency, toCsv } from "@/lib/utils";
+import {
+  cn,
+  compareTransactionsNewestFirst,
+  formatCurrency,
+  toCsv,
+  transactionDateKey,
+} from "@/lib/utils";
 import { toCalendarDate } from "@/lib/date-filters";
+import {
+  isBalanceExcludedTransaction,
+  transactionAmount,
+} from "@/lib/wealth";
+import { isTransferTransaction } from "@/lib/investments";
 import type { Transaction } from "@/types";
 
 type RangeType = "this-week" | "this-month" | "previous-month" | "custom";
@@ -95,18 +106,22 @@ export function LogSnapshotModal({ transactions }: LogSnapshotModalProps) {
     if (!dateFrom || !dateTo) return [];
     return transactions
       .filter((transaction) => {
-        const day = toCalendarDate(transaction.date);
-        return day >= dateFrom && day <= dateTo;
+        // Hide display-only / transfer noise from the log (same idea as NW).
+        if (isBalanceExcludedTransaction(transaction)) return false;
+        if (isTransferTransaction(transaction)) return false;
+        const day = toCalendarDate(transactionDateKey(transaction));
+        return Boolean(day) && day >= dateFrom && day <= dateTo;
       })
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort(compareTransactionsNewestFirst);
   }, [transactions, dateFrom, dateTo]);
 
   const summary = useMemo(() => {
     let income = 0;
     let expense = 0;
     for (const transaction of filtered) {
-      if (transaction.type === "income") income += transaction.amount;
-      else expense += transaction.amount;
+      const amount = transactionAmount(transaction);
+      if (transaction.type === "income") income += amount;
+      else expense += amount;
     }
     return { income, expense, net: income - expense };
   }, [filtered]);
@@ -240,7 +255,7 @@ export function LogSnapshotModal({ transactions }: LogSnapshotModalProps) {
                       {transaction.merchant}
                     </p>
                     <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                      {format(new Date(transaction.date), "dd MMM yyyy")}
+                      {format(new Date(transactionDateKey(transaction)), "dd MMM yyyy")}
                       <Badge className="px-1.5 py-0 text-[10px]" variant="outline">
                         {transaction.category}
                       </Badge>
@@ -255,7 +270,7 @@ export function LogSnapshotModal({ transactions }: LogSnapshotModalProps) {
                     )}
                   >
                     {transaction.type === "income" ? "+" : "-"}
-                    {formatCurrency(transaction.amount)}
+                    {formatCurrency(transactionAmount(transaction))}
                   </span>
                 </div>
               ))}

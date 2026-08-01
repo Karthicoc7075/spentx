@@ -25,7 +25,7 @@ export function UtilizationGauge({ utilization }: UtilizationGaugeProps) {
   const strokeOffset = circ - (value / 100) * circ;
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 dark:border-white/10 shadow-sm">
+    <div className="sx-surface p-5">
       <div className="flex items-center gap-4">
         <div className="relative flex size-16 shrink-0 items-center justify-center">
           <svg className="size-full -rotate-90">
@@ -57,7 +57,7 @@ export function UtilizationGauge({ utilization }: UtilizationGaugeProps) {
         <div className="flex-1 min-w-0">
           <div className="flex justify-between items-baseline">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Budget Utilization
+              Plan Utilization
             </span>
             <span className={cn("text-base font-extrabold", !isOver ? "text-emerald-500" : "text-rose-500")}>
               {utilization}%

@@ -29,7 +29,8 @@ const actions = [
     label: "Add expense",
     description: "Log a new outflow",
     icon: ArrowDownCircle,
-    iconClass: "bg-rose-500/12 text-rose-600 ring-rose-500/10 dark:text-rose-400",
+    iconClass:
+      "bg-rose-500/12 text-rose-600 ring-rose-500/10 dark:text-rose-400",
   },
   {
     key: "income",
@@ -49,7 +50,7 @@ const actions = [
   {
     key: "plan",
     label: "Set monthly plan",
-    description: "Budget this month",
+    description: "Plan this month",
     icon: CalendarRange,
     iconClass: "bg-muted text-muted-foreground ring-border/50",
   },

@@ -5,7 +5,7 @@ import {
   clearAiChatHistory,
   saveAiChatMessage,
   subscribeToAiChatHistory,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { AiChatMessage, AiChatRole } from "@/types";
 

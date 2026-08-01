@@ -36,7 +36,7 @@ export function ContributorBreakdown({ contributors }: ContributorBreakdownProps
   const maxAmount = Math.max(...contributors.map((item) => item.amount), 1);
 
   return (
-    <div className="rounded-2xl border bg-card p-6">
+    <div className="sx-surface p-6">
       <div className="mb-4">
         <h3 className="text-base font-semibold">Contributions</h3>
         <p className="mt-1 text-sm text-muted-foreground">

@@ -35,7 +35,7 @@ const chartAnimation = {
 
 const defaultSeries: TrendSeries[] = [
   { key: "income", label: "Income", color: "#10b981", type: "income" },
-  { key: "expense", label: "Expense", color: "#8B7FD4", type: "expense" },
+  { key: "expense", label: "Expense", color: "#f43f5e", type: "expense" },
 ];
 
 const tooltipStyle = {
@@ -71,8 +71,17 @@ function gradientId(key: string) {
   return `trend-grad-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
+function formatYAxisTick(value: unknown) {
+  const num = Number(value);
+  if (isNaN(num) || num === 0) return "₹0";
+  if (num >= 100000) return `₹${(num / 100000).toFixed(1)}L`;
+  if (num >= 1000) return `₹${(num / 1000).toFixed(num % 1000 === 0 ? 0 : 1)}k`;
+  return `₹${num}`;
+}
+
 export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
   const useAreaChart = series.length <= 2;
+  const xAxisKey = data && data.length > 0 && data[0]?.label !== undefined ? "label" : "day";
 
   if (useAreaChart) {
     return (
@@ -110,7 +119,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
                 vertical={false}
               />
               <XAxis
-                dataKey="day"
+                dataKey={xAxisKey}
                 tick={chartTick}
                 tickLine={false}
                 axisLine={false}
@@ -119,10 +128,10 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
               <YAxis
                 domain={[0, cashFlowYDomain]}
                 tick={chartTick}
-                tickFormatter={(value) => `₹${Number(value) / 1000}k`}
+                tickFormatter={formatYAxisTick}
                 axisLine={false}
                 tickLine={false}
-                width={44}
+                width={52}
               />
               <Tooltip
                 contentStyle={tooltipStyle}
@@ -176,7 +185,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
               vertical={false}
             />
             <XAxis
-              dataKey="day"
+              dataKey={xAxisKey}
               tick={chartTick}
               tickLine={false}
               axisLine={false}
@@ -185,10 +194,10 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
             <YAxis
               domain={[0, cashFlowYDomain]}
               tick={chartTick}
-              tickFormatter={(value) => `₹${Number(value) / 1000}k`}
+              tickFormatter={formatYAxisTick}
               axisLine={false}
               tickLine={false}
-              width={44}
+              width={52}
             />
             <Tooltip
               contentStyle={tooltipStyle}

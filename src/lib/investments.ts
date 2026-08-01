@@ -1,223 +1,100 @@
-import type {
-  Investment,
-  InvestmentDetailType,
-  InvestmentDetails,
-  Transaction,
-} from "@/types";
+import { isOutingRollupTransaction } from "@/lib/outings";
+import type { Category, Transaction } from "@/types";
 
-export const INVESTMENT_CATEGORY = "Investment";
+const LEGACY_INVESTMENT_CATEGORY_NAME = "investment";
 
-export type InvestmentFieldConfig = {
-  key: string;
-  label: string;
-  type: "text" | "number";
-  placeholder?: string;
-  required?: boolean;
-};
-
-export type InvestmentTypeOption = {
-  value: InvestmentDetailType;
-  label: string;
-  fields: InvestmentFieldConfig[];
-};
-
-export const investmentTypeOptions: InvestmentTypeOption[] = [
-  {
-    value: "mutual-fund",
-    label: "Mutual Fund",
-    fields: [
-      { key: "fundName", label: "Fund Name", type: "text", required: true },
-      { key: "folioNumber", label: "Folio Number", type: "text" },
-      { key: "units", label: "Units", type: "number" },
-      { key: "nav", label: "NAV", type: "number" },
-    ],
-  },
-  {
-    value: "stocks",
-    label: "Stocks",
-    fields: [
-      { key: "stockName", label: "Stock Name", type: "text", required: true },
-      { key: "quantity", label: "Quantity", type: "number" },
-      { key: "buyPrice", label: "Buy Price", type: "number" },
-      { key: "broker", label: "Broker", type: "text" },
-    ],
-  },
-  {
-    value: "gold-etf",
-    label: "Gold ETF",
-    fields: [
-      { key: "etfName", label: "ETF Name", type: "text", required: true },
-      { key: "units", label: "Units", type: "number" },
-      { key: "price", label: "Price", type: "number" },
-    ],
-  },
-  {
-    value: "physical-gold",
-    label: "Physical Gold",
-    fields: [
-      { key: "weightGrams", label: "Weight (grams)", type: "number", required: true },
-      { key: "purity", label: "Purity", type: "text" },
-      { key: "purchasePrice", label: "Purchase Price", type: "number" },
-    ],
-  },
-  {
-    value: "fd",
-    label: "Fixed Deposit",
-    fields: [
-      { key: "bankName", label: "Bank Name", type: "text", required: true },
-      { key: "tenure", label: "Tenure", type: "text" },
-      { key: "interestRate", label: "Interest Rate (%)", type: "number" },
-    ],
-  },
-  {
-    value: "ppf-epf",
-    label: "PPF / EPF",
-    fields: [
-      { key: "accountNumber", label: "Account Number", type: "text", required: true },
-      { key: "contributionMonth", label: "Contribution Month", type: "text" },
-    ],
-  },
-  {
-    value: "crypto",
-    label: "Crypto",
-    fields: [
-      { key: "coinName", label: "Coin Name", type: "text", required: true },
-      { key: "quantity", label: "Quantity", type: "number" },
-      { key: "buyPrice", label: "Buy Price", type: "number" },
-    ],
-  },
-  {
-    value: "other",
-    label: "Other",
-    fields: [
-      { key: "assetName", label: "Asset Name", type: "text", required: true },
-      { key: "customField1", label: "Custom Field 1", type: "text" },
-      { key: "customField2", label: "Custom Field 2", type: "text" },
-    ],
-  },
-];
-
-export function getInvestmentTypeLabel(type: InvestmentDetailType) {
+/**
+ * An "investment" is just an expense transaction whose category is
+ * flagged `isInvestment` — no separate entity, no separate form.
+ * `categories` is optional: callers that can't easily thread the list
+ * through fall back to matching the category named "Investment", which
+ * covers the common case without requiring every call site to change.
+ */
+export function isInvestmentCategory(categoryName: string, categories: Category[] = []) {
+  const normalized = categoryName.trim().toLowerCase();
+  if (!normalized) return false;
+  const category = categories.find((item) => item.name.toLowerCase() === normalized);
+  if (category?.isInvestment === true) return true;
+  // Common names when is_investment flag is missing from cache.
   return (
-    investmentTypeOptions.find((option) => option.value === type)?.label ?? type
+    normalized === LEGACY_INVESTMENT_CATEGORY_NAME ||
+    normalized === "investments" ||
+    normalized === "mutual fund" ||
+    normalized === "mutual funds" ||
+    normalized === "stocks" ||
+    normalized === "sip"
   );
 }
 
-export function getInvestmentTypeFields(type: InvestmentDetailType) {
-  return (
-    investmentTypeOptions.find((option) => option.value === type)?.fields ?? []
-  );
-}
-
-export function isInvestmentCategory(category: string) {
-  return category.trim().toLowerCase() === INVESTMENT_CATEGORY.toLowerCase();
-}
-
-export function isInvestmentTransaction(transaction: Transaction) {
-  return (
-    transaction.isInvestment === true ||
-    isInvestmentCategory(transaction.category)
-  );
+export function isInvestmentTransaction(
+  transaction: Transaction,
+  categories: Category[] = [],
+) {
+  if (transaction.type !== "expense") return false;
+  if (isTransferTransaction(transaction)) return false;
+  if (isOutingRollupLike(transaction)) return false;
+  return isInvestmentCategory(transaction.category, categories);
 }
 
 export function isTransferTransaction(transaction: Transaction) {
-  return transaction.category.trim().toLowerCase() === "settlements";
+  const cat = (transaction.category ?? "").trim().toLowerCase();
+  const tags = transaction.tags ?? [];
+  // Unified detection — either client may write category and/or tags:
+  //  - Web: category Settlements + tags transfer / transfer_to:*
+  //  - Flutter: category Transfer + tags transfer / transfer_to:*
+  if (tags.includes("transfer")) return true;
+  if (tags.some((t) => t.startsWith("transfer_to:"))) return true;
+  if (cat === "settlements" || cat === "transfer") return true;
+  const merchant = (transaction.merchant ?? "").trim().toLowerCase();
+  if (merchant.startsWith("transfer to ") || merchant.startsWith("transfer from ")) {
+    return true;
+  }
+  if (merchant.startsWith("tr ") && merchant.includes(" to ")) return true;
+  return false;
 }
 
-export function isSpendingExpense(transaction: Transaction) {
+/**
+ * Display-only outing total on Transactions — never counts as spend twice
+ * in net-worth / analytics (real money is on individual ledger rows or
+ * unlinked outing cash). Matches full rollup detection (tag + legacy).
+ */
+export function isOutingRollupLike(transaction: Transaction) {
+  return isOutingRollupTransaction(transaction);
+}
+
+/**
+ * Cash-leaving expense for Top Categories, Cash Flow, Period Outflow, etc.
+ * Includes Investment category spends (normal money out). Excludes only
+ * transfers and outing-rollup display rows (not real double cash).
+ *
+ * Net worth still does NOT re-add investment as an asset — money already
+ * left cash/bank when the expense was booked.
+ */
+export function isSpendingExpense(transaction: Transaction, categories: Category[] = []) {
+  void categories; // kept for call-site compatibility
   return (
     transaction.type === "expense" &&
-    !isInvestmentTransaction(transaction) &&
-    !isTransferTransaction(transaction)
+    !isTransferTransaction(transaction) &&
+    !isOutingRollupLike(transaction)
   );
 }
 
-export function sumInvestments(transactions: Transaction[]) {
-  return transactions
-    .filter(isInvestmentTransaction)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+function money(transaction: Transaction) {
+  const value = Number(transaction.totalAmount ?? transaction.amount ?? 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
-export function sumSpendingExpenses(transactions: Transaction[]) {
+export function sumInvestments(transactions: Transaction[], categories: Category[] = []) {
   return transactions
-    .filter(isSpendingExpense)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .filter((transaction) => isInvestmentTransaction(transaction, categories))
+    .reduce((sum, transaction) => sum + money(transaction), 0);
 }
 
-export function deriveInvestmentName(
-  type: InvestmentDetailType,
-  details: InvestmentDetails,
+export function sumSpendingExpenses(
+  transactions: Transaction[],
+  categories: Category[] = [],
 ) {
-  const nameKeys: Record<InvestmentDetailType, string> = {
-    "mutual-fund": "fundName",
-    stocks: "stockName",
-    "gold-etf": "etfName",
-    "physical-gold": "weightGrams",
-    fd: "bankName",
-    "ppf-epf": "accountNumber",
-    crypto: "coinName",
-    other: "assetName",
-  };
-
-  const key = nameKeys[type];
-  const value = details[key];
-
-  if (typeof value === "string" && value.trim()) return value.trim();
-  if (typeof value === "number") {
-    if (type === "physical-gold") return `Gold · ${value}g`;
-    return String(value);
-  }
-
-  return getInvestmentTypeLabel(type);
-}
-
-export type InvestmentFormValues = {
-  amount: number;
-  date: string;
-  account: string;
-  note?: string;
-  investmentType: InvestmentDetailType;
-  details: InvestmentDetails;
-};
-
-export function buildInvestmentRecord(
-  values: InvestmentFormValues,
-  transactionId: string,
-): Omit<Investment, "id" | "userId" | "createdAt" | "updatedAt"> {
-  const name = deriveInvestmentName(values.investmentType, values.details);
-
-  return {
-    name,
-    type: values.investmentType,
-    investedAmount: values.amount,
-    currentValue: values.amount,
-    details: values.details,
-    transactionId,
-    account: values.account,
-    date: new Date(values.date).toISOString(),
-    note: values.note,
-  };
-}
-
-export function buildInvestmentTransaction(
-  values: InvestmentFormValues,
-  linkedInvestmentId: string,
-): Omit<Transaction, "id"> {
-  const merchant = deriveInvestmentName(values.investmentType, values.details);
-
-  return {
-    type: "expense",
-    amount: values.amount,
-    merchant,
-    category: INVESTMENT_CATEGORY,
-    account: values.account,
-    purpose: "Personal",
-    source: "manual",
-    date: new Date(values.date).toISOString(),
-    note: values.note,
-    isInvestment: true,
-    investmentType: values.investmentType,
-    investmentDetails: values.details,
-    linkedInvestmentId,
-  };
+  return transactions
+    .filter((transaction) => isSpendingExpense(transaction, categories))
+    .reduce((sum, transaction) => sum + money(transaction), 0);
 }

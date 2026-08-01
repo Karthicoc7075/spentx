@@ -3,7 +3,7 @@
 import { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppDataProvider } from "@/providers/app-data-provider";
-import { FirebaseProvider } from "@/providers/firebase-provider";
+import { SupabaseProvider } from "@/providers/supabase-provider";
 import { ViewerProvider } from "@/providers/viewer-provider";
 import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
@@ -13,7 +13,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <QueryProvider>
-        <FirebaseProvider>
+        <SupabaseProvider>
           <ViewerProvider>
             <AppDataProvider>
               <TooltipProvider>
@@ -21,7 +21,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
               </TooltipProvider>
             </AppDataProvider>
           </ViewerProvider>
-        </FirebaseProvider>
+        </SupabaseProvider>
       </QueryProvider>
     </ThemeProvider>
   );

@@ -68,7 +68,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="fixed right-4 top-4 z-50 flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-3">
+      {/* z-[100]: Dialog overlays/popups are z-50 and portal in after this
+          provider mounts, so a toast fired while a modal is open (Copy
+          Link, Revoke access, etc.) would otherwise render behind it and
+          look like nothing happened. */}
+      <div className="fixed right-4 top-4 z-[100] flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-3">
         {toasts.map((toast) => (
           <div
             key={toast.id}

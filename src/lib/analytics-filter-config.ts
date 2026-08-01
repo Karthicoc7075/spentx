@@ -1,6 +1,5 @@
 import type {
   AnalyticsCompareMode,
-  AnalyticsFilters,
   AnalyticsSortBy,
   OutingFilterType,
   OutingWithWhomFilter,
@@ -95,43 +94,3 @@ export const sortByOptions: Array<{ value: AnalyticsSortBy; label: string }> = [
   { value: "category-az", label: "Category A–Z" },
 ];
 
-export const presetSavedViews: Array<{
-  id: string;
-  name: string;
-  filters: Partial<AnalyticsFilters>;
-}> = [
-  {
-    id: "monthly-review",
-    name: "Monthly Review",
-    filters: { datePreset: "this-month", transactionType: "", categories: [] },
-  },
-  {
-    id: "food-analysis",
-    name: "Food Analysis",
-    filters: {
-      transactionType: "expense",
-      categoryGroup: "Food",
-      categories: ["Dining", "Groceries"],
-    },
-  },
-  {
-    id: "salary-analysis",
-    name: "Salary Analysis",
-    filters: {
-      transactionType: "income",
-      categories: ["Salary", "Freelance"],
-    },
-  },
-  {
-    id: "travel-expenses",
-    name: "Travel Expenses",
-    filters: { outingType: "trip", transactionType: "expense" },
-  },
-  {
-    id: "festival-spending",
-    name: "Festival Spending",
-    filters: { tags: ["Festival"], transactionType: "expense" },
-  },
-];
-
-export const SAVED_VIEWS_STORAGE_KEY = "spentx-analytics-saved-views";

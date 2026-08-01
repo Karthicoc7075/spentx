@@ -22,7 +22,7 @@ export function WealthNetWorthIndicator({
   const trendPositive = breakdown.monthlyChange >= 0;
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-6">
+    <div className="sx-surface p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="text-sm font-medium text-muted-foreground">Net Worth</p>
@@ -94,6 +94,21 @@ export function WealthNetWorthIndicator({
                 <p className="mt-2 text-xl font-bold tracking-tight tabular-nums">
                   {formatCurrency(item.total)}
                 </p>
+                {/* Bank + Cash per purpose — same maths as Combined. */}
+                <div className="mt-2 flex items-center gap-4 text-xs">
+                  <span className="text-muted-foreground">
+                    Bank{" "}
+                    <span className="font-semibold tabular-nums text-foreground">
+                      {formatCurrency(item.bankAccounts)}
+                    </span>
+                  </span>
+                  <span className="text-muted-foreground">
+                    Cash{" "}
+                    <span className="font-semibold tabular-nums text-foreground">
+                      {formatCurrency(item.cash)}
+                    </span>
+                  </span>
+                </div>
                 <div className="mt-1.5 flex items-center gap-1.5">
                   <span
                     className={cn(

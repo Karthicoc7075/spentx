@@ -26,7 +26,18 @@ import {
   Upload,
   DatabaseBackup,
   Users,
+  RotateCcw,
+  SlidersHorizontal,
+  Bell,
 } from "lucide-react";
+import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
@@ -50,10 +61,20 @@ import {
 import { ContributorsTab } from "@/components/settings/ContributorsTab";
 import { SharingTab } from "@/components/settings/SharingTab";
 import { SmsRulesAdminPanel } from "@/components/settings/SmsRulesAdminPanel";
+import { useTransactions } from "@/hooks/useTransactions";
+import { useDeletedOutings } from "@/hooks/useDeletedOutings";
+import { formatOutingDates } from "@/lib/outing-display";
+import {
+  isFamilyPurposeName,
+  isPersonalPurposeRef,
+} from "@/lib/purposes";
+import { buildOpeningBalanceTransaction, OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import { useViewerAccess } from "@/providers/viewer-provider";
 import { isAdminUser } from "@/lib/admin";
+import { runAccountBackup } from "@/lib/backup-actions";
 import { syncSettingsCache, mergeCategories } from "@/lib/settings-data";
 import { cacheKeys, readQueryCache } from "@/lib/query-cache";
+import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { queryKeys } from "@/lib/query-keys";
 import {
   defaultAppConfig,
@@ -61,6 +82,7 @@ import {
   defaultPurposes,
   defaultStarterAccounts,
   defaultUserSettings,
+  defaultNotificationPreferences,
 } from "@/lib/mock-data";
 import {
   fetchAccounts,
@@ -72,7 +94,6 @@ import {
   fetchUserSettings,
   saveAccount,
   saveAppConfig,
-  seedDefaultCategories,
   saveCustomCategory,
   savePurpose,
   saveUserProfile,
@@ -83,30 +104,34 @@ import {
   ensureUserProfile,
   gatherAllUserData,
   isValidBackupFile,
+  buildBackupZipBytes,
+  parseBackupZipBytes,
   restoreBackupData,
   sendPasswordReset,
-  uploadBackupToStorage,
+  requestMobileAppPinReset,
   type SpentXBackup,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { getTodayCalendarDate } from "@/lib/date-filters";
 import {
   formatCurrency,
-  setActiveCurrency,
   setGlobalPrivateMode,
 } from "@/lib/utils";
-import { useFirebase } from "@/providers/firebase-provider";
+import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useTheme } from "@/providers/theme-provider";
 import { useToast } from "@/providers/toast-provider";
 import { cn } from "@/lib/utils";
 import { getCategoryIcon } from "@/lib/transaction-ui";
+import { updateDefaultCategories } from "@/lib/data-rebuild";
 import type {
   Account,
   AppConfig,
   Category,
+  DefaultCategory,
   Purpose,
   ThemePreference,
   UserProfile,
   UserSettings,
+  NotificationPreferences,
 } from "@/types";
 
 const sidebarItems = [
@@ -150,10 +175,15 @@ const themeOptions: Array<{
 ];
 
 export function SettingsPage() {
-  const { user, isConfigured, isLoading: authLoading } = useFirebase();
+  const { user, isConfigured, isLoading: authLoading } = useSupabaseAuth();
   const { isReadOnlyViewer } = useViewerAccess();
   const { notify } = useToast();
   const queryClient = useQueryClient();
+  const {
+    transactions,
+    isLoading: transactionsLoading,
+    addTransaction,
+  } = useTransactions();
   const { resolvedTheme, setTheme, theme } = useTheme();
   const [activeSection, setActiveSection] = useState(sidebarItems[0].name);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -166,9 +196,13 @@ export function SettingsPage() {
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profilePhone, setProfilePhone] = useState("");
   const [dataLoading, setDataLoading] = useState(true);
+  const [notifModalOpen, setNotifModalOpen] = useState(false);
   const [isSendingReset, setIsSendingReset] = useState(false);
+  const [isResettingAppPin, setIsResettingAppPin] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const { deletedOutings, restore: restoreDeletedOuting } = useDeletedOutings();
+  const [restoringOutingId, setRestoringOutingId] = useState<string | null>(null);
   const [pendingRestoreBackup, setPendingRestoreBackup] = useState<SpentXBackup | null>(null);
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
   const [restoreConfirmText, setRestoreConfirmText] = useState("");
@@ -184,6 +218,16 @@ export function SettingsPage() {
     (item) => !item.adminOnly || isAdmin,
   );
 
+  // Allow deep-linking a settings section (e.g. /settings?section=Global+Settings
+  // from the /admin portal). Runs post-mount to avoid SSR hydration mismatch;
+  // admin-only sections stay gated by the isAdmin checks at render time.
+  useEffect(() => {
+    const section = new URLSearchParams(window.location.search).get("section");
+    if (section && sidebarItems.some((item) => item.name === section)) {
+      setActiveSection(section);
+    }
+  }, []);
+
   // Popup Modals state hooks
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [accountForm, setAccountForm] = useState({
@@ -195,7 +239,12 @@ export function SettingsPage() {
   });
 
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({ name: "", type: "expense" as Category["type"], color: "#10b981" });
+  const [categoryForm, setCategoryForm] = useState({
+    name: "",
+    type: "expense" as Category["type"],
+    color: "#10b981",
+    isInvestment: false,
+  });
 
   const [purposeModalOpen, setPurposeModalOpen] = useState(false);
   const [purposeForm, setPurposeForm] = useState({ name: "", color: "#10b981" });
@@ -228,10 +277,10 @@ export function SettingsPage() {
     const cachedPurposes = readQueryCache<Purpose[]>(user?.id, cacheKeys.purposes);
 
     if (cachedAccounts && cachedCategories && cachedPurposes) {
-      setAccounts(cachedAccounts.filter((account) => account.is_active !== false));
+      setAccounts(cachedAccounts.filter((account) => account.isActive !== false));
       setDefaultCategoryList(cachedCategories.filter((c) => c.isDefault));
       setCustomCategories(
-        cachedCategories.filter((c) => !c.isDefault && c.is_active !== false),
+        cachedCategories.filter((c) => !c.isDefault && c.isActive !== false),
       );
       setPurposes(cachedPurposes);
       setDataLoading(false);
@@ -281,13 +330,31 @@ export function SettingsPage() {
           await Promise.all(
             defaultPurposes.map((purp) => savePurpose(user.id, purp)),
           );
+        } else if (user?.id) {
+          // Mobile parity: ensure Family exists (toggleable). Personal always present.
+          const hasFamily = finalPurposes.some((p) =>
+            isFamilyPurposeName(p.name),
+          );
+          if (!hasFamily) {
+            const family: Purpose = {
+              id: crypto.randomUUID(),
+              name: "Family",
+              color: "#14B8A6",
+              isDefault: false,
+              canDelete: false,
+              isActive: true,
+              createdAt: new Date().toISOString(),
+            };
+            await savePurpose(user.id, family);
+            finalPurposes = [...finalPurposes, family];
+          }
         }
 
         const mergedCategories = mergeCategories(nextDefaults, nextCustom);
 
-        setAccounts(finalAccounts.filter((account) => account.is_active !== false));
+        setAccounts(finalAccounts.filter((account) => account.isActive !== false));
         setDefaultCategoryList(nextDefaults);
-        setCustomCategories(nextCustom.filter((category) => category.is_active !== false));
+        setCustomCategories(nextCustom.filter((category) => category.isActive !== false));
         setPurposes(finalPurposes);
         setSettings(nextSettings);
         setProfile(resolvedProfile);
@@ -318,6 +385,39 @@ export function SettingsPage() {
   useEffect(() => {
     setProfileName(user?.name ?? "");
   }, [user?.name]);
+
+  // One-time backfill: accounts created before opening balances were tracked
+  // as ledger transactions get their missing "Opening Balance" entry created
+  // here. Runs once per mount — the existence check against `transactions`
+  // (not just this ref) is what actually keeps it idempotent across reloads.
+  const backfillRanRef = useRef(false);
+  useEffect(() => {
+    if (!user?.id || dataLoading || transactionsLoading || backfillRanRef.current) {
+      return;
+    }
+    backfillRanRef.current = true;
+
+    const missingBackfill = accounts.filter(
+      (account) =>
+        account.openingBalance > 0 &&
+        !transactions.some(
+          (transaction) =>
+            (transaction.accountName ?? transaction.account) === account.name &&
+            transaction.category === OPENING_BALANCE_CATEGORY,
+        ),
+    );
+
+    if (missingBackfill.length === 0) return;
+
+    Promise.all(
+      missingBackfill.map((account) =>
+        addTransaction(buildOpeningBalanceTransaction(account)),
+      ),
+    ).catch((error) => {
+      console.error("Failed to backfill opening balance transactions", error);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, dataLoading, transactionsLoading]);
 
   useEffect(() => {
     setSettings((current) =>
@@ -363,7 +463,7 @@ export function SettingsPage() {
       openingBalance: accountForm.openingBalance,
       openingBalanceDate,
       createdAt: now,
-      is_active: true,
+      isActive: true,
     };
     const previousAccounts = accounts;
     const nextAccounts = [...accounts, account];
@@ -384,6 +484,17 @@ export function SettingsPage() {
         openingBalanceDate: getTodayCalendarDate(),
       });
       notify({ title: "Account added" });
+
+      if (account.openingBalance > 0) {
+        try {
+          await addTransaction(buildOpeningBalanceTransaction(account));
+        } catch (transactionError) {
+          console.error(
+            "Failed to record opening balance transaction",
+            transactionError,
+          );
+        }
+      }
     } catch (error) {
       setAccounts(previousAccounts);
       notify({
@@ -408,6 +519,7 @@ export function SettingsPage() {
       name: categoryForm.name.trim(),
       type: categoryForm.type,
       color: categoryForm.color,
+      isInvestment: categoryForm.isInvestment,
     };
     const nextCustom = [...customCategories, category];
     setCustomCategories(nextCustom);
@@ -436,7 +548,7 @@ export function SettingsPage() {
       id: crypto.randomUUID(),
       name: purposeForm.name.trim(),
       color: purposeForm.color,
-      is_active: true,
+      isActive: true,
       createdAt: new Date().toISOString(),
     };
     const nextPurposes = [...purposes, purpose];
@@ -465,6 +577,13 @@ export function SettingsPage() {
         notify({ title: "Delete blocked", description: "The default Personal purpose cannot be deleted." });
         return;
       }
+      if (isFamilyPurposeName(name)) {
+        notify({
+          title: "Delete blocked",
+          description: "Turn Family off with the switch instead of deleting it.",
+        });
+        return;
+      }
     } else if (type === "category") {
       if (defaultCategoryList.some((category) => category.id === id)) {
         notify({ title: "Delete blocked", description: "Default categories cannot be deleted." });
@@ -482,7 +601,9 @@ export function SettingsPage() {
 
     setDeleteConfirmOpen(false);
     setItemToDelete(null);
-    notify({ title: `${type.toUpperCase()} deleted successfully.` });
+    notify({
+      title: `${type.charAt(0).toUpperCase() + type.slice(1)} deleted successfully.`,
+    });
 
     if (type === "account") {
       const nextAccounts = accounts.filter((item) => item.id !== id);
@@ -490,6 +611,7 @@ export function SettingsPage() {
       try {
         await deleteAccount(user?.id, id);
         syncSettingsCache(queryClient, user?.id, { accounts: nextAccounts });
+        await invalidateFinancialData(queryClient, user?.id);
       } catch (err) {
         console.error("Failed to delete account", err);
       }
@@ -506,7 +628,7 @@ export function SettingsPage() {
       }
     } else if (type === "purpose") {
       const nextPurposes = purposes.map((item) =>
-        item.id === id ? { ...item, is_active: false } : item,
+        item.id === id ? { ...item, isActive: false } : item,
       );
       setPurposes(nextPurposes);
       try {
@@ -523,14 +645,23 @@ export function SettingsPage() {
     notify({ title: "Settings saved" });
   }
 
-  function downloadBackupJson(backup: SpentXBackup) {
-    const blob = new Blob([JSON.stringify(backup, null, 2)], {
-      type: "application/json",
-    });
+  function updateNotificationPref(key: keyof NotificationPreferences, value: boolean) {
+    const currentPrefs = settings.notificationPreferences ?? defaultNotificationPreferences;
+    const nextPrefs = { ...currentPrefs, [key]: value };
+    const nextSettings = { ...settings, notificationPreferences: nextPrefs };
+    setSettings(nextSettings);
+    void persistSettings(nextSettings);
+  }
+
+  // FIRESTORE_REBUILD_SPEC Step 9 — local download is now the same ZIP that is
+  // uploaded to Storage (one JSON per collection + manifest.json + version.json).
+  function downloadBackupZip(backup: SpentXBackup) {
+    const bytes = buildBackupZipBytes(backup);
+    const blob = new Blob([new Uint8Array(bytes)], { type: "application/zip" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `spentx-backup-${backup.exportDate.slice(0, 10)}.json`;
+    link.download = `spentx-backup-${backup.exportDate.slice(0, 10)}.zip`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -541,15 +672,8 @@ export function SettingsPage() {
     if (!user?.id) return;
     setIsBackingUp(true);
     try {
-      const backup = await gatherAllUserData(user.id);
-      downloadBackupJson(backup);
-      try {
-        await uploadBackupToStorage(user.id, backup);
-      } catch {
-        // Cloud upload is best-effort — the local download already succeeded.
-      }
-      window.localStorage.setItem("spentx-last-auto-backup", backup.exportDate);
-      setLastBackupAt(backup.exportDate);
+      const exportDate = await runAccountBackup(user.id);
+      setLastBackupAt(exportDate);
       notify({ title: "Backup created", description: "Saved to your device." });
     } catch {
       notify({ title: "Backup failed", description: "Try again in a moment.", variant: "destructive" });
@@ -558,12 +682,27 @@ export function SettingsPage() {
     }
   }
 
+  async function handleRestoreOuting(outingId: string, outingName: string) {
+    setRestoringOutingId(outingId);
+    try {
+      await restoreDeletedOuting(outingId);
+      notify({
+        title: "Outing restored",
+        description: `${outingName} and its linked transactions are back.`,
+      });
+    } catch {
+      notify({ title: "Couldn't restore outing", variant: "destructive" });
+    } finally {
+      setRestoringOutingId(null);
+    }
+  }
+
   async function handleDownloadLatest() {
     if (!user?.id) return;
     setIsBackingUp(true);
     try {
       const backup = await gatherAllUserData(user.id);
-      downloadBackupJson(backup);
+      downloadBackupZip(backup);
     } catch {
       notify({ title: "Couldn't prepare backup", variant: "destructive" });
     } finally {
@@ -576,28 +715,38 @@ export function SettingsPage() {
     event.target.value = "";
     if (!file) return;
 
+    const invalid = () =>
+      notify({
+        title: "This file is not a valid SpentX backup",
+        variant: "destructive",
+      });
+
+    // FIRESTORE_REBUILD_SPEC Step 9 — accept the new ZIP format (validate
+    // manifest.json + schemaVersion), falling back to legacy JSON files.
+    const isZip = file.name.toLowerCase().endsWith(".zip");
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result));
-        if (!isValidBackupFile(parsed)) {
-          notify({
-            title: "This file is not a valid SpentX backup",
-            variant: "destructive",
-          });
+        let parsed: SpentXBackup | null = null;
+        if (isZip) {
+          parsed = parseBackupZipBytes(new Uint8Array(reader.result as ArrayBuffer));
+        } else {
+          const json = JSON.parse(String(reader.result));
+          parsed = isValidBackupFile(json) ? json : null;
+        }
+        if (!parsed) {
+          invalid();
           return;
         }
         setPendingRestoreBackup(parsed);
         setRestoreConfirmText("");
         setRestoreConfirmOpen(true);
       } catch {
-        notify({
-          title: "This file is not a valid SpentX backup",
-          variant: "destructive",
-        });
+        invalid();
       }
     };
-    reader.readAsText(file);
+    if (isZip) reader.readAsArrayBuffer(file);
+    else reader.readAsText(file);
   }
 
   async function handleConfirmRestore() {
@@ -605,7 +754,7 @@ export function SettingsPage() {
     setIsRestoring(true);
     try {
       const safetyBackup = await gatherAllUserData(user.id);
-      downloadBackupJson(safetyBackup);
+      downloadBackupZip(safetyBackup);
       await restoreBackupData(user.id, pendingRestoreBackup);
       notify({
         title: "Data restored",
@@ -648,6 +797,27 @@ export function SettingsPage() {
     }
   }
 
+  async function handleResetMobileAppPin() {
+    if (!user?.id || isReadOnlyViewer) return;
+    setIsResettingAppPin(true);
+    try {
+      await requestMobileAppPinReset(user.id);
+      notify({
+        title: "Mobile PIN reset requested",
+        description:
+          "Open the SpentX app online (same account). The old PIN is cleared and you’ll set a new 4-digit PIN. The PIN itself is never stored on the server.",
+      });
+    } catch {
+      notify({
+        title: "Couldn't reset mobile PIN",
+        description: "Try again in a moment.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsResettingAppPin(false);
+    }
+  }
+
   async function handleSaveProfile() {
     if (!user?.id) {
       notify({ title: "Profile saved" });
@@ -664,9 +834,16 @@ export function SettingsPage() {
       role: profile?.role ?? "user",
     };
 
-    await saveUserProfile(user.id, nextProfile);
+    // FIRESTORE_REBUILD_SPEC Step 8.1 — optimistic save. Update local state and
+    // the cached user object immediately so the UI never blocks on the network
+    // (or any downstream auth-provider re-sync); fire the Supabase write in the
+    // background and toast when it resolves.
     setProfile(nextProfile);
-    notify({ title: "Profile saved" });
+    void saveUserProfile(user.id, nextProfile)
+      .then(() => notify({ title: "Profile saved" }))
+      .catch(() =>
+        notify({ title: "Profile save failed", description: "Please try again." }),
+      );
   }
 
   async function handleSaveAppConfig() {
@@ -711,7 +888,7 @@ export function SettingsPage() {
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         
         {/* Navigation Sidebar */}
-        <aside className="h-fit rounded-3xl border border-border bg-white p-2.5 dark:border-border dark:bg-card shadow-sm space-y-1">
+        <aside className="sx-surface h-fit space-y-1 p-2.5">
           {visibleSidebarItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeSection === item.name;
@@ -739,7 +916,7 @@ export function SettingsPage() {
           
           {/* PROFILE SECTION */}
           {activeSection === "Profile" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Profile Settings</CardTitle>
                 <CardDescription className="text-xs">Adjust your personal identity configurations.</CardDescription>
@@ -803,13 +980,45 @@ export function SettingsPage() {
                   <Save className="size-4 mr-2" />
                   Save profile
                 </Button>
+
+                <Separator className="my-2" />
+
+                {/* 1-Year Session Token Card */}
+                <div className="rounded-2xl border border-border/80 bg-muted/20 p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Shield className="size-4 text-emerald-500" />
+                      <h3 className="text-sm font-bold text-foreground">Session Token & 1-Year Validity</h3>
+                    </div>
+                    <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[10px] uppercase border border-emerald-500/20">
+                      1-Year Persistent Session
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Your login session is securely stored in local storage and HTTP cookies with a <strong>1-year (365 days) expiration window</strong>. You remain signed in across restarts until explicit logout.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2 text-xs font-mono">
+                    <div className="rounded-xl border border-border/60 bg-background p-3">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground block mb-1">
+                        Token Persistence Horizon
+                      </span>
+                      <span className="font-bold text-foreground">365 Days (Auto-Refreshed)</span>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-background p-3">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground block mb-1">
+                        Local Storage Mechanism
+                      </span>
+                      <span className="font-bold text-foreground">Browser LocalStorage + Max-Age Cookie</span>
+                    </div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
           {/* ACCOUNT CONFIGURATION */}
           {activeSection === "Accounts" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                   <CardTitle className="text-sm font-semibold">Accounts Registry</CardTitle>
@@ -932,50 +1141,23 @@ export function SettingsPage() {
                               />
                             </TableCell>
                             <TableCell className="px-4 py-3">
+                              {/* Opening balance is only ever asked once, at account
+                                  creation — it's now also recorded as a normal ledger
+                                  transaction, so it's locked here to avoid re-editing it
+                                  out of sync with that transaction. */}
                               <Input
-                                className="h-9 w-28 text-xs font-semibold"
+                                className="h-9 w-28 text-xs font-semibold bg-muted/50 text-muted-foreground"
                                 inputMode="decimal"
                                 value={account.openingBalance}
-                                onChange={(event) =>
-                                  setAccounts((current) =>
-                                    current.map((item) =>
-                                      item.id === account.id
-                                        ? {
-                                            ...item,
-                                            openingBalance: Number(event.target.value) || 0,
-                                          }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                                onBlur={async () => {
-                                  await saveAccount(user?.id, account);
-                                  syncSettingsCache(queryClient, user?.id, { accounts });
-                                }}
+                                disabled
                               />
                             </TableCell>
                             <TableCell className="px-4 py-3">
                               <Input
-                                className="h-9 w-36 text-xs"
+                                className="h-9 w-36 text-xs bg-muted/50 text-muted-foreground"
                                 type="date"
                                 value={account.openingBalanceDate ?? ""}
-                                onChange={(event) =>
-                                  setAccounts((current) =>
-                                    current.map((item) =>
-                                      item.id === account.id
-                                        ? {
-                                            ...item,
-                                            openingBalanceDate:
-                                              event.target.value || undefined,
-                                          }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                                onBlur={async () => {
-                                  await saveAccount(user?.id, account);
-                                  syncSettingsCache(queryClient, user?.id, { accounts });
-                                }}
+                                disabled
                               />
                             </TableCell>
                             <TableCell className="px-4 py-3">
@@ -1002,91 +1184,177 @@ export function SettingsPage() {
           ) : null}
 
           {activeSection === "Purposes" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Purposes</CardTitle>
                 <CardDescription className="text-xs">
-                  Separate ledgers for Personal, Home/Family, and custom contexts. Archived purposes stay visible in old history.
+                  Same as mobile: Personal always on, Family can be turned on/off, plus custom purposes.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 p-6">
                 <div className="flex items-center justify-between border-b border-border/60 pb-2 dark:border-border">
                   <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                    Active Purposes
+                    Purpose types
                   </h2>
                   <Button
-                    disabled={purposes.filter((p) => p.is_active !== false).length >= (appConfig.maxPurposesLimit ?? 5)}
+                    disabled={
+                      purposes.filter((p) => p.isActive !== false).length >=
+                      (appConfig.maxPurposesLimit ?? 5)
+                    }
                     onClick={() => {
                       setPurposeForm({ name: "", color: "#10b981" });
                       setPurposeModalOpen(true);
                     }}
                     className="h-8 cursor-pointer text-xs font-bold"
                   >
-                    <Plus className="mr-1 size-3.5" /> Add
+                    <Plus className="mr-1 size-3.5" /> Add custom
                   </Button>
                 </div>
                 <div className="grid gap-2">
                   {purposes.map((purpose) => {
-                    const isDefaultPurpose = purpose.id === "personal";
-                    const isArchived = purpose.is_active === false;
+                    const isPersonal =
+                      purpose.isDefault === true ||
+                      isPersonalPurposeRef(purpose.id, purposes) ||
+                      purpose.name.trim().toLowerCase() === "personal";
+                    const isFamily = isFamilyPurposeName(purpose.name);
+                    const isCore = isPersonal || isFamily;
+                    const isOn = purpose.isActive !== false;
+
                     return (
                       <div
                         key={purpose.id}
                         className={cn(
-                          "grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 rounded-xl border px-3 py-2",
-                          isArchived && "opacity-50",
+                          "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl border px-3 py-2.5",
+                          !isOn && "opacity-60",
                         )}
                       >
                         <input
                           className="size-8 cursor-pointer rounded-lg border-0 bg-transparent"
                           type="color"
                           value={purpose.color ?? "#64748b"}
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            const color = event.target.value;
                             setPurposes((current) =>
                               current.map((item) =>
                                 item.id === purpose.id
-                                  ? { ...item, color: event.target.value }
+                                  ? { ...item, color }
                                   : item,
                               ),
-                            )
-                          }
+                            );
+                          }}
                           onBlur={async () => {
-                            await savePurpose(user?.id, purpose);
+                            const latest = purposes.find((p) => p.id === purpose.id) ?? purpose;
+                            await savePurpose(user?.id, latest);
                             syncSettingsCache(queryClient, user?.id, { purposes });
                           }}
                         />
-                        <Input
-                          className="h-9 text-xs"
-                          value={purpose.name}
-                          disabled={isDefaultPurpose}
-                          onChange={(event) =>
-                            setPurposes((current) =>
-                              current.map((item) =>
-                                item.id === purpose.id
-                                  ? { ...item, name: event.target.value }
-                                  : item,
-                              ),
-                            )
-                          }
-                          onBlur={async () => {
-                            if (purpose.name.trim()) {
-                              await savePurpose(user?.id, purpose);
-                              syncSettingsCache(queryClient, user?.id, { purposes });
-                            }
-                          }}
-                        />
-                        <Badge variant={isArchived ? "secondary" : "default"}>
-                          {isArchived ? "Archived" : "Active"}
-                        </Badge>
-                        <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          className="cursor-pointer text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500 disabled:pointer-events-none disabled:opacity-20"
-                          disabled={isDefaultPurpose || isArchived}
-                          onClick={() => triggerDeletePrompt(purpose.id, purpose.name, "purpose")}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
+                        <div className="min-w-0">
+                          {isCore ? (
+                            <p className="text-sm font-semibold">{purpose.name}</p>
+                          ) : (
+                            <Input
+                              className="h-9 text-xs"
+                              value={purpose.name}
+                              onChange={(event) =>
+                                setPurposes((current) =>
+                                  current.map((item) =>
+                                    item.id === purpose.id
+                                      ? { ...item, name: event.target.value }
+                                      : item,
+                                  ),
+                                )
+                              }
+                              onBlur={async () => {
+                                if (purpose.name.trim()) {
+                                  await savePurpose(user?.id, purpose);
+                                  syncSettingsCache(queryClient, user?.id, {
+                                    purposes,
+                                  });
+                                }
+                              }}
+                            />
+                          )}
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {isPersonal
+                              ? "Always on · default"
+                              : isFamily
+                                ? "Default · turn on/off"
+                                : isOn
+                                  ? "Custom · active"
+                                  : "Custom · off"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isFamily ? (
+                            <Switch
+                              checked={isOn}
+                              onCheckedChange={async (checked) => {
+                                const next = {
+                                  ...purpose,
+                                  isActive: checked,
+                                  canDelete: false,
+                                  deletedAt: checked
+                                    ? undefined
+                                    : new Date().toISOString(),
+                                  deletedBy: checked ? undefined : user?.id,
+                                };
+                                const nextPurposes = purposes.map((item) =>
+                                  item.id === purpose.id ? next : item,
+                                );
+                                setPurposes(nextPurposes);
+                                await savePurpose(user?.id, next);
+                                syncSettingsCache(queryClient, user?.id, {
+                                  purposes: nextPurposes,
+                                });
+                                notify({
+                                  title: checked
+                                    ? "Family purpose on"
+                                    : "Family purpose off",
+                                });
+                              }}
+                            />
+                          ) : isPersonal ? (
+                            <Badge variant="secondary">On</Badge>
+                          ) : (
+                            <>
+                              <Switch
+                                checked={isOn}
+                                onCheckedChange={async (checked) => {
+                                  const next = {
+                                    ...purpose,
+                                    isActive: checked,
+                                    deletedAt: checked
+                                      ? undefined
+                                      : new Date().toISOString(),
+                                    deletedBy: checked ? undefined : user?.id,
+                                  };
+                                  const nextPurposes = purposes.map((item) =>
+                                    item.id === purpose.id ? next : item,
+                                  );
+                                  setPurposes(nextPurposes);
+                                  await savePurpose(user?.id, next);
+                                  syncSettingsCache(queryClient, user?.id, {
+                                    purposes: nextPurposes,
+                                  });
+                                }}
+                              />
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="cursor-pointer text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500"
+                                onClick={() =>
+                                  triggerDeletePrompt(
+                                    purpose.id,
+                                    purpose.name,
+                                    "purpose",
+                                  )
+                                }
+                              >
+                                <Trash2 className="size-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -1103,35 +1371,60 @@ export function SettingsPage() {
 
           {/* SECURITY */}
           {activeSection === "Security" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Security</CardTitle>
                 <CardDescription className="text-xs">
-                  Manage how you sign in to SpentX.
+                  Web password and mobile app lock (PIN is never stored on the server).
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-6 p-6">
-                <div className="grid gap-1.5">
-                  <p className="text-xs font-bold text-foreground">Password</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    We&apos;ll email a reset link to {user?.email ?? "your account email"}.
-                  </p>
+              <CardContent className="grid gap-8 p-6">
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <p className="text-xs font-bold text-foreground">Web password</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      We&apos;ll email a reset link to {user?.email ?? "your account email"}.
+                    </p>
+                  </div>
+                  <Button
+                    className="w-fit h-10 font-bold bg-foreground text-white hover:bg-muted dark:bg-white dark:text-background dark:hover:bg-muted cursor-pointer"
+                    disabled={!user?.email || isSendingReset}
+                    onClick={handleSendPasswordReset}
+                  >
+                    <RefreshCw className="size-4 mr-2" />
+                    {isSendingReset ? "Sending…" : "Send password reset email"}
+                  </Button>
                 </div>
-                <Button
-                  className="w-fit h-10 font-bold bg-foreground text-white hover:bg-muted dark:bg-white dark:text-background dark:hover:bg-muted cursor-pointer"
-                  disabled={!user?.email || isSendingReset}
-                  onClick={handleSendPasswordReset}
-                >
-                  <RefreshCw className="size-4 mr-2" />
-                  {isSendingReset ? "Sending…" : "Send password reset email"}
-                </Button>
+
+                <Separator />
+
+                <div className="grid gap-3">
+                  <div className="grid gap-1.5">
+                    <p className="text-xs font-bold text-foreground">Mobile app PIN</p>
+                    <p className="text-[10px] text-muted-foreground leading-relaxed">
+                      The 4-digit PIN and fingerprint only unlock the app on your phone.
+                      The PIN is hashed on the device — it is never saved in the database.
+                      If you forgot it, reset here while signed in on the web, then open the
+                      app online to set a new PIN.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="w-fit h-10 font-bold cursor-pointer"
+                    disabled={!user?.id || isReadOnlyViewer || isResettingAppPin}
+                    onClick={() => void handleResetMobileAppPin()}
+                  >
+                    <Smartphone className="size-4 mr-2" />
+                    {isResettingAppPin ? "Requesting…" : "Reset mobile app PIN"}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
           {/* DATA & BACKUPS */}
           {activeSection === "Data & Backups" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Data &amp; Backups</CardTitle>
                 <CardDescription className="text-xs">
@@ -1183,7 +1476,7 @@ export function SettingsPage() {
                   </Button>
                   <input
                     ref={restoreFileInputRef}
-                    accept="application/json"
+                    accept="application/zip,.zip,application/json"
                     className="hidden"
                     type="file"
                     onChange={handleRestoreFileSelected}
@@ -1196,13 +1489,65 @@ export function SettingsPage() {
                   writes those records back — your current data is backed up first. This action
                   cannot be undone.
                 </p>
+
+                <Separator />
+
+                <div className="grid gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-foreground">Deleted outings</p>
+                    <p className="text-xs text-muted-foreground">
+                      Deleting an outing removes it and its linked transactions right away —
+                      restore it here anytime.
+                    </p>
+                  </div>
+                  {deletedOutings.length === 0 ? (
+                    <p className="rounded-2xl bg-muted/50 p-4 text-xs text-muted-foreground">
+                      No deleted outings.
+                    </p>
+                  ) : (
+                    <ul className="grid gap-2">
+                      {deletedOutings.map((outing) => (
+                        <li
+                          key={outing.id}
+                          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/60 p-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-foreground">
+                              {outing.name}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatOutingDates(outing)}
+                              {outing.deletedAt
+                                ? ` · Deleted ${new Date(outing.deletedAt).toLocaleDateString("en-IN", {
+                                    day: "numeric",
+                                    month: "short",
+                                    year: "numeric",
+                                  })}`
+                                : ""}
+                            </p>
+                          </div>
+                          <Button
+                            className="h-9 font-bold"
+                            disabled={restoringOutingId === outing.id}
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleRestoreOuting(outing.id, outing.name)}
+                          >
+                            <RotateCcw className="size-4 mr-1.5" />
+                            {restoringOutingId === outing.id ? "Restoring…" : "Restore"}
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
           {/* CATEGORIES */}
           {activeSection === "Categories" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Categories</CardTitle>
                 <CardDescription className="text-xs">
@@ -1268,7 +1613,12 @@ export function SettingsPage() {
                           });
                           return;
                         }
-                        setCategoryForm({ name: "", type: "expense", color: "#10b981" });
+                        setCategoryForm({
+                          name: "",
+                          type: "expense",
+                          color: "#10b981",
+                          isInvestment: false,
+                        });
                         setCategoryModalOpen(true);
                       }}
                       className="h-8 text-xs font-bold cursor-pointer"
@@ -1287,7 +1637,7 @@ export function SettingsPage() {
                         return (
                           <div
                             key={category.id}
-                            className="grid grid-cols-[1fr_auto_auto] gap-1.5 items-center"
+                            className="grid grid-cols-[1fr_auto_auto_auto] gap-1.5 items-center"
                           >
                             <div className="relative">
                               <span
@@ -1328,6 +1678,38 @@ export function SettingsPage() {
                             >
                               {category.type}
                             </Badge>
+                            {category.type === "expense" ? (
+                              <label
+                                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+                                title="Mark as Investment (counts toward Wealth's Total Investment)"
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="size-4 cursor-pointer accent-primary"
+                                  checked={category.isInvestment ?? false}
+                                  onChange={async (event) => {
+                                    const checked = event.target.checked;
+                                    const updated = {
+                                      ...category,
+                                      isInvestment: checked,
+                                    };
+                                    const nextCustom = customCategories.map((item) =>
+                                      item.id === category.id ? updated : item,
+                                    );
+                                    setCustomCategories(nextCustom);
+                                    await saveCustomCategory(user?.id, updated);
+                                    syncSettingsCache(queryClient, user?.id, {
+                                      categories: mergeCategories(
+                                        defaultCategoryList,
+                                        nextCustom,
+                                      ),
+                                    });
+                                  }}
+                                />
+                              </label>
+                            ) : (
+                              <span className="h-9 w-9" />
+                            )}
                             <Button
                               size="icon-sm"
                               variant="ghost"
@@ -1352,7 +1734,7 @@ export function SettingsPage() {
 
           {/* PREFERENCES */}
           {activeSection === "Preferences" ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Preferences Settings</CardTitle>
                 <CardDescription className="text-xs">Adjust configurations for appearance and automation features.</CardDescription>
@@ -1408,31 +1790,24 @@ export function SettingsPage() {
                 <Separator className="border-border/60" />
                 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Currency">
-                    <select
-                      className="h-10 w-full rounded-lg border border-border bg-white px-3 text-xs text-foreground outline-none dark:border-border dark:bg-background dark:text-foreground"
-                      value={settings.currency}
-                      onChange={(event) => {
-                        const nextSettings = { ...settings, currency: event.target.value };
-                        setSettings(nextSettings);
-                        setActiveCurrency(event.target.value);
-                        persistSettings(nextSettings);
-                      }}
-                    >
-                      <option value="INR">INR (₹)</option>
-                      <option value="USD">USD ($)</option>
-                      <option value="EUR">EUR (€)</option>
-                      <option value="GBP">GBP (£)</option>
-                    </select>
-                  </Field>
                   <Field label="Default payment account">
                     <select
                       className="h-10 w-full rounded-lg border border-border bg-white px-3 text-xs text-foreground outline-none dark:border-border dark:bg-background dark:text-foreground"
-                      value={settings.defaultAccount}
-                      onChange={(event) => {
-                        const nextSettings = { ...settings, defaultAccount: event.target.value };
-                        setSettings(nextSettings);
-                        persistSettings(nextSettings);
+                      value={accounts.find((account) => account.isDefault)?.name ?? ""}
+                      onChange={async (event) => {
+                        const selectedName = event.target.value;
+                        const nextAccounts = accounts.map((account) => ({
+                          ...account,
+                          isDefault: account.name === selectedName,
+                        }));
+                        setAccounts(nextAccounts);
+                        const selectedAccount = nextAccounts.find(
+                          (account) => account.name === selectedName,
+                        );
+                        if (selectedAccount) {
+                          await saveAccount(user?.id, selectedAccount);
+                          syncSettingsCache(queryClient, user?.id, { accounts: nextAccounts });
+                        }
                       }}
                     >
                       <option value="">Select account</option>
@@ -1448,32 +1823,150 @@ export function SettingsPage() {
                 <Separator className="border-border/60" />
 
                 <PreferenceRow
-                  icon={Moon}
-                  checked={resolvedTheme === "dark"}
-                  description="Enable dynamic low-light optimized display mode."
-                  title="Dark Mode Aspect Override"
-                  onCheckedChange={(checked) => {
-                    const nextTheme: ThemePreference = checked ? "dark" : "light";
-                    setTheme(nextTheme);
-                    const nextSettings = { ...settings, theme: nextTheme };
-                    setSettings(nextSettings);
-                    persistSettings(nextSettings);
-                  }}
-                />
-
-                <Separator className="border-border/60" />
-
-                <PreferenceRow
                   icon={RefreshCw}
                   checked={settings.notifications}
-                  description="Receive spending alerts and budget reminders."
-                  title="Notifications"
+                  description="Receive spending alerts, periodic summaries, and activity reminders."
+                  title="Notifications (Master Switch)"
                   onCheckedChange={(checked) => {
                     const nextSettings = { ...settings, notifications: checked };
                     setSettings(nextSettings);
-                    persistSettings(nextSettings);
+                    void persistSettings(nextSettings);
                   }}
                 />
+
+                {settings.notifications ? (
+                  <div className="mt-3 flex items-center justify-between rounded-xl border border-border/80 bg-muted/30 p-3 sm:p-4">
+                    <div className="flex items-center gap-3">
+                      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <SlidersHorizontal className="size-4.5" />
+                      </span>
+                      <div>
+                        <p className="text-xs font-bold text-foreground flex items-center gap-2">
+                          Notification Preferences & Rules
+                          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                            Active Rules
+                          </span>
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          Customize summaries, salary alerts, budget thresholds & reminders
+                        </p>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setNotifModalOpen(true)}
+                      className="gap-2 text-xs font-medium cursor-pointer shrink-0"
+                    >
+                      <SlidersHorizontal className="size-3.5" />
+                      Configure Rules
+                    </Button>
+                  </div>
+                ) : null}
+
+                <Dialog open={notifModalOpen} onOpenChange={setNotifModalOpen}>
+                  <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto p-6">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2 text-lg font-bold">
+                        <Bell className="size-5 text-primary" />
+                        Notification Preferences & Rules
+                      </DialogTitle>
+                      <DialogDescription className="text-xs text-muted-foreground">
+                        Customize which periodic summaries, smart budget warnings, and activity reminders you receive.
+                      </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="mt-4 grid gap-6">
+                      {/* 📊 Periodic Summaries */}
+                      <div className="grid gap-3">
+                        <p className="text-xs font-bold text-primary uppercase tracking-wider">📊 Periodic Summaries</p>
+                        <PreferenceRow
+                          icon={Sparkles}
+                          checked={settings.notificationPreferences?.dailySummary !== false}
+                          title="Daily Spending Summary"
+                          description="Daily overview of expenses, top category, or no-spend milestone."
+                          onCheckedChange={(checked) => updateNotificationPref("dailySummary", checked)}
+                        />
+                        <PreferenceRow
+                          icon={Sparkles}
+                          checked={settings.notificationPreferences?.weeklySummary !== false}
+                          title="Weekly Spending Summary"
+                          description="Sunday evening overview of weekly income, expenses & top category."
+                          onCheckedChange={(checked) => updateNotificationPref("weeklySummary", checked)}
+                        />
+                        <PreferenceRow
+                          icon={Sparkles}
+                          checked={settings.notificationPreferences?.monthlySummary !== false}
+                          title="Monthly Spending Summary"
+                          description="End-of-month financial summary including income, savings & top spending."
+                          onCheckedChange={(checked) => updateNotificationPref("monthlySummary", checked)}
+                        />
+                      </div>
+
+                      <Separator className="border-border/60" />
+
+                      {/* 🚨 Smart Budget & Expense Alerts */}
+                      <div className="grid gap-3">
+                        <p className="text-xs font-bold text-primary uppercase tracking-wider">🚨 Smart Budget & Expense Alerts</p>
+                        <PreferenceRow
+                          icon={PiggyBank}
+                          checked={settings.notificationPreferences?.salaryAlerts !== false}
+                          title="Salary & Income Credited"
+                          description="Notify when salary or monthly income is received."
+                          onCheckedChange={(checked) => updateNotificationPref("salaryAlerts", checked)}
+                        />
+                        <PreferenceRow
+                          icon={AlertTriangle}
+                          checked={settings.notificationPreferences?.budgetAlerts !== false}
+                          title="Budget Limit Thresholds (80% / 100%)"
+                          description="Alert when category spending crosses 80% or 100% of planned budget."
+                          onCheckedChange={(checked) => updateNotificationPref("budgetAlerts", checked)}
+                        />
+                        <PreferenceRow
+                          icon={Shield}
+                          checked={settings.notificationPreferences?.dailyLimitAlerts !== false}
+                          title="Daily Safe Spending Limit Exceeded"
+                          description="Alert when today's safe spending limit is breached."
+                          onCheckedChange={(checked) => updateNotificationPref("dailyLimitAlerts", checked)}
+                        />
+                        <PreferenceRow
+                          icon={Sparkles}
+                          checked={settings.notificationPreferences?.burnRateAlerts !== false}
+                          title="High Burn Rate Warnings"
+                          description="Warn when spending velocity projects an early monthly overspend."
+                          onCheckedChange={(checked) => updateNotificationPref("burnRateAlerts", checked)}
+                        />
+                      </div>
+
+                      <Separator className="border-border/60" />
+
+                      {/* 🔔 Activity Reminders */}
+                      <div className="grid gap-3">
+                        <p className="text-xs font-bold text-primary uppercase tracking-wider">🔔 Activity Reminders</p>
+                        <PreferenceRow
+                          icon={Users}
+                          checked={settings.notificationPreferences?.settlementReminders !== false}
+                          title="Friend Settlement Reminders"
+                          description="Remind when friend splits or shared expenses remain unsettled."
+                          onCheckedChange={(checked) => updateNotificationPref("settlementReminders", checked)}
+                        />
+                        <PreferenceRow
+                          icon={Wallet}
+                          checked={settings.notificationPreferences?.snapshotReminders !== false}
+                          title="Daily Snapshot Reminders"
+                          description="Remind to record daily account balance snapshot for net worth tracking."
+                          onCheckedChange={(checked) => updateNotificationPref("snapshotReminders", checked)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-6 flex justify-end">
+                      <Button onClick={() => setNotifModalOpen(false)} size="sm" className="cursor-pointer">
+                        Done
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
 
                 <Separator className="border-border/60" />
 
@@ -1504,19 +1997,6 @@ export function SettingsPage() {
                   }}
                 />
 
-                <Separator className="border-border/60" />
-                
-                <PreferenceRow
-                  icon={RefreshCw}
-                  checked={settings.autoSync}
-                  description="Listen for incoming mobile sync notifications in real time."
-                  title="Auto Sync Mobile Detection"
-                  onCheckedChange={(checked) => {
-                    const nextSettings = { ...settings, autoSync: checked };
-                    setSettings(nextSettings);
-                    persistSettings(nextSettings);
-                  }}
-                />
               </CardContent>
             </Card>
           ) : null}
@@ -1530,7 +2010,7 @@ export function SettingsPage() {
           ) : null}
 
           {activeSection === "Global Settings" && isAdmin ? (
-            <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+            <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Global App Settings</CardTitle>
                 <CardDescription className="text-xs">
@@ -1646,12 +2126,34 @@ export function SettingsPage() {
                     variant="outline"
                     className="h-10 font-bold cursor-pointer"
                     onClick={async () => {
-                      const seeded = await seedDefaultCategories();
+                      // FIRESTORE_REBUILD_SPEC §2.19 / Step 8.7 — the shared
+                      // default category list lives on globalSettings.app and is
+                      // written admin-only via updateDefaultCategories. This
+                      // seeds it once from the bundled list; edits propagate to
+                      // every signed-in user live (useCategories subscribes).
+                      if (!user?.id) return;
+                      const seedList: DefaultCategory[] = defaultCategories.map(
+                        (c, index) => ({
+                          id: c.id,
+                          name: c.name,
+                          type: c.type,
+                          color: c.color,
+                          icon: c.icon ?? "",
+                          order: index,
+                          isInvestment: c.isInvestment ?? false,
+                        }),
+                      );
+                      await updateDefaultCategories(user.id, seedList);
+                      const seeded = defaultCategories.map((c) => ({
+                        ...c,
+                        isDefault: true,
+                        source: "global" as const,
+                      }));
                       setDefaultCategoryList(seeded);
                       syncSettingsCache(queryClient, user?.id, {
                         categories: mergeCategories(seeded, customCategories),
                       });
-                      notify({ title: "Default categories seeded to Firestore" });
+                      notify({ title: "Default categories saved to Global Settings" });
                     }}
                   >
                     <Layers className="size-4 mr-2" />
@@ -1667,7 +2169,7 @@ export function SettingsPage() {
       {/* POPUP MODAL 1: ADD ACCOUNT */}
       {accountModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 scale-in duration-200">
+          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Wallet className="size-4 text-emerald-500" /> Add New Bank Account
@@ -1763,7 +2265,7 @@ export function SettingsPage() {
       {/* POPUP MODAL 2: ADD CATEGORY */}
       {categoryModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 scale-in duration-200">
+          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Layers className="size-4 text-emerald-500" /> Add New Category
@@ -1818,6 +2320,23 @@ export function SettingsPage() {
                   />
                 </div>
               </div>
+
+              {categoryForm.type === "expense" ? (
+                <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    className="size-4 cursor-pointer accent-primary"
+                    checked={categoryForm.isInvestment}
+                    onChange={(e) =>
+                      setCategoryForm({ ...categoryForm, isInvestment: e.target.checked })
+                    }
+                  />
+                  Mark as Investment
+                  <span className="font-normal text-muted-foreground">
+                    (counts toward Wealth&apos;s Total Investment)
+                  </span>
+                </label>
+              ) : null}
             </div>
 
             <div className="flex gap-2 pt-2">
@@ -1842,7 +2361,7 @@ export function SettingsPage() {
       {/* POPUP MODAL 3: ADD PURPOSE */}
       {purposeModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 scale-in duration-200">
+          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Plus className="size-4 text-emerald-500" /> Add New Purpose Target
@@ -1897,48 +2416,27 @@ export function SettingsPage() {
       )}
 
       {/* POPUP MODAL 4: DELETE CONFIRMATION */}
-      {deleteConfirmOpen && itemToDelete && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4 scale-in duration-200 text-center">
-            <div className="flex justify-center">
-              <span className="flex size-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-500 animate-bounce">
-                <AlertTriangle className="size-6" />
-              </span>
-            </div>
-            
-            <div className="space-y-2">
-              <h3 className="text-sm font-bold text-foreground">Confirm Deletion</h3>
-              <p className="text-xs text-muted-foreground leading-normal">
-                Are you sure you want to delete <span className="font-extrabold text-foreground">&ldquo;{itemToDelete.name}&rdquo;</span>? This change will be permanently written.
-              </p>
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button
-                variant="outline"
-                className="flex-1 h-10 text-xs font-bold cursor-pointer"
-                onClick={() => {
-                  setDeleteConfirmOpen(false);
-                  setItemToDelete(null);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="flex-1 h-10 text-xs font-bold bg-rose-500 hover:bg-rose-600 text-white cursor-pointer"
-                onClick={handleConfirmDelete}
-              >
-                Delete permanently
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDeleteDialog
+        open={deleteConfirmOpen && Boolean(itemToDelete)}
+        itemLabel={
+          itemToDelete
+            ? itemToDelete.type.charAt(0).toUpperCase() + itemToDelete.type.slice(1)
+            : "Item"
+        }
+        detail={itemToDelete?.name}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteConfirmOpen(false);
+            setItemToDelete(null);
+          }
+        }}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* POPUP MODAL 5: RESTORE CONFIRMATION */}
       {restoreConfirmOpen && pendingRestoreBackup && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-card border border-border rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4 scale-in duration-200 text-center">
+          <div className="sx-surface w-full max-w-sm space-y-4 p-6 text-center scale-in duration-200">
             <div className="flex justify-center">
               <span className="flex size-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-500">
                 <AlertTriangle className="size-6" />

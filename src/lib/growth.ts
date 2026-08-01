@@ -22,14 +22,14 @@ export function detectIncomeStreamsFromTransactions(
     const source = transaction.category || transaction.merchant;
     const current = grouped.get(source) ?? {
       amount: 0,
-      lastReceived: transaction.date,
+      lastReceived: transaction.transactionDate,
       count: 0,
     };
     grouped.set(source, {
-      amount: current.amount + transaction.amount,
+      amount: current.amount + transaction.totalAmount,
       lastReceived:
-        new Date(transaction.date) > new Date(current.lastReceived)
-          ? transaction.date
+        new Date(transaction.transactionDate) > new Date(current.lastReceived)
+          ? transaction.transactionDate
           : current.lastReceived,
       count: current.count + 1,
     });
@@ -60,13 +60,13 @@ export function getMonthlyIncomeTrend(
     const income = transactions
       .filter((transaction) => {
         if (transaction.type !== "income") return false;
-        const txnDate = new Date(transaction.date);
+        const txnDate = new Date(transaction.transactionDate);
         return (
           txnDate.getFullYear() === date.getFullYear() &&
           txnDate.getMonth() === date.getMonth()
         );
       })
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
     return { month: label, income, key };
   });
@@ -77,13 +77,13 @@ export function getCurrentMonthlyIncome(transactions: Transaction[]) {
   return transactions
     .filter((transaction) => {
       if (transaction.type !== "income") return false;
-      const date = new Date(transaction.date);
+      const date = new Date(transaction.transactionDate);
       return (
         date.getMonth() === now.getMonth() &&
         date.getFullYear() === now.getFullYear()
       );
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 export function getActiveTarget(targets: IncomeTargets) {

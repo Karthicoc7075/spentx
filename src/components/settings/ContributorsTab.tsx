@@ -89,7 +89,7 @@ export function ContributorsTab() {
 
   return (
     <>
-    <Card className="rounded-3xl border-border bg-white dark:border-border dark:bg-card shadow-sm">
+    <Card>
       <CardHeader className="border-b border-border/60 p-5">
         <CardTitle className="text-sm font-semibold">Contributors</CardTitle>
         <CardDescription className="text-xs">

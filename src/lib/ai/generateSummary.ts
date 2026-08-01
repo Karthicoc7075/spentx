@@ -36,7 +36,7 @@ export function buildRuleBasedWeeklySummary(
   const topCategory = weekExpenses.reduce<Map<string, number>>((map, transaction) => {
     map.set(
       transaction.category,
-      (map.get(transaction.category) ?? 0) + transaction.amount,
+      (map.get(transaction.category) ?? 0) + transaction.totalAmount,
     );
     return map;
   }, new Map());
@@ -47,10 +47,10 @@ export function buildRuleBasedWeeklySummary(
 
   const weekendSpend = weekExpenses
     .filter((transaction) => {
-      const day = new Date(transaction.date).getDay();
+      const day = new Date(transaction.transactionDate).getDay();
       return day === 0 || day === 6;
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const patterns: string[] = [];
   const suggestions: string[] = [];
@@ -167,12 +167,12 @@ export function buildMonthlyReflectionSummary({
   const monthExpenses = transactions
     .filter((transaction) => {
       if (transaction.type !== "expense") return false;
-      const date = new Date(transaction.date);
+      const date = new Date(transaction.transactionDate);
       return (
         date.getFullYear() === year && date.getMonth() + 1 === monthIndex
       );
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const wins = monthReflections
     .map((reflection) => reflection.wins.trim())

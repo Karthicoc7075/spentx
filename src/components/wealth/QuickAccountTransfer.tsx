@@ -59,6 +59,9 @@ export function QuickAccountTransfer({
       });
       setOpen(false);
       setAmount("");
+    } catch {
+      // Error toast is already shown by the onTransfer handler; keep the
+      // dialog open so the user can retry.
     } finally {
       setIsSubmitting(false);
     }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { gatherAllUserData, uploadBackupToStorage } from "@/lib/firebase";
+import { gatherAllUserData, uploadBackupToStorage } from "@/lib/supabase-data";
 
 const LAST_BACKUP_KEY = "spentx-last-auto-backup";
 const LAST_HASH_KEY = "spentx-last-auto-backup-hash";
@@ -56,7 +56,7 @@ function hashString(input: string) {
  *  2. On change (debounced) — a snapshot a short while after any data edit
  *     settles, throttled and de-duplicated by content hash so it stays cheap.
  *
- * Both write to Firebase Storage (best-effort; needs `storage.rules` deployed)
+ * Both write to Supabase Storage (best-effort; needs bucket policies configured)
  * and update the "Last backup" readout shown in Settings. Mounted once,
  * app-wide, in AppDataProvider.
  */

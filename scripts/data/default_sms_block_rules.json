@@ -1,0 +1,243 @@
+{
+  "version": "1.0.0",
+  "description": "Default Block SMS rules for SpentX mobile — OTP, promo, spam, loan offers, delivery codes. Seeded into sms_block_rules.",
+  "rules": [
+    {
+      "key": "otp_one_time_password",
+      "name": "OTP / One-Time Password",
+      "keywords": [
+        "otp",
+        "one time password",
+        "one-time password",
+        "verification code",
+        "do not share",
+        "don't share",
+        "dont share",
+        "valid for",
+        "use this code"
+      ],
+      "pattern": "\\b(otp|one[\\s-]?time\\s*password|verification\\s*code)\\b",
+      "sampleMessage": "Your OTP is 482910 for login. Do not share with anyone. Valid for 10 minutes.",
+      "similarityThreshold": 0.5
+    },
+    {
+      "key": "otp_numeric_code",
+      "name": "OTP numeric code SMS",
+      "keywords": ["is your otp", "otp is", "otp:", "passcode", "auth code", "authentication code"],
+      "pattern": "\\b\\d{4,8}\\b.*(otp|passcode|code)|\\b(otp|passcode|code).*\\b\\d{4,8}\\b",
+      "sampleMessage": "482910 is your OTP for HDFC NetBanking. Do not share OTP with anyone.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "promo_offers_cashback",
+      "name": "Promo / offers / cashback ads",
+      "keywords": [
+        "limited time offer",
+        "claim now",
+        "click here",
+        "apply now",
+        "download app",
+        "exclusive offer",
+        "flat cashback",
+        "get cashback",
+        "reward points",
+        "lucky draw",
+        "win a",
+        "congratulations you have won"
+      ],
+      "pattern": "(claim\\s*now|limited\\s*time\\s*offer|lucky\\s*draw|exclusive\\s*offer)",
+      "sampleMessage": "Congratulations! Flat 20% cashback. Limited time offer. Claim now: https://bit.ly/xyz",
+      "similarityThreshold": 0.5
+    },
+    {
+      "key": "marketing_unsubscribe",
+      "name": "Marketing / unsubscribe SMS",
+      "keywords": [
+        "unsubscribe",
+        "to stop sms",
+        "stop to opt out",
+        "reply stop",
+        "sms stop",
+        "promotional message",
+        "this is a promotional"
+      ],
+      "pattern": "(unsubscribe|reply\\s*stop|promotional\\s*(sms|message))",
+      "sampleMessage": "Big Sale this weekend! Reply STOP to unsubscribe from promotional messages.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "loan_preapproved",
+      "name": "Loan / pre-approved offers",
+      "keywords": [
+        "loan approved",
+        "pre-approved loan",
+        "pre approved loan",
+        "personal loan offer",
+        "instant loan",
+        "loan up to",
+        "get loan",
+        "credit limit increased offer",
+        "emi card"
+      ],
+      "pattern": "(pre[\\s-]?approved\\s*loan|instant\\s*loan|personal\\s*loan\\s*offer|loan\\s*approved)",
+      "sampleMessage": "You are pre-approved for a personal loan up to Rs.5 Lakh. Apply now. T&C apply.",
+      "similarityThreshold": 0.5
+    },
+    {
+      "key": "delivery_codes",
+      "name": "Delivery / package codes",
+      "keywords": [
+        "delivery code",
+        "delivery otp",
+        "package delivery",
+        "out for delivery",
+        "order will be delivered",
+        "courier",
+        "flipkart",
+        "amazon delivery",
+        "swiggy delivery code"
+      ],
+      "pattern": "(delivery\\s*(code|otp)|out\\s*for\\s*delivery)",
+      "sampleMessage": "Your package is out for delivery. Delivery code: 5521. Share only with delivery agent.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "failed_transaction_noise",
+      "name": "Failed / declined transaction noise",
+      "keywords": [
+        "transaction failed",
+        "txn failed",
+        "payment failed",
+        "unsuccessful",
+        "declined",
+        "insufficient funds",
+        "insufficient balance",
+        "not processed",
+        "could not be completed"
+      ],
+      "pattern": "(transaction\\s*failed|payment\\s*failed|insufficient\\s*(funds|balance)|txn\\s*(failed|declined))",
+      "sampleMessage": "Txn failed due to insufficient funds. A/c XX1234. Please try again.",
+      "similarityThreshold": 0.5
+    },
+    {
+      "key": "kyc_aadhaar_reminders",
+      "name": "KYC / Aadhaar / update details spam",
+      "keywords": [
+        "update kyc",
+        "complete your kyc",
+        "kyc pending",
+        "re-kyc",
+        "aadhaar link",
+        "link aadhaar",
+        "submit kyc documents"
+      ],
+      "pattern": "(update\\s*kyc|complete\\s*your\\s*kyc|kyc\\s*pending|link\\s*aadhaar)",
+      "sampleMessage": "Dear customer, your KYC is pending. Update KYC to avoid account restriction. Click here.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "credit_card_offers",
+      "name": "Credit card sales / upgrade offers",
+      "keywords": [
+        "pre-approved credit card",
+        "credit card offer",
+        "get a credit card",
+        "lifetime free credit card",
+        "card approved",
+        "apply for credit card"
+      ],
+      "pattern": "(pre[\\s-]?approved\\s*credit\\s*card|lifetime\\s*free\\s*credit\\s*card|credit\\s*card\\s*offer)",
+      "sampleMessage": "You are pre-approved for a lifetime free credit card. Apply now to get rewards.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "insurance_investment_spam",
+      "name": "Insurance / investment spam",
+      "keywords": [
+        "buy insurance",
+        "term plan",
+        "invest now",
+        "mutual fund offer",
+        "sip offer",
+        "policy expiring",
+        "renew policy today"
+      ],
+      "pattern": "(buy\\s*insurance|invest\\s*now|mutual\\s*fund\\s*offer|renew\\s*policy)",
+      "sampleMessage": "Invest now in mutual funds. SIP offer ends today. Click to start.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "missed_call_alerts",
+      "name": "Missed call / balance inquiry spam",
+      "keywords": [
+        "missed call alert",
+        "you have a missed call",
+        "give a missed call",
+        "balance enquiry free",
+        "check balance free"
+      ],
+      "pattern": "(missed\\s*call|balance\\s*enquir)",
+      "sampleMessage": "You have a missed call from 98XXXXXX12. Give a missed call to 12345 for free balance enquiry.",
+      "similarityThreshold": 0.6
+    },
+    {
+      "key": "app_download_spam",
+      "name": "App download / install spam",
+      "keywords": [
+        "download our app",
+        "install app",
+        "get the app",
+        "app link",
+        "play.google.com",
+        "onelink.me",
+        "bit.ly"
+      ],
+      "pattern": "(download\\s*(our\\s*)?app|install\\s*app|play\\.google\\.com|bit\\.ly/)",
+      "sampleMessage": "Get 100 cashback. Download our app now: https://bit.ly/appxyz",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "phishing_security_alerts",
+      "name": "Phishing / fake security alerts",
+      "keywords": [
+        "your account will be blocked",
+        "account will be suspended",
+        "click to verify account",
+        "unusual login attempt verify",
+        "confirm your details immediately",
+        "secure your account click"
+      ],
+      "pattern": "(account\\s*will\\s*be\\s*(blocked|suspended)|click\\s*to\\s*verify|confirm\\s*your\\s*details\\s*immediately)",
+      "sampleMessage": "Alert: Your account will be blocked. Click to verify account immediately: http://fake-bank.xyz",
+      "similarityThreshold": 0.5
+    },
+    {
+      "key": "recharge_dth_promo",
+      "name": "Recharge / DTH / bill promo (non-txn)",
+      "keywords": [
+        "recharge offer",
+        "dth recharge offer",
+        "prepaid recharge",
+        "special recharge pack",
+        "validity offer"
+      ],
+      "pattern": "(recharge\\s*offer|dth\\s*recharge|special\\s*recharge\\s*pack)",
+      "sampleMessage": "Special recharge pack: 399 for 84 days. Recharge offer valid today only.",
+      "similarityThreshold": 0.55
+    },
+    {
+      "key": "survey_feedback",
+      "name": "Survey / feedback requests",
+      "keywords": [
+        "rate your experience",
+        "feedback call",
+        "take a survey",
+        "share your feedback",
+        "customer satisfaction survey"
+      ],
+      "pattern": "(rate\\s*your\\s*experience|feedback\\s*call|take\\s*a\\s*survey|share\\s*your\\s*feedback)",
+      "sampleMessage": "Please rate your experience. Share your feedback: https://survey.example.com",
+      "similarityThreshold": 0.55
+    }
+  ]
+}

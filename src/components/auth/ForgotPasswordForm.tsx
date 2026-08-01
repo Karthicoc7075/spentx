@@ -6,7 +6,7 @@ import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { sendPasswordReset } from "@/lib/firebase";
+import { sendPasswordReset } from "@/lib/supabase-data";
 import { getAuthErrorMessage, validateForgotPasswordForm } from "@/lib/auth";
 import { useToast } from "@/providers/toast-provider";
 

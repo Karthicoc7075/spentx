@@ -18,6 +18,7 @@ const BAR_COUNT = 72;
 const BAR_WIDTH = 4;
 const BAR_GAP = 6;
 const CHART_HEIGHT = 64;
+const VISIBLE_CATEGORIES = 6;
 
 function barHeight(index: number) {
   const wave =
@@ -91,13 +92,14 @@ export function CategoryBreakdown({ data, onCategoryClick }: CategoryBreakdownPr
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="max-h-[calc(4.25rem*6+0.5rem*5)] overflow-y-auto overscroll-contain pr-1 sm:max-h-[calc(4.25rem*3+0.5rem*2)]">
+        <div className="grid gap-2 sm:grid-cols-2">
         {data.map((item) => {
           const trendPositive = item.trend >= 0;
           return (
             <button
               key={item.name}
-              className="flex items-center justify-between gap-3 rounded-xl bg-muted/50 px-3.5 py-3 text-left transition-colors hover:bg-muted"
+              className="flex min-h-[4.25rem] items-center justify-between gap-3 rounded-xl bg-muted/50 px-3.5 py-3 text-left transition-colors hover:bg-muted"
               type="button"
               onClick={() => onCategoryClick?.(item.name)}
             >
@@ -137,7 +139,13 @@ export function CategoryBreakdown({ data, onCategoryClick }: CategoryBreakdownPr
             </button>
           );
         })}
+        </div>
       </div>
+      {data.length > VISIBLE_CATEGORIES ? (
+        <p className="text-xs text-muted-foreground">
+          Showing first {VISIBLE_CATEGORIES} categories — scroll for more.
+        </p>
+      ) : null}
     </div>
   );
 }

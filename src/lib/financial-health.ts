@@ -2,8 +2,9 @@ import {
   calculateDailySafeSpending,
   isTransactionInMonth,
 } from "@/lib/calculators/dailyLimit";
-import { isSpendingExpense, sumSpendingExpenses } from "@/lib/investments";
+import { isSpendingExpense, isTransferTransaction, sumSpendingExpenses } from "@/lib/investments";
 import { formatPlanMonth, getCurrentPlanMonth, sumPlanned } from "@/lib/plan";
+import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import type { MonthlyPlan, Transaction } from "@/types";
 
 const BILL_CATEGORIES = new Set([
@@ -64,14 +65,24 @@ function filterMonthTransactions(transactions: Transaction[], month: string) {
   );
 }
 
+// The Opening Balance transaction is always income-typed and is already
+// baked into account.openingBalance wherever that seed is added — excluding
+// it here keeps every income figure derived from sumByType free of
+// double-counting.
 function sumByType(transactions: Transaction[], type: Transaction["type"]) {
+  const scoped = transactions.filter(
+    (transaction) => transaction.category !== OPENING_BALANCE_CATEGORY,
+  );
+
   if (type === "expense") {
-    return sumSpendingExpenses(transactions);
+    return sumSpendingExpenses(scoped);
   }
 
-  return transactions
-    .filter((transaction) => transaction.type === type)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  return scoped
+    .filter(
+      (transaction) => transaction.type === type && !isTransferTransaction(transaction),
+    )
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 export type HealthScoreMetrics = {
@@ -110,9 +121,9 @@ export function countDaysOverSafeLimit(
         (transaction) =>
           isSpendingExpense(transaction) &&
           isTransactionInMonth(transaction, month) &&
-          new Date(transaction.date).getDate() === day,
+          new Date(transaction.transactionDate).getDate() === day,
       )
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
     if (daySpend > dailySafeLimit) {
       daysOver += 1;
@@ -271,7 +282,7 @@ function findWorstCategoryOverPlan(
           transaction.type === "expense" &&
           transaction.category === allocation.category,
       )
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
     const overBy = actual - allocation.plannedAmount;
     if (overBy > 0 && (!worst || overBy > worst.overBy)) {
       worst = { category: allocation.category, overBy };
@@ -368,7 +379,7 @@ export function buildFinancialHealth(
   investments: Array<{ type: string }> = [],
 ): FinancialHealthData {
   const monthTransactions = filterMonthTransactions(transactions, month);
-  const monthExpenses = monthTransactions.filter(isSpendingExpense);
+  const monthExpenses = monthTransactions.filter((transaction) => isSpendingExpense(transaction));
   const monthIncome = sumByType(monthTransactions, "income");
   const monthExpense = sumByType(monthTransactions, "expense");
   const savings = monthIncome - monthExpense;
@@ -419,10 +430,10 @@ export function buildFinancialHealth(
         transaction.type === "income" &&
         SALARY_CATEGORIES.has(transaction.category),
     )
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+    .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime())[0];
 
   const salaryDateLabel = salaryTxn
-    ? new Date(salaryTxn.date).toLocaleDateString("en-IN", {
+    ? new Date(salaryTxn.transactionDate).toLocaleDateString("en-IN", {
         day: "numeric",
         month: "long",
       })
@@ -430,7 +441,7 @@ export function buildFinancialHealth(
 
   const mobileSpend = monthExpenses
     .filter((transaction) => transaction.source === "mobile")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
   const upiSpendPercent =
     monthExpense > 0 ? Math.round((mobileSpend / monthExpense) * 100) : 0;
 

@@ -2,20 +2,25 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchPurposes } from "@/lib/firebase";
+import { fetchPurposes, fetchSharedPurposes } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { useShareSession } from "@/providers/share-provider";
 import { useViewerAccess } from "@/providers/viewer-provider";
 
 export function usePurposes() {
   const { user, isConfigured, isReady } = useAuthReady();
   const { dataOwnerId, isReadOnlyViewer, sharedPurposeIds } = useViewerAccess();
+  const share = useShareSession();
   const effectiveUserId = dataOwnerId ?? user?.id;
 
   const query = useQuery({
-    queryKey: queryKeys.purposes(effectiveUserId),
-    queryFn: () => fetchPurposes(effectiveUserId),
-    enabled: (isReady || !isConfigured) && Boolean(effectiveUserId),
+    queryKey: share
+      ? queryKeys.sharedPurposes(share.token)
+      : queryKeys.purposes(effectiveUserId),
+    queryFn: () =>
+      share ? fetchSharedPurposes(share.token) : fetchPurposes(effectiveUserId),
+    enabled: Boolean(share) || ((isReady || !isConfigured) && Boolean(effectiveUserId)),
   });
 
   const purposes = useMemo(() => {

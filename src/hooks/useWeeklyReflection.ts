@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { fetchReflection, saveReflection } from "@/lib/firebase";
+import { fetchReflection, saveReflection } from "@/lib/supabase-data";
 import { calculateWeeklyPlanAdherence, getWeekStart } from "@/lib/journal";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";

@@ -127,3 +127,25 @@ export function getTransactionAmountClass(type: TransactionType) {
 export function getTransactionTypeMeta(type: TransactionType) {
   return transactionTypeMeta[type];
 }
+
+/**
+ * Title / Itemization display precedence (shared by web list views; the
+ * Flutter app mirrors this logic in `Transaction.displayTitle`):
+ *   1. 2+ items  -> merchant name + "{n} Items" indicator.
+ *   2. a title   -> the title, in place of the merchant name.
+ *   3. otherwise -> the merchant name (unchanged default behavior).
+ * Independent of Split Expense — never reads `splits`/`hasSplits`.
+ */
+export function getTransactionDisplayTitle(transaction: Transaction): {
+  primary: string;
+  itemsLabel?: string;
+} {
+  const itemCount = transaction.items?.length ?? 0;
+  if (itemCount >= 2) {
+    return { primary: transaction.merchant, itemsLabel: `${itemCount} Items` };
+  }
+  if (transaction.title?.trim()) {
+    return { primary: transaction.title.trim() };
+  }
+  return { primary: transaction.merchant };
+}

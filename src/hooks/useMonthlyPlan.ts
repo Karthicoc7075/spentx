@@ -8,8 +8,10 @@ import {
   autoBalanceAllocations,
   buildIncomeIdeas,
   buildPlanSuggestions,
+  computeCategorySpentActuals,
   computeEffectiveBudget,
   createEmptyPlan,
+  formatDefaultPlanTitle,
   getCurrentPlanMonth,
   getPlanBudgetStatus,
   getPlanDelta,
@@ -20,23 +22,20 @@ import {
   sumPlannedForBuffer,
   type RolloverBreakdown,
 } from "@/lib/plan";
-import {
-  deletePlanTemplate,
-  saveMonthlyPlan,
-  savePlanTemplate,
-} from "@/lib/firebase";
+import { deleteMonthlyPlan, saveMonthlyPlan } from "@/lib/supabase-data";
 import { defaultCategories } from "@/lib/mock-data";
-import { PERSONAL_PURPOSE_ID, transactionMatchesPurpose } from "@/lib/purposes";
+import {
+  getDefaultPersonalPurpose,
+  PERSONAL_PURPOSE_ID,
+  transactionMatchesPurpose,
+} from "@/lib/purposes";
 import { queryKeys } from "@/lib/query-keys";
 import { useCategories } from "@/hooks/useCategories";
 import { usePurposes } from "@/hooks/usePurposes";
-import {
-  useMonthlyPlanQuery,
-  usePlanTemplatesQuery,
-} from "@/hooks/useMonthlyPlanQuery";
+import { useMonthlyPlanQuery } from "@/hooks/useMonthlyPlanQuery";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useTransactions } from "@/hooks/useTransactions";
-import type { MonthlyPlan, PlanAllocation, PlanTemplate } from "@/types";
+import type { MonthlyPlan, PlanAllocation } from "@/types";
 
 const categoryPalette = ["#38bdf8", "#f97316", "#a855f7", "#ec4899", "#6366f1"];
 
@@ -61,7 +60,6 @@ export function useMonthlyPlan(
   const hydratedMonthRef = useRef<string | null>(null);
 
   const planQuery = useMonthlyPlanQuery(month, purposeId);
-  const templatesQuery = usePlanTemplatesQuery();
   const previousMonth = useMemo(() => shiftPlanMonth(month, -1), [month]);
   const previousPlanQuery = useMonthlyPlanQuery(previousMonth, purposeId);
 
@@ -81,10 +79,22 @@ export function useMonthlyPlan(
   useEffect(() => {
     hydratedMonthRef.current = null;
     setIsEditing(false);
+    setExpectedIncome(0);
+    setAllocations([]);
+    setActiveCategory(null);
   }, [month, purposeId]);
+
+  useEffect(() => {
+    if (purposeId !== PERSONAL_PURPOSE_ID || purposes.length === 0) return;
+    const defaultPersonal = getDefaultPersonalPurpose(purposes);
+    if (defaultPersonal?.id) {
+      setPurposeId(defaultPersonal.id);
+    }
+  }, [purposes, purposeId]);
 
   const savedPlan = planQuery.data ?? null;
   const hasSavedPlan = Boolean(savedPlan);
+  const isActivePlan = month === getCurrentPlanMonth();
   const isBudgetLocked = savedPlan?.isBudgetLocked ?? false;
   const budgetSetAt = savedPlan?.budgetSetAt;
   const isViewMode = hasSavedPlan && !isEditing;
@@ -103,18 +113,7 @@ export function useMonthlyPlan(
       }));
     }
 
-    if (planQuery.isPending) {
-      const empty = createEmptyPlan(month, resolvedCategories);
-      setAllocations((current) =>
-        current.length > 0
-          ? mergeAllocations(current, empty.allocations)
-          : empty.allocations,
-      );
-      if (incomeSuggestion > 0) {
-        setExpectedIncome((current) => (current > 0 ? current : incomeSuggestion));
-      }
-      return;
-    }
+    if (planQuery.isPending) return;
 
     const hydrationKey = `${month}:${purposeId}`;
     if (hydratedMonthRef.current === hydrationKey && planQuery.data) return;
@@ -144,7 +143,7 @@ export function useMonthlyPlan(
     planQuery.isPending,
   ]);
 
-  const isLoading = planQuery.isPending && allocations.length === 0;
+  const isLoading = planQuery.isPending;
 
   const totalPlanned = useMemo(() => sumPlanned(allocations), [allocations]);
   const bufferPlanned = useMemo(
@@ -182,7 +181,7 @@ export function useMonthlyPlan(
     const categorySpentMap: Record<string, number> = {};
     
     purposeTransactions.forEach((tx) => {
-      const txDate = new Date(tx.date);
+      const txDate = new Date(tx.transactionDate ?? tx.date ?? "");
       if (txDate >= thirtyDaysAgo) {
         if (tx.type === "income") {
           totalIncome += tx.amount;
@@ -212,29 +211,17 @@ export function useMonthlyPlan(
 
     return result;
   }
-  const categorySpentActuals = useMemo(() => {
-    const map: Record<string, number> = {};
-    purposeTransactions.forEach((tx) => {
-      if (tx.date.startsWith(month)) {
-        if (tx.type === "expense") {
-          map[tx.category] = (map[tx.category] || 0) + tx.amount;
-        }
-      }
-    });
-    return map;
-  }, [purposeTransactions, month]);
+  const categorySpentActuals = useMemo(
+    () => computeCategorySpentActuals(purposeTransactions, month),
+    [purposeTransactions, month],
+  );
 
   // Spec A3 — Rollover Budget: unused budget from last month's categories
   // carries forward as extra headroom this month, category by category.
-  const previousCategorySpentActuals = useMemo(() => {
-    const map: Record<string, number> = {};
-    purposeTransactions.forEach((tx) => {
-      if (tx.date.startsWith(previousMonth) && tx.type === "expense") {
-        map[tx.category] = (map[tx.category] || 0) + tx.amount;
-      }
-    });
-    return map;
-  }, [purposeTransactions, previousMonth]);
+  const previousCategorySpentActuals = useMemo(
+    () => computeCategorySpentActuals(purposeTransactions, previousMonth),
+    [purposeTransactions, previousMonth],
+  );
 
   const previousAllocations = previousPlanQuery.data?.allocations ?? null;
 
@@ -283,13 +270,6 @@ export function useMonthlyPlan(
     ]);
   }
 
-  function applyTemplate(template: PlanTemplate) {
-    setExpectedIncome(template.expectedIncome);
-    setAllocations(template.allocations);
-    setShowIncomeIdeas(false);
-    hydratedMonthRef.current = `${month}:${purposeId}`;
-  }
-
   function startEditing() {
     setIsEditing(true);
   }
@@ -321,40 +301,23 @@ export function useMonthlyPlan(
     setAllocations(nextAllocations);
   }
 
-  async function persistPlan(options?: {
-    asTemplate?: boolean;
-    templateId?: string;
-    templateName?: string;
-    description?: string;
-  }) {
+  async function persistPlan(options?: { title?: string }) {
     setIsSaving(true);
     setError(null);
 
     try {
-      if (options?.asTemplate) {
-        const template = await savePlanTemplate(user?.id, {
-          id: options.templateId,
-          name: options.templateName?.trim() || "My monthly template",
-          description: options.description,
-          expectedIncome,
-          allocations,
-        });
-
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.planTemplates(user?.id),
-        });
-
-        return template;
-      }
-
       const plan: MonthlyPlan = {
-        id: month,
+        id: savedPlan?.id ?? month,
         userId: user?.id,
         month,
+        title:
+          options?.title?.trim() ||
+          savedPlan?.title ||
+          formatDefaultPlanTitle(month),
         purposeId,
         expectedIncome,
         allocations,
-        budgetSetAt: savedPlan?.budgetSetAt,
+        budgetSetAt: savedPlan?.budgetSetAt ?? new Date().toISOString(),
         isBudgetLocked: true,
         createdAt: savedPlan?.createdAt,
         updatedAt: new Date().toISOString(),
@@ -365,6 +328,12 @@ export function useMonthlyPlan(
         queryKeys.monthlyPlan(user?.id, month, purposeId),
         saved,
       );
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.allMonthlyPlans(user?.id),
+      });
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.allMonthlyPlanActuals(user?.id),
+      });
       setIsEditing(false);
       hydratedMonthRef.current = `${month}:${purposeId}`;
 
@@ -381,10 +350,17 @@ export function useMonthlyPlan(
     }
   }
 
-  async function deleteTemplate(templateId: string) {
-    await deletePlanTemplate(user?.id, templateId);
+  async function deletePlan() {
+    if (!savedPlan) return;
+    await deleteMonthlyPlan(user?.id, savedPlan.id);
+    queryClient.setQueryData(
+      queryKeys.monthlyPlan(user?.id, month, purposeId),
+      null,
+    );
+    hydratedMonthRef.current = null;
+    setIsEditing(false);
     await queryClient.invalidateQueries({
-      queryKey: queryKeys.planTemplates(user?.id),
+      queryKey: queryKeys.allMonthlyPlans(user?.id),
     });
   }
 
@@ -396,7 +372,6 @@ export function useMonthlyPlan(
     expectedIncome,
     setExpectedIncome,
     allocations,
-    templates: templatesQuery.data ?? [],
     activeCategory,
     setActiveCategory,
     showIncomeIdeas,
@@ -420,16 +395,16 @@ export function useMonthlyPlan(
     addCategory,
     savedPlan,
     hasSavedPlan,
+    isActivePlan,
     isBudgetLocked,
     budgetSetAt,
     isEditing,
     isViewMode,
     startEditing,
     cancelEditing,
-    applyTemplate,
     applySuggestions,
     persistPlan,
-    deleteTemplate,
+    deletePlan,
     actualSummarySuggestion,
     applyActualsAsBudget,
     autoBalance,

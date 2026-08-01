@@ -29,6 +29,17 @@ export function OutingExpenseList({
         const payer =
           outing.members.find((member) => member.id === expense.paidByMemberId)
             ?.name ?? "Member";
+        const isSplit = expense.splitType !== "solo" && expense.splits.length > 1;
+        const splitNames = isSplit
+          ? expense.splits
+              .map(
+                (split) =>
+                  outing.members.find((member) => member.id === split.memberId)
+                    ?.name,
+              )
+              .filter(Boolean)
+              .join(", ")
+          : "";
 
         return (
           <button
@@ -54,7 +65,20 @@ export function OutingExpenseList({
               </p>
               <p className="mt-0.5 truncate text-xs text-muted-foreground">
                 {formatDate(expense.date)} · {payer} paid · {expense.category}
+                {expense.accountName
+                  ? ` · ${expense.accountName}`
+                  : expense.paymentMode
+                    ? ` · ${expense.paymentMode}`
+                    : ""}
               </p>
+              {isSplit ? (
+                <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                    Split
+                  </span>{" "}
+                  · {splitNames}
+                </p>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <span className="font-semibold text-foreground">

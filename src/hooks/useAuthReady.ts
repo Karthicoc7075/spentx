@@ -1,14 +1,14 @@
 "use client";
 
-import { useFirebase } from "@/providers/firebase-provider";
+import { useSupabaseAuth } from "@/providers/supabase-provider";
 
 export function useAuthReady() {
-  const { user, isConfigured, isLoading: authLoading } = useFirebase();
+  const { user, isConfigured, isLoading: authLoading } = useSupabaseAuth();
 
   return {
     user,
     isConfigured,
-    isReady: !isConfigured || !authLoading || !!user,
+    isReady: !isConfigured || !authLoading,
     authLoading,
   };
 }

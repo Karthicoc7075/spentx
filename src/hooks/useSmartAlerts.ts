@@ -1,28 +1,33 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { generateSmartAlerts, mergeAlerts } from "@/lib/alerts/generateAlerts";
 import {
   markAlertRead,
   markAllAlertsRead,
   subscribeToAlerts,
   upsertAlerts,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import { getCurrentPlanMonth } from "@/lib/plan";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { useFriendSplits } from "@/hooks/useFriendSplits";
 import { useMonthlyPlanQuery } from "@/hooks/useMonthlyPlanQuery";
 import { useReflections } from "@/hooks/useReflections";
 import { useTransactions } from "@/hooks/useTransactions";
+import { useUserSettings } from "@/hooks/useUserSettings";
 
 export function useSmartAlerts() {
   const { user, isConfigured, isReady } = useAuthReady();
   const queryClient = useQueryClient();
   const { transactions } = useTransactions();
   const { reflections } = useReflections();
+  const { splits: friendSplits } = useFriendSplits();
+  const { settings } = useUserSettings();
   const planQuery = useMonthlyPlanQuery(getCurrentPlanMonth());
   const syncedRef = useRef<string>("");
+  const [alertsLoaded, setAlertsLoaded] = useState(false);
 
   const query = useQuery({
     queryKey: queryKeys.alerts(user?.id),
@@ -34,13 +39,20 @@ export function useSmartAlerts() {
     if (isConfigured && !isReady) return;
     if (isConfigured && !user?.id) {
       queryClient.setQueryData(queryKeys.alerts(user?.id), []);
+      setAlertsLoaded(true);
       return;
     }
+
+    setAlertsLoaded(false);
 
     const unsubscribe = subscribeToAlerts(
       user?.id,
       (nextAlerts) => {
         queryClient.setQueryData(queryKeys.alerts(user?.id), nextAlerts);
+        setAlertsLoaded(true);
+      },
+      () => {
+        setAlertsLoaded(true);
       },
     );
 
@@ -53,8 +65,10 @@ export function useSmartAlerts() {
         transactions,
         monthlyPlan: planQuery.data ?? null,
         reflections,
+        friendSplits,
+        notificationPreferences: settings.notificationPreferences,
       }),
-    [planQuery.data, reflections, transactions],
+    [planQuery.data, reflections, transactions, friendSplits, settings.notificationPreferences],
   );
 
   const alerts = useMemo(
@@ -94,7 +108,7 @@ export function useSmartAlerts() {
     alerts,
     unreadCount,
     highPriorityAlerts,
-    isLoading: isConfigured && isReady && query.data === undefined,
+    isLoading: isConfigured && isReady && !alertsLoaded,
     readAlert,
     readAllAlerts,
   };

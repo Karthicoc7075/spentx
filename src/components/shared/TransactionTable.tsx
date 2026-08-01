@@ -14,16 +14,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useCategories } from "@/hooks/useCategories";
-import {
-  getInvestmentTypeLabel,
-  isInvestmentTransaction,
-} from "@/lib/investments";
+import { isInvestmentTransaction } from "@/lib/investments";
+import { getTransactionDisplayTitle } from "@/lib/transaction-ui";
 import {
   getCategoryIcon,
   getTransactionAmountClass,
   getTransactionTypeMeta,
 } from "@/lib/transaction-ui";
-import { cn, formatCurrency, formatDateTime } from "@/lib/utils";
+import {
+  compareTransactionsNewestFirst,
+  cn,
+  formatCurrency,
+  formatDateTime,
+  transactionDateKey,
+} from "@/lib/utils";
 import type { Transaction } from "@/types";
 
 type SortKey = "date" | "merchant" | "category" | "amount";
@@ -54,9 +58,7 @@ export function TransactionTable({
       const multiplier = sortDirection === "asc" ? 1 : -1;
       if (sortKey === "amount") return (a.amount - b.amount) * multiplier;
       if (sortKey === "date") {
-        return (
-          (new Date(a.date).getTime() - new Date(b.date).getTime()) * multiplier
-        );
+        return compareTransactionsNewestFirst(a, b) * (sortDirection === "asc" ? -1 : 1);
       }
       return String(a[sortKey] ?? "").localeCompare(String(b[sortKey] ?? "")) *
         multiplier;
@@ -130,11 +132,14 @@ export function TransactionTable({
               const category = categories.find(
                 (item) => item.name === transaction.category,
               );
-              const isInvestment = isInvestmentTransaction(transaction);
+              const isInvestment = isInvestmentTransaction(transaction, categories);
               const isTransfer = transaction.category === "Settlements";
               const fromAcc = transaction.account;
               const toAcc = isTransfer ? transaction.merchant.replace("Transfer to ", "") : "";
-              const displayMerchant = isTransfer ? `Transfer: ${fromAcc} → ${toAcc}` : transaction.merchant;
+              const displayTitle = getTransactionDisplayTitle(transaction);
+              const displayMerchant = isTransfer
+                ? `Transfer: ${fromAcc} → ${toAcc}`
+                : displayTitle.primary;
               const displayCategory = isTransfer ? "Transfer" : transaction.category;
               const displayAccount = isTransfer ? `${fromAcc} → ${toAcc}` : transaction.account;
 
@@ -159,11 +164,18 @@ export function TransactionTable({
                         >
                           <TypeIcon className="size-3.5" />
                         </span>
-                        {formatDateTime(transaction.date)}
+                        {formatDateTime(transactionDateKey(transaction))}
                       </span>
                     </TableCell>
                     <TableCell className="font-medium">
-                      {displayMerchant}
+                      <span className="inline-flex items-center gap-1.5">
+                        {displayMerchant}
+                        {!isTransfer && displayTitle.itemsLabel ? (
+                          <span className="inline-flex items-center whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            {displayTitle.itemsLabel}
+                          </span>
+                        ) : null}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex flex-wrap items-center gap-2">
@@ -181,9 +193,6 @@ export function TransactionTable({
                         {isInvestment ? (
                           <Badge className="border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
                             Investment
-                            {transaction.investmentType
-                              ? ` · ${getInvestmentTypeLabel(transaction.investmentType)}`
-                              : ""}
                           </Badge>
                         ) : null}
                       </span>

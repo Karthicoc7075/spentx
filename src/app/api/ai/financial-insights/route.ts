@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { generateFinancialInsights } from "@/lib/ai/financial-insights";
 import type { FinancialInsightContext } from "@/types";
+import { withRouteLogging } from "@/lib/server/with-route-logging";
 
-export async function POST(request: Request) {
+async function handler(request: Request) {
   try {
     const { context } = (await request.json()) as {
       context?: FinancialInsightContext;
@@ -30,3 +31,4 @@ export async function POST(request: Request) {
     );
   }
 }
+export const POST = withRouteLogging("ai/financial-insights", "route_handler", handler);

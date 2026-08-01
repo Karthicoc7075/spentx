@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { aiInsightDocId } from "@/lib/ai/financial-insights";
-import { fetchAiInsight, saveAiInsight } from "@/lib/firebase";
+import { fetchAiInsight, saveAiInsight } from "@/lib/supabase-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { AiInsight, FinancialInsightContext } from "@/types";
 

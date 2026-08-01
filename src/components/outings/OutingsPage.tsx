@@ -25,6 +25,7 @@ const statusTabs: Array<{ value: OutingListFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "completed", label: "Completed" },
+  { value: "archived", label: "Archived" },
 ];
 
 function memberInitials(member: TripMember) {
@@ -43,6 +44,11 @@ export function OutingsPage() {
     useAllOutingExpenses();
   const [statusFilter, setStatusFilter] = useState<OutingListFilter>("all");
   const [createOpen, setCreateOpen] = useState(false);
+
+  const activeOuting = useMemo(
+    () => outings.find((o) => o.status === "active" && o.isActive !== false),
+    [outings],
+  );
 
   const expensesByOuting = useMemo(() => {
     const map = new Map<string, OutingExpense[]>();
@@ -70,13 +76,30 @@ export function OutingsPage() {
   async function handleCreate(
     outing: Omit<Outing, "id" | "userId" | "createdAt" | "updatedAt">,
   ) {
-    const created = (await addOuting(outing)) as Outing | undefined;
-    notify({
-      title: "Outing created",
-      description: `${outing.name} is ready for expenses.`,
-    });
-    if (created?.id) {
-      router.push(`/outings/${created.id}`);
+    if (activeOuting) {
+      notify({
+        title: "Outing already active",
+        description: `End “${activeOuting.name}” before starting a new trip.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const created = (await addOuting(outing)) as Outing | undefined;
+      notify({
+        title: "Outing created",
+        description: `${outing.name} is active — add expenses or let mobile SMS detect during the trip dates.`,
+      });
+      if (created?.id) {
+        router.push(`/outings/${created.id}`);
+      }
+    } catch (error) {
+      notify({
+        title: "Couldn't create outing",
+        description:
+          error instanceof Error ? error.message : "Try again in a moment.",
+        variant: "destructive",
+      });
     }
   }
 
@@ -84,20 +107,65 @@ export function OutingsPage() {
 
   return (
     <div className="grid gap-6 pb-12">
-      <div className="flex flex-col justify-between gap-4 pt-2 sm:flex-row sm:items-end">
+      <div className="flex flex-col justify-between gap-4 pt-2 sm:flex-row sm:items-start">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Outings & Trips
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Track shared trips, events, and group expenses with friends.
+            One active trip at a time. Mobile SMS auto-detect can link spends during the trip dates.
           </p>
         </div>
-        <Button className="shrink-0 gap-2" onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          New trip
-        </Button>
+        <div className="flex flex-col items-start sm:items-end gap-1.5 shrink-0">
+          <Button
+            className="gap-2"
+            disabled={Boolean(activeOuting)}
+            title={
+              activeOuting
+                ? "Only one active outing allowed at a time"
+                : "Create a new outing"
+            }
+            onClick={() => {
+              if (activeOuting) return;
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="size-4" />
+            Create Outing
+          </Button>
+          {activeOuting ? (
+            <p className="text-[11px] text-muted-foreground max-w-xs sm:text-right">
+              ℹ️ You already have an active outing. Complete or archive it before creating another outing.
+            </p>
+          ) : null}
+        </div>
       </div>
+
+      {activeOuting ? (
+        <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
+              🏕️ Active Outing
+            </span>
+            <span className="inline-flex items-center rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+              ACTIVE
+            </span>
+          </div>
+          <div>
+            <h3 className="text-lg font-bold">{activeOuting.name}</h3>
+            <p className="text-xs text-muted-foreground">{formatOutingDates(activeOuting)}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button
+              size="sm"
+              className="bg-primary text-primary-foreground font-medium"
+              onClick={() => router.push(`/outings/${activeOuting.id}`)}
+            >
+              Manage Outing
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="inline-flex w-fit items-center rounded-full bg-muted p-1">
         {statusTabs.map((tab) => (
@@ -124,7 +192,7 @@ export function OutingsPage() {
           ))}
         </div>
       ) : filteredOutings.length === 0 ? (
-        <div className="flex flex-col items-center rounded-2xl border border-border bg-card px-6 py-16 text-center">
+        <div className="sx-surface flex flex-col items-center px-6 py-16 text-center">
           <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
             <MapIcon className="size-5" />
           </div>
@@ -132,7 +200,21 @@ export function OutingsPage() {
           <p className="mt-1 text-sm text-muted-foreground">
             Create your first trip to start splitting expenses.
           </p>
-          <Button className="mt-5" onClick={() => setCreateOpen(true)}>
+          <Button
+            className="mt-5"
+            disabled={Boolean(activeOuting)}
+            onClick={() => {
+              if (activeOuting) {
+                notify({
+                  title: "Outing already active",
+                  description: `End “${activeOuting.name}” before starting a new trip.`,
+                  variant: "destructive",
+                });
+                return;
+              }
+              setCreateOpen(true);
+            }}
+          >
             <Plus className="size-4" />
             New trip
           </Button>
@@ -147,7 +229,7 @@ export function OutingsPage() {
             return (
               <Link
                 key={outing.id}
-                className="group flex flex-col justify-between gap-5 rounded-2xl border border-border bg-card p-5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+                className="group flex flex-col justify-between gap-5 sx-surface p-5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
                 href={`/outings/${outing.id}`}
               >
                 <div>

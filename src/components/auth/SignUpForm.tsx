@@ -4,16 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
-import { GoogleAuthButton } from "@/components/auth/GoogleAuthButton";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   completeAuthSession,
-  signInWithGoogle,
+  ensureUserWorkspace,
+  resendVerificationEmail,
   signUpWithEmail,
-} from "@/lib/firebase";
+} from "@/lib/supabase-data";
 import {
   getAuthErrorMessage,
   validateSignUpForm,
@@ -29,26 +28,27 @@ export function SignUpForm() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [verificationSentTo, setVerificationSentTo] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<SignUpFieldErrors>({});
 
-  async function handleGoogleSignUp() {
-    setIsSubmitting(true);
+  async function handleResendVerification() {
+    if (!verificationSentTo) return;
+    setIsResending(true);
     try {
-      const credential = await signInWithGoogle();
-      await completeAuthSession(credential.user.uid, {
-        name: credential.user.displayName ?? "SpentX User",
-        email: credential.user.email ?? "",
-        photoURL: credential.user.photoURL ?? undefined,
+      await resendVerificationEmail(verificationSentTo);
+      notify({
+        title: "Verification email sent",
+        description: "Check your inbox for a new confirmation link.",
       });
-      router.replace("/");
     } catch (error) {
       notify({
-        title: "Sign up failed",
+        title: "Could not resend email",
         description: getAuthErrorMessage(error),
         variant: "destructive",
       });
     } finally {
-      setIsSubmitting(false);
+      setIsResending(false);
     }
   }
 
@@ -69,7 +69,18 @@ export function SignUpForm() {
     const trimmedPassword = password.trim();
 
     try {
-      await signUpWithEmail(trimmedEmail, trimmedPassword, trimmedName);
+      const result = await signUpWithEmail(trimmedEmail, trimmedPassword, trimmedName);
+      if (!result.session || !result.user?.uid) {
+        setVerificationSentTo(trimmedEmail);
+        return;
+      }
+
+      const profile = {
+        name: trimmedName,
+        email: trimmedEmail,
+      };
+      await ensureUserWorkspace(result.user.uid, profile);
+      await completeAuthSession(result.user.uid, profile);
       router.replace("/");
     } catch (error) {
       notify({
@@ -80,6 +91,47 @@ export function SignUpForm() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  if (verificationSentTo) {
+    return (
+      <AuthLayout
+        subtitle="One last step before you can sign in."
+        title="Verify your email"
+        footer={
+          <Link
+            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            href="/auth/sign-in"
+          >
+            ← Back to sign in
+          </Link>
+        }
+      >
+        <div className="grid gap-4 text-sm">
+          <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-emerald-800 dark:text-emerald-200">
+            We sent a verification link to{" "}
+            <span className="font-medium">{verificationSentTo}</span>. Open it to
+            activate your account, then sign in.
+          </p>
+          <p className="text-muted-foreground">
+            Open the email, then tap <span className="font-medium">Verify my email</span>{" "}
+            on the confirmation page. If you don&apos;t see the email, check spam or
+            resend below.
+          </p>
+          <Button
+            disabled={isResending}
+            type="button"
+            variant="outline"
+            onClick={handleResendVerification}
+          >
+            {isResending ? "Sending..." : "Resend verification email"}
+          </Button>
+          <Link className={buttonVariants({ className: "w-full" })} href="/auth/sign-in">
+            Go to sign in
+          </Link>
+        </div>
+      </AuthLayout>
+    );
   }
 
   return (
@@ -189,19 +241,6 @@ export function SignUpForm() {
           {isSubmitting ? "Please wait..." : "Create account"}
         </Button>
       </form>
-
-      <div className="relative">
-        <Separator />
-        <span className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-2 text-xs text-muted-foreground">
-          or
-        </span>
-      </div>
-
-      <GoogleAuthButton
-        disabled={isSubmitting}
-        label="Sign up with Google"
-        onClick={handleGoogleSignUp}
-      />
     </AuthLayout>
   );
 }

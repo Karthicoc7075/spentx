@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { AppShell } from "@/components/shared/AppShell";
 import { ThemeScript } from "@/components/shared/ThemeScript";
 import { AppProviders } from "@/providers/app-providers";
+import { AnalyticsFiltersProvider } from "@/hooks/useAnalyticsFilters";
 import { GlobalFiltersProvider } from "@/hooks/useGlobalFilters";
 import "./globals.css";
 
@@ -30,10 +31,12 @@ export default function RootLayout({
       <head>
         <ThemeScript />
       </head>
-      <body className="min-h-full">
+      <body className="h-full overflow-hidden" suppressHydrationWarning>
         <AppProviders>
           <GlobalFiltersProvider>
-            <AppShell>{children}</AppShell>
+            <AnalyticsFiltersProvider>
+              <AppShell>{children}</AppShell>
+            </AnalyticsFiltersProvider>
           </GlobalFiltersProvider>
         </AppProviders>
       </body>

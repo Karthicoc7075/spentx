@@ -2,7 +2,9 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppData } from "@/providers/app-data-provider";
+import { afterOutingUpdated } from "@/lib/outing-ledger-sync";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { Outing } from "@/types";
 
@@ -25,6 +27,7 @@ export function useOutings() {
       queryKeys.outings(user?.id),
       (current = []) => [saved, ...current.filter((item) => item.id !== saved.id)],
     );
+    await invalidateFinancialData(queryClient, user?.id, { outingId: saved.id });
     return saved;
   }
 
@@ -35,15 +38,21 @@ export function useOutings() {
       (current = []) =>
         current.map((item) => (item.id === saved.id ? saved : item)),
     );
+    // Rename / date change → refresh rollup merchant + total on Transactions.
+    await afterOutingUpdated(user?.id, saved);
+    await invalidateFinancialData(queryClient, user?.id, { outingId: saved.id });
     return saved;
   }
 
   async function removeOutingWithCache(outingId: string) {
+    // removeOuting → deleteOuting → cascade_delete_outing RPC (soft-deletes
+    // the outing + its transactions + outing_expenses + settlements atomically).
     await removeOuting(outingId);
     queryClient.setQueryData<Outing[]>(
       queryKeys.outings(user?.id),
       (current = []) => current.filter((item) => item.id !== outingId),
     );
+    await invalidateFinancialData(queryClient, user?.id, { outingId });
   }
 
   return {

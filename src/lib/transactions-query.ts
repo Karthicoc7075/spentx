@@ -1,9 +1,7 @@
-import type { QueryConstraint } from "firebase/firestore";
-import { orderBy, where } from "firebase/firestore";
-import { deriveMonthKey } from "@/lib/firestore-schema";
+import { deriveMonthKey } from "@/lib/data-schema";
 import type { GlobalFilters, Transaction } from "@/types";
 
-export type FirestoreTransactionFilters = Pick<
+export type ServerTransactionFilters = Pick<
   GlobalFilters,
   | "dateFrom"
   | "dateTo"
@@ -15,11 +13,11 @@ export type FirestoreTransactionFilters = Pick<
   | "dashboardMonth"
 >;
 
-export function canUseFirestoreTransactionQuery(filters: GlobalFilters) {
+export function canUseServerTransactionQuery(filters: GlobalFilters) {
   return filters.categories.length <= 10;
 }
 
-export function resolveMonthKeyFilter(filters: FirestoreTransactionFilters) {
+export function resolveMonthKeyFilter(filters: ServerTransactionFilters) {
   if (!filters.dateFrom || !filters.dateTo) return null;
 
   const fromMonth = deriveMonthKey(filters.dateFrom);
@@ -32,53 +30,43 @@ export function resolveMonthKeyFilter(filters: FirestoreTransactionFilters) {
 
 export function buildTransactionQueryConstraints(
   userId: string,
-  filters: FirestoreTransactionFilters,
-): QueryConstraint[] {
-  const constraints: QueryConstraint[] = [where("userId", "==", userId)];
+  filters: ServerTransactionFilters,
+): Array<{ field: string; op: string; value: string }> {
+  const constraints: Array<{ field: string; op: string; value: string }> = [
+    { field: "user_id", op: "eq", value: userId },
+  ];
   const monthKey = resolveMonthKeyFilter(filters);
 
   if (monthKey) {
-    constraints.push(where("monthKey", "==", monthKey));
+    constraints.push({ field: "month_key", op: "eq", value: monthKey });
   } else {
     if (filters.dateFrom) {
-      constraints.push(where("date", ">=", filters.dateFrom));
+      constraints.push({
+        field: "transaction_date",
+        op: "gte",
+        value: filters.dateFrom,
+      });
     }
     if (filters.dateTo) {
-      constraints.push(where("date", "<=", `${filters.dateTo}T23:59:59.999Z`));
+      constraints.push({
+        field: "transaction_date",
+        op: "lte",
+        value: `${filters.dateTo}T23:59:59.999Z`,
+      });
     }
-  }
-
-  if (filters.purposeId) {
-    constraints.push(where("purpose", "==", filters.purposeId));
   }
 
   if (filters.transactionType) {
-    constraints.push(where("type", "==", filters.transactionType));
+    constraints.push({ field: "type", op: "eq", value: filters.transactionType });
   }
-
   if (filters.account) {
-    constraints.push(where("account", "==", filters.account));
+    constraints.push({ field: "account_id", op: "eq", value: filters.account });
   }
 
-  if (filters.source) {
-    const entrySource =
-      filters.source === "mobile"
-        ? "mobile-manual"
-        : filters.source === "import" || filters.source === "bank-sync"
-          ? "sms-auto-detected"
-          : "manual";
-    constraints.push(where("entrySource", "==", entrySource));
-  }
-
-  if (filters.categories.length > 0 && filters.categories.length <= 10) {
-    constraints.push(where("category", "in", filters.categories));
-  }
-
-  constraints.push(orderBy("date", "desc"));
   return constraints;
 }
 
-/** Filters Firestore cannot express: search, amount range, >10 categories */
+/** Filters applied client-side: search, amount range, >10 categories, contributor */
 export function applyClientTransactionFilters(
   transactions: Transaction[],
   filters: GlobalFilters,
@@ -86,7 +74,7 @@ export function applyClientTransactionFilters(
   const search = filters.search.trim().toLowerCase();
 
   return transactions.filter((transaction) => {
-    const amount = Math.abs(transaction.amount);
+    const amount = Math.abs(transaction.totalAmount);
 
     if (
       filters.categories.length > 10 &&
@@ -104,24 +92,52 @@ export function applyClientTransactionFilters(
       return false;
     }
 
+    if (
+      filters.contributorSource &&
+      (transaction.contributorSource || "Me") !== filters.contributorSource
+    ) {
+      return false;
+    }
+
     if (!search) return true;
 
-    return [
+    const mainMatch = [
       transaction.merchant,
       transaction.description,
       transaction.category,
-      transaction.account,
-      transaction.purpose,
+      transaction.accountName,
+      transaction.purposeId,
       transaction.note,
+      transaction.title,
     ]
       .filter(Boolean)
       .some((value) => value?.toLowerCase().includes(search));
+
+    if (mainMatch) return true;
+
+    if (transaction.outingExpenseTitles?.length) {
+      if (
+        transaction.outingExpenseTitles.some((title) =>
+          title.toLowerCase().includes(search),
+        )
+      ) {
+        return true;
+      }
+    }
+
+    if (transaction.items?.length) {
+      return transaction.items.some((item) =>
+        item.name.toLowerCase().includes(search),
+      );
+    }
+
+    return false;
   });
 }
 
-export function toFirestoreTransactionFilters(
+export function toServerTransactionFilters(
   filters: GlobalFilters,
-): FirestoreTransactionFilters {
+): ServerTransactionFilters {
   return {
     dateFrom: filters.dateFrom,
     dateTo: filters.dateTo,
@@ -134,20 +150,27 @@ export function toFirestoreTransactionFilters(
   };
 }
 
-export function applyFirestoreTransactionFilters(
+export function applyServerTransactionFilters(
   transactions: Transaction[],
-  filters: FirestoreTransactionFilters,
+  filters: ServerTransactionFilters,
 ) {
   const dateTo = filters.dateTo ? `${filters.dateTo}T23:59:59.999Z` : "";
 
   return transactions.filter((transaction) => {
-    if (filters.purposeId && transaction.purpose !== filters.purposeId) {
+    const transactionDate =
+      transaction.transactionDate ?? transaction.date ?? "";
+
+    if (filters.purposeId && transaction.purposeId !== filters.purposeId) {
       return false;
     }
     if (filters.transactionType && transaction.type !== filters.transactionType) {
       return false;
     }
-    if (filters.account && transaction.account !== filters.account) {
+    if (
+      filters.account &&
+      transaction.accountId !== filters.account &&
+      transaction.account !== filters.account
+    ) {
       return false;
     }
     if (filters.source) {
@@ -156,10 +179,10 @@ export function applyFirestoreTransactionFilters(
         return false;
       }
     }
-    if (filters.dateFrom && transaction.date < filters.dateFrom) {
+    if (filters.dateFrom && transactionDate < filters.dateFrom) {
       return false;
     }
-    if (dateTo && transaction.date > dateTo) {
+    if (dateTo && transactionDate > dateTo) {
       return false;
     }
     if (

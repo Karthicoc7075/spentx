@@ -1,20 +1,8 @@
 "use client";
 
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { getMemberPaidAndShare } from "@/lib/outings";
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { formatCurrency } from "@/lib/utils";
-import type { Outing, OutingExpense } from "@/types";
+import type { Outing, OutingExpense, OutingSettlement, TripMember } from "@/types";
 
 const CHART_COLORS = [
   "var(--chart-1)",
@@ -27,14 +15,11 @@ const CHART_COLORS = [
 type OutingAnalysisPanelProps = {
   outing: Outing;
   expenses: OutingExpense[];
-  totalSpent: number;
+  settlements: OutingSettlement[];
+  balances: Array<{ member: TripMember; balance: number }>;
 };
 
-export function OutingAnalysisPanel({
-  outing,
-  expenses,
-  totalSpent,
-}: OutingAnalysisPanelProps) {
+export function OutingAnalysisPanel({ expenses }: OutingAnalysisPanelProps) {
   const categoryData = [...new Set(expenses.map((item) => item.category))]
     .map((name) => ({
       name,
@@ -44,104 +29,62 @@ export function OutingAnalysisPanel({
     }))
     .sort((a, b) => b.value - a.value);
 
-  const memberData = outing.members.map((member) => {
-    const { paid, share } = getMemberPaidAndShare(member.id, expenses);
-    return { name: member.name, paid, share };
-  });
-
-  const currentMember =
-    outing.members.find((member) => member.isCurrentUser) ?? outing.members[0];
-  const personal = currentMember
-    ? getMemberPaidAndShare(currentMember.id, expenses)
-    : { paid: 0, share: 0 };
-
   return (
-    <div className="space-y-6">
-      <div className="rounded-2xl border bg-card p-6">
-        <h3 className="mb-1 font-semibold text-foreground">Your spending analysis</h3>
-        <p className="mb-5 text-sm text-muted-foreground">
-          How your payments compare to your fair share
-        </p>
-        <div className="mb-5 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-xl border border-border/50 bg-card p-4">
-            <p className="text-xs tracking-wide text-muted-foreground uppercase">
-              You paid
-            </p>
-            <p className="mt-1 text-xl font-semibold">
-              {formatCurrency(personal.paid)}
-            </p>
+    <div className="sx-surface p-6">
+      <h3 className="mb-1 font-semibold text-foreground">Category breakdown</h3>
+      <p className="mb-4 text-sm text-muted-foreground">
+        Where the group spent money
+      </p>
+      {categoryData.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No expenses yet.</p>
+      ) : (
+        <>
+          <div className="h-56">
+            <ResponsiveContainer height="100%" width="100%">
+              <PieChart>
+                <Pie
+                  cx="50%"
+                  cy="50%"
+                  data={categoryData}
+                  dataKey="value"
+                  innerRadius={50}
+                  nameKey="name"
+                  outerRadius={90}
+                >
+                  {categoryData.map((_, index) => (
+                    <Cell
+                      key={index}
+                      fill={CHART_COLORS[index % CHART_COLORS.length]}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
-          <div className="rounded-xl border border-border/50 bg-card p-4">
-            <p className="text-xs tracking-wide text-muted-foreground uppercase">
-              Your share
-            </p>
-            <p className="mt-1 text-xl font-semibold">
-              {formatCurrency(personal.share)}
-            </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {categoryData.map((item, index) => (
+              <div
+                key={item.name}
+                className="flex items-center justify-between gap-2 text-sm"
+              >
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <span
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: CHART_COLORS[index % CHART_COLORS.length],
+                    }}
+                  />
+                  <span className="truncate text-foreground">{item.name}</span>
+                </span>
+                <span className="shrink-0 font-medium text-muted-foreground">
+                  {formatCurrency(item.value)}
+                </span>
+              </div>
+            ))}
           </div>
-          <div className="rounded-xl border border-border/50 bg-card p-4">
-            <p className="text-xs tracking-wide text-muted-foreground uppercase">
-              Total spent
-            </p>
-            <p className="mt-1 text-xl font-semibold">
-              {formatCurrency(totalSpent)}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border bg-card p-6">
-          <h3 className="mb-4 font-semibold text-foreground">By category</h3>
-          {categoryData.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No expenses yet.</p>
-          ) : (
-            <div className="h-64">
-              <ResponsiveContainer height="100%" width="100%">
-                <PieChart>
-                  <Pie
-                    cx="50%"
-                    cy="50%"
-                    data={categoryData}
-                    dataKey="value"
-                    innerRadius={50}
-                    nameKey="name"
-                    outerRadius={90}
-                  >
-                    {categoryData.map((_, index) => (
-                      <Cell
-                        key={index}
-                        fill={CHART_COLORS[index % CHART_COLORS.length]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-2xl border bg-card p-6">
-          <h3 className="mb-4 font-semibold text-foreground">By member</h3>
-          {memberData.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No expenses yet.</p>
-          ) : (
-            <div className="h-64">
-              <ResponsiveContainer height="100%" width="100%">
-                <BarChart data={memberData}>
-                  <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-                  <Bar dataKey="paid" fill="var(--chart-1)" name="Paid" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="share" fill="var(--chart-3)" name="Share" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }

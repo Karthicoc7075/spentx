@@ -2,12 +2,17 @@ import {
   applyAnalyticsFilters,
   type AnalyticsFilterContext,
 } from "@/lib/analytics-filters";
+import { buildCategoryTotals } from "@/lib/category-totals";
 import {
+  isOutingRollupLike,
   isSpendingExpense,
+  isTransferTransaction,
   sumInvestments,
   sumSpendingExpenses,
 } from "@/lib/investments";
-import { getCurrentPlanMonth, sumPlanned } from "@/lib/plan";
+import { computeCategorySpentActuals, getCurrentPlanMonth, sumPlanned } from "@/lib/plan";
+import { narrowTransactionsToFilter } from "@/lib/utils";
+import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import type {
   AnalyticsFilters,
   AnalyticsHeroStats,
@@ -15,8 +20,16 @@ import type {
   GlobalFilters,
   MonthlyPlan,
   PlanComparisonSummary,
+  Purpose,
   Transaction,
 } from "@/types";
+
+export function toLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 export function getDateRangeForPreset(preset: AnalyticsFilters["datePreset"]) {
   const now = new Date();
@@ -35,8 +48,8 @@ export function getDateRangeForPreset(preset: AnalyticsFilters["datePreset"]) {
   }
 
   return {
-    dateFrom: start.toISOString().slice(0, 10),
-    dateTo: end.toISOString().slice(0, 10),
+    dateFrom: toLocalDateKey(start),
+    dateTo: toLocalDateKey(end),
   };
 }
 
@@ -76,14 +89,27 @@ export function filterAnalyticsTransactions(
   return applyAnalyticsFilters(transactions, filters, context);
 }
 
+// The Opening Balance transaction is always income-typed and is already
+// baked into account.openingBalance wherever that seed is added — excluding
+// it here keeps every income figure derived from sumByType free of
+// double-counting.
 function sumByType(transactions: Transaction[], type: Transaction["type"]) {
+  const scoped = transactions.filter(
+    (transaction) => transaction.category !== OPENING_BALANCE_CATEGORY,
+  );
+
   if (type === "expense") {
-    return sumSpendingExpenses(transactions);
+    return sumSpendingExpenses(scoped);
   }
 
-  return transactions
-    .filter((transaction) => transaction.type === type)
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+  // Settlements (internal transfers) must be excluded symmetrically with the
+  // expense side, or a transfer's income leg gets counted without its
+  // equal-and-opposite expense leg.
+  return scoped
+    .filter(
+      (transaction) => transaction.type === type && !isTransferTransaction(transaction),
+    )
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 export function computeHeroStats(transactions: Transaction[]): AnalyticsHeroStats {
@@ -144,14 +170,22 @@ function buildTrendBuckets(
   const buckets = new Map<string, TrendBucket>();
 
   for (const transaction of transactions) {
-    const date = new Date(transaction.date);
+    if (transaction.category === OPENING_BALANCE_CATEGORY) continue;
+    if (isTransferTransaction(transaction)) continue;
+    // Investment expenses count as cash outflow (same as Period Outflow).
+    if (isOutingRollupLike(transaction)) continue;
+    const amount = transaction.totalAmount ?? transaction.amount ?? 0;
+    if (amount <= 0 && transaction.type === "expense") continue;
+    const date = new Date(
+      transaction.transactionDate ?? transaction.date ?? Date.now(),
+    );
     const key =
       granularity === "weekly"
         ? getWeekKey(date)
         : date.toISOString().slice(0, 10);
     const bucket = buckets.get(key) ?? { income: 0, expense: 0 };
-    if (transaction.type === "income") bucket.income += transaction.amount;
-    else bucket.expense += transaction.amount;
+    if (transaction.type === "income") bucket.income += amount;
+    else if (transaction.type === "expense") bucket.expense += amount;
     buckets.set(key, bucket);
   }
 
@@ -191,22 +225,20 @@ function averageTrendSeries(
   });
 }
 
-function sumExpensesByCategory(transactions: Transaction[]) {
-  return transactions
-    .filter((transaction) => transaction.type === "expense")
-    .reduce((map, transaction) => {
-      map.set(
-        transaction.category,
-        (map.get(transaction.category) ?? 0) + transaction.amount,
-      );
-      return map;
-    }, new Map<string, number>());
+function categoryTotalsMap(
+  transactions: Transaction[],
+  categories: Category[],
+) {
+  return new Map(
+    buildCategoryTotals(transactions, categories).map((row) => [row.name, row.value]),
+  );
 }
 
 function getComparisonCategoryTotals(
   transactions: Transaction[],
   filters: AnalyticsFilters,
   context: AnalyticsFilterContext,
+  categories: Category[] = [],
 ) {
   if (!filters.compareMode) return new Map<string, number>();
 
@@ -214,10 +246,10 @@ function getComparisonCategoryTotals(
     const range = getPreviousCalendarMonthRange(filters);
     const prevExpenses = filterAnalyticsTransactions(
       transactions,
-      { ...filters, ...range, compareMode: "" },
+      { ...filters, ...range, compareMode: "", categories: [], categoryGroup: "" },
       context,
     );
-    return sumExpensesByCategory(prevExpenses);
+    return categoryTotalsMap(prevExpenses, categories);
   }
 
   const months = filters.compareMode === "avg-3-months" ? 3 : 6;
@@ -226,10 +258,10 @@ function getComparisonCategoryTotals(
   for (const range of getPriorCalendarMonthRanges(filters, months)) {
     const monthExpenses = filterAnalyticsTransactions(
       transactions,
-      { ...filters, ...range, compareMode: "" },
+      { ...filters, ...range, compareMode: "", categories: [], categoryGroup: "" },
       context,
     );
-    for (const [category, amount] of sumExpensesByCategory(monthExpenses)) {
+    for (const [category, amount] of categoryTotalsMap(monthExpenses, categories)) {
       totals.set(category, (totals.get(category) ?? 0) + amount);
     }
   }
@@ -343,10 +375,12 @@ export function computeMonthlyComparisonTimeline(
     let income = 0;
     let expense = 0;
     for (const transaction of purposeScoped) {
-      const date = transaction.date.slice(0, 10);
+      if (transaction.category === OPENING_BALANCE_CATEGORY) continue;
+      if (isTransferTransaction(transaction)) continue;
+      const date = transaction.transactionDate.slice(0, 10);
       if (date < range.dateFrom || date > range.dateTo) continue;
-      if (transaction.type === "income") income += transaction.amount;
-      else expense += transaction.amount;
+      if (transaction.type === "income") income += transaction.totalAmount;
+      else expense += transaction.totalAmount;
     }
 
     const [year, month] = range.dateFrom.split("-").map(Number);
@@ -383,59 +417,107 @@ export function computeCategoryBreakdown(
   filters: AnalyticsFilters,
   context: AnalyticsFilterContext = {},
 ) {
-  const expenses = transactions.filter((transaction) => transaction.type === "expense");
-  const total = expenses.reduce((sum, transaction) => sum + transaction.amount, 0);
-  const colorByName = new Map(categories.map((category) => [category.name, category.color]));
-  const totals = new Map<string, number>();
-
-  for (const transaction of expenses) {
-    totals.set(
-      transaction.category,
-      (totals.get(transaction.category) ?? 0) + transaction.amount,
-    );
-  }
+  const rows = buildCategoryTotals(transactions, categories);
+  const total = rows.reduce((sum, row) => sum + row.value, 0);
 
   const previousTotals = getComparisonCategoryTotals(
     allTransactions,
     filters,
     context,
+    categories,
   );
 
-  return [...totals.entries()]
-    .map(([name, value]) => {
-      const previous = previousTotals.get(name) ?? 0;
-      const trend =
-        previous === 0
-          ? value > 0
-            ? 100
-            : 0
-          : Math.round(((value - previous) / previous) * 100);
-      return {
-        name,
-        value,
-        color: colorByName.get(name) ?? "#64748b",
-        percent: total > 0 ? Math.round((value / total) * 100) : 0,
-        trend,
-      };
-    })
-    .sort((a, b) => b.value - a.value);
+  return rows.map((row) => {
+    const previous = previousTotals.get(row.name) ?? 0;
+    const trend =
+      previous === 0
+        ? row.value > 0
+          ? 100
+          : 0
+        : Math.round(((row.value - previous) / previous) * 100);
+    return {
+      name: row.name,
+      value: row.value,
+      color: row.color,
+      percent: total > 0 ? Math.round((row.value / total) * 100) : 0,
+      trend,
+    };
+  });
 }
 
-export function computeTopMerchants(transactions: Transaction[], limit = 10) {
+function merchantDisplayName(transaction: Transaction) {
+  const name = transaction.merchant?.trim();
+  if (name) return name;
+  const note = transaction.note?.trim();
+  if (note) return note;
+  if (transaction.category?.trim()) return transaction.category;
+  return "Unknown merchant";
+}
+
+function merchantTransactionAmount(transaction: Transaction) {
+  return transaction.totalAmount ?? transaction.amount ?? 0;
+}
+
+export function computeTopMerchants(
+  transactions: Transaction[],
+  categories: Category[] = [],
+  limit?: number,
+) {
   const totals = new Map<string, number>();
 
   for (const transaction of transactions) {
-    if (transaction.type !== "expense") continue;
-    totals.set(
-      transaction.merchant,
-      (totals.get(transaction.merchant) ?? 0) + transaction.amount,
-    );
+    if (!isSpendingExpense(transaction, categories)) continue;
+    const amount = merchantTransactionAmount(transaction);
+    if (amount <= 0) continue;
+    const merchant = merchantDisplayName(transaction);
+    totals.set(merchant, (totals.get(merchant) ?? 0) + amount);
   }
 
-  return [...totals.entries()]
+  const sorted = [...totals.entries()]
     .map(([merchant, amount]) => ({ merchant, amount }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, limit);
+    .sort((a, b) => b.amount - a.amount);
+
+  return limit ? sorted.slice(0, limit) : sorted;
+}
+
+const analysisPeriodPresetLabels: Record<
+  AnalyticsFilters["datePreset"],
+  string
+> = {
+  "this-month": "This month",
+  "last-month": "Last month",
+  "last-3-months": "Last 3 months",
+  "this-year": "This year",
+  custom: "Custom range",
+};
+
+export function formatAnalyticsPeriodLabel(filters: AnalyticsFilters) {
+  if (!filters.dateFrom || !filters.dateTo) {
+    return analysisPeriodPresetLabels[filters.datePreset] ?? "Selected period";
+  }
+
+  const from = new Date(`${filters.dateFrom}T12:00:00`);
+  const to = new Date(`${filters.dateTo}T12:00:00`);
+  const sameMonth =
+    from.getMonth() === to.getMonth() && from.getFullYear() === to.getFullYear();
+  const monthLabel = from.toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
+  const rangeLabel = `${from.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+  })} – ${to.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  })}`;
+
+  if (sameMonth) {
+    return `${monthLabel} (${rangeLabel})`;
+  }
+
+  return rangeLabel;
 }
 
 export function getPlanMonthFromFilters(filters: AnalyticsFilters) {
@@ -446,13 +528,18 @@ export function getPlanMonthFromFilters(filters: AnalyticsFilters) {
 }
 
 export function computeContributorBreakdown(transactions: Transaction[]) {
-  const income = transactions.filter((transaction) => transaction.type === "income");
-  const total = income.reduce((sum, transaction) => sum + transaction.amount, 0);
+  const income = transactions.filter(
+    (transaction) =>
+      transaction.type === "income" &&
+      transaction.category !== OPENING_BALANCE_CATEGORY &&
+      !isTransferTransaction(transaction),
+  );
+  const total = income.reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const totalsBySource = new Map<string, number>();
   for (const transaction of income) {
     const source = transaction.contributorSource || "Me";
-    totalsBySource.set(source, (totalsBySource.get(source) ?? 0) + transaction.amount);
+    totalsBySource.set(source, (totalsBySource.get(source) ?? 0) + transaction.totalAmount);
   }
 
   return [...totalsBySource.entries()]
@@ -465,20 +552,40 @@ export function computeContributorBreakdown(transactions: Transaction[]) {
     .sort((a, b) => b.amount - a.amount);
 }
 
+/**
+ * Scoped strictly to `plan.month` (and the plan's own purpose), never to
+ * whatever broader date range the Analysis page's own filters happen to
+ * have selected — otherwise a "last 3 months" filter would inflate actuals
+ * against a single month's allocations. Uses the same
+ * computeCategorySpentActuals the Plan page uses, so the two pages can
+ * never disagree on a given month's numbers.
+ */
 export function computePlanVsActual(
   transactions: Transaction[],
   plan: MonthlyPlan | null | undefined,
+  purposes: Purpose[] = [],
+  categories: Category[] = [],
+  filterCategories: string[] = [],
 ) {
   if (!plan) return [];
 
-  const expenses = transactions.filter((transaction) => transaction.type === "expense");
+  // narrowTransactionsToFilter (not a plain .filter) — a split expense must
+  // count only its matching split's amount toward this plan's purpose, not
+  // the whole transaction total; it also folds in the active global
+  // Category filter (if any) the same way every other Dashboard/Analysis
+  // number does.
+  const purposeTransactions = narrowTransactionsToFilter(
+    transactions,
+    { purposeId: plan.purposeId ?? "", categories: filterCategories },
+    purposes,
+  );
+  const categorySpentActuals = computeCategorySpentActuals(purposeTransactions, plan.month);
+  const colorByName = new Map(categories.map((category) => [category.name, category.color]));
 
-  return plan.allocations
+  const rows = plan.allocations
     .filter((allocation) => allocation.plannedAmount > 0)
     .map((allocation) => {
-      const actual = expenses
-        .filter((transaction) => transaction.category === allocation.category)
-        .reduce((sum, transaction) => sum + transaction.amount, 0);
+      const actual = categorySpentActuals[allocation.category] || 0;
       return {
         category: allocation.category,
         planned: allocation.plannedAmount,
@@ -486,8 +593,23 @@ export function computePlanVsActual(
         color: allocation.color,
         status: actual <= allocation.plannedAmount ? ("under" as const) : ("over" as const),
       };
-    })
-    .sort((a, b) => b.actual - a.actual);
+    });
+
+  // A category spent against this month with no (or zero) plan allocation
+  // is still real spending — surface it as "over" rather than dropping it.
+  const includedCategories = new Set(rows.map((row) => row.category));
+  for (const [category, actual] of Object.entries(categorySpentActuals)) {
+    if (actual <= 0 || includedCategories.has(category)) continue;
+    rows.push({
+      category,
+      planned: 0,
+      actual,
+      color: colorByName.get(category) ?? "#64748b",
+      status: "over" as const,
+    });
+  }
+
+  return rows.sort((a, b) => b.actual - a.actual);
 }
 
 export function computePlanComparisonSummary(
@@ -501,7 +623,7 @@ export function computePlanComparisonSummary(
 
   const actualTotal = transactions
     .filter((transaction) => transaction.type === "expense")
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const variancePercent = Math.round(
     ((actualTotal - plannedTotal) / plannedTotal) * 100,
@@ -560,9 +682,9 @@ export function computePlanAdherenceOverTime(
     const dayKey = date.toDateString();
     const daySpend = expenses
       .filter(
-        (transaction) => new Date(transaction.date).toDateString() === dayKey,
+        (transaction) => new Date(transaction.transactionDate).toDateString() === dayKey,
       )
-      .reduce((sum, transaction) => sum + transaction.amount, 0);
+      .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
     cumulativeActual += daySpend;
     const cumulativePlanned = dailyPlan * (index + 1);
@@ -609,10 +731,17 @@ export function computeDetailedStats(
     1,
     Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
   );
-  const expenses = filtered.filter((t) => t.type === "expense");
-  const incomes = filtered.filter((t) => t.type === "income");
-  const totalExpenses = expenses.reduce((sum, t) => sum + t.amount, 0);
-  const totalIncome = incomes.reduce((sum, t) => sum + t.amount, 0);
+  const expenses = filtered.filter(
+    (t) => t.type === "expense" && !isTransferTransaction(t),
+  );
+  const incomes = filtered.filter(
+    (t) =>
+      t.type === "income" &&
+      t.category !== OPENING_BALANCE_CATEGORY &&
+      !isTransferTransaction(t),
+  );
+  const totalExpenses = expenses.reduce((sum, t) => sum + t.totalAmount, 0);
+  const totalIncome = incomes.reduce((sum, t) => sum + t.totalAmount, 0);
   const netSavings = totalIncome - totalExpenses;
 
   const dailyAverageSpend =
@@ -620,7 +749,7 @@ export function computeDetailedStats(
 
   let largestExpense: Transaction | null = null;
   if (expenses.length > 0) {
-    largestExpense = expenses.reduce((max, t) => (t.amount > max.amount ? t : max), expenses[0]);
+    largestExpense = expenses.reduce((max, t) => (t.totalAmount > max.totalAmount ? t : max), expenses[0]);
   }
 
   const plannedTotal = plan
@@ -681,12 +810,12 @@ export function computeDetailedStats(
   ]);
   const upcomingBills = [...expenses]
     .filter((t) => billCategories.has(t.category))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime())
     .slice(0, 5)
     .map((t) => ({
       name: t.merchant,
-      amount: t.amount,
-      date: new Date(t.date).toLocaleDateString("en-IN", {
+      amount: t.totalAmount,
+      date: new Date(t.transactionDate).toLocaleDateString("en-IN", {
         day: "numeric",
         month: "short",
       }),
@@ -701,12 +830,12 @@ export function computeDetailedStats(
   let evening = 0;
   let night = 0;
   for (const t of expenses) {
-    const hr = new Date(t.date).getHours();
-    if (hr >= 6 && hr < 12) morning += t.amount;
-    else if (hr >= 12 && hr < 18) afternoon += t.amount;
-    else if (hr >= 18 && hr < 22) evening += t.amount;
-    else night += t.amount;
-    hourlyDistribution[hr].amount += t.amount;
+    const hr = new Date(t.transactionDate).getHours();
+    if (hr >= 6 && hr < 12) morning += t.totalAmount;
+    else if (hr >= 12 && hr < 18) afternoon += t.totalAmount;
+    else if (hr >= 18 && hr < 22) evening += t.totalAmount;
+    else night += t.totalAmount;
+    hourlyDistribution[hr].amount += t.totalAmount;
   }
 
   const timeOfDaySplit = [
@@ -719,9 +848,9 @@ export function computeDetailedStats(
   let weekdayTotal = 0;
   let weekendTotal = 0;
   for (const t of expenses) {
-    const day = new Date(t.date).getDay();
-    if (day === 0 || day === 6) weekendTotal += t.amount;
-    else weekdayTotal += t.amount;
+    const day = new Date(t.transactionDate).getDay();
+    if (day === 0 || day === 6) weekendTotal += t.totalAmount;
+    else weekdayTotal += t.totalAmount;
   }
 
   const daysOfWeek = [
@@ -735,8 +864,8 @@ export function computeDetailedStats(
   ];
   const daySpendMap = new Map<number, number>();
   for (const t of expenses) {
-    const day = new Date(t.date).getDay();
-    daySpendMap.set(day, (daySpendMap.get(day) ?? 0) + t.amount);
+    const day = new Date(t.transactionDate).getDay();
+    daySpendMap.set(day, (daySpendMap.get(day) ?? 0) + t.totalAmount);
   }
   let maxDayIdx = 0;
   let maxDaySpend = 0;
@@ -752,20 +881,20 @@ export function computeDetailedStats(
   const impulseTxns = expenses.filter(
     (t) =>
       ["Dining", "Shopping", "Entertainment"].includes(t.category) &&
-      t.amount > 1500,
+      t.totalAmount > 1500,
   );
   const impulseCount = impulseTxns.length;
-  const impulseTotal = impulseTxns.reduce((sum, t) => sum + t.amount, 0);
+  const impulseTotal = impulseTxns.reduce((sum, t) => sum + t.totalAmount, 0);
 
   const salaryTotal = incomes
     .filter((t) => t.category === "Salary")
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + t.totalAmount, 0);
   const freelanceTotal = incomes
     .filter((t) => t.category === "Freelance")
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + t.totalAmount, 0);
   const passiveTotal = incomes
     .filter((t) => !["Salary", "Freelance"].includes(t.category))
-    .reduce((sum, t) => sum + t.amount, 0);
+    .reduce((sum, t) => sum + t.totalAmount, 0);
 
   const totalIncSum = salaryTotal + freelanceTotal + passiveTotal;
   const salaryPercent =
@@ -800,8 +929,8 @@ export function computeDetailedStats(
   const accMap = new Map<string, number>();
   const payMap = new Map<string, number>();
   for (const t of expenses) {
-    if (t.account) {
-      accMap.set(t.account, (accMap.get(t.account) ?? 0) + t.amount);
+    if (t.accountName) {
+      accMap.set(t.accountName, (accMap.get(t.accountName) ?? 0) + t.totalAmount);
     }
     const pm =
       t.source === "mobile"
@@ -811,7 +940,7 @@ export function computeDetailedStats(
           : t.source === "manual"
             ? "Cash"
             : "Other";
-    payMap.set(pm, (payMap.get(pm) ?? 0) + t.amount);
+    payMap.set(pm, (payMap.get(pm) ?? 0) + t.totalAmount);
   }
 
   const accounts = [...accMap.entries()].map(([name, balance]) => ({
@@ -826,19 +955,19 @@ export function computeDetailedStats(
   }));
 
   const financialEvents = [...filtered]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort((a, b) => new Date(b.transactionDate).getTime() - new Date(a.transactionDate).getTime())
     .map((t) => {
       let title = `${t.category} at ${t.merchant}`;
       if (t.category === "Salary") title = "Salary Credited";
       else if (t.category === "Rent") title = "Rent Paid";
-      else if (t.amount > 5000) title = `Large Purchase: ${t.merchant}`;
+      else if (t.totalAmount > 5000) title = `Large Purchase: ${t.merchant}`;
 
       return {
         id: t.id,
         title,
         category: t.category,
-        amount: t.amount,
-        date: new Date(t.date).toLocaleDateString("en-IN", {
+        amount: t.totalAmount,
+        date: new Date(t.transactionDate).toLocaleDateString("en-IN", {
           day: "numeric",
           month: "short",
         }),
@@ -854,22 +983,22 @@ export function computeDetailedStats(
     amount: number;
   }> = [];
   for (const t of expenses) {
-    if (t.amount > 10000 && t.category !== "Rent") {
+    if (t.totalAmount > 10000 && t.category !== "Rent") {
       anomalies.push({
         id: t.id,
-        message: `High value transaction of ₹${t.amount.toLocaleString("en-IN")} at ${t.merchant}`,
+        message: `High value transaction of ₹${t.totalAmount.toLocaleString("en-IN")} at ${t.merchant}`,
         severity: "high",
-        amount: t.amount,
+        amount: t.totalAmount,
       });
     } else if (
-      t.amount > 3000 &&
+      t.totalAmount > 3000 &&
       ["Dining", "Shopping", "Entertainment"].includes(t.category)
     ) {
       anomalies.push({
         id: t.id,
-        message: `Discretionary spike: ₹${t.amount.toLocaleString("en-IN")} at ${t.merchant}`,
+        message: `Discretionary spike: ₹${t.totalAmount.toLocaleString("en-IN")} at ${t.merchant}`,
         severity: "medium",
-        amount: t.amount,
+        amount: t.totalAmount,
       });
     }
   }

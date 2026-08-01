@@ -2,11 +2,14 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { fetchTransactions } from "@/lib/firebase";
+import { fetchSharedTransactions, fetchTransactions } from "@/lib/supabase-data";
 import { withoutMockTransactions } from "@/lib/mock-data";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useAppData } from "@/providers/app-data-provider";
+import { useShareSession } from "@/providers/share-provider";
+import { useViewerAccess } from "@/providers/viewer-provider";
+import { compareTransactionsNewestFirst } from "@/lib/utils";
 import type { Transaction } from "@/types";
 
 function mergeTransactions(...groups: Transaction[][]) {
@@ -18,11 +21,14 @@ function mergeTransactions(...groups: Transaction[][]) {
     }
   }
 
-  return [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
+  return [...merged.values()].sort(compareTransactionsNewestFirst);
 }
 
 export function useTransactions() {
   const { user, isConfigured, isReady } = useAuthReady();
+  const { dataOwnerId } = useViewerAccess();
+  const share = useShareSession();
+  const effectiveUserId = dataOwnerId ?? user?.id;
   const queryClient = useQueryClient();
   const {
     transactions: liveTransactions,
@@ -37,11 +43,16 @@ export function useTransactions() {
   } = useAppData();
 
   const query = useQuery({
-    queryKey: queryKeys.transactions(user?.id),
+    queryKey: share
+      ? queryKeys.sharedTransactions(share.token)
+      : queryKeys.transactions(effectiveUserId),
     queryFn: async () =>
-      withoutMockTransactions(await fetchTransactions(user?.id)),
-    enabled: Boolean(user?.id && (isReady || !isConfigured)),
+      share
+        ? fetchSharedTransactions(share.token, share.purposeId)
+        : withoutMockTransactions(await fetchTransactions(effectiveUserId)),
+    enabled: Boolean(share) || Boolean(effectiveUserId && (isReady || !isConfigured)),
     refetchOnMount: "always",
+    refetchInterval: share ? 45_000 : undefined,
     staleTime: 0,
   });
 
@@ -63,7 +74,7 @@ export function useTransactions() {
     reloadTransactions: async () => {
       await reloadTransactions();
       await queryClient.invalidateQueries({
-        queryKey: queryKeys.transactions(user?.id),
+        queryKey: queryKeys.transactions(effectiveUserId),
       });
     },
     lastSyncedAt,

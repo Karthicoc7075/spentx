@@ -10,14 +10,14 @@ function getMonthlyFoodSpend(transactions: Transaction[]) {
   return transactions
     .filter((transaction) => {
       if (transaction.type !== "expense") return false;
-      const date = new Date(transaction.date);
+      const date = new Date(transaction.transactionDate);
       return (
         date.getMonth() === now.getMonth() &&
         date.getFullYear() === now.getFullYear() &&
         ["Food", "Dining", "Groceries"].includes(transaction.category)
       );
     })
-    .reduce((sum, transaction) => sum + transaction.amount, 0);
+    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 }
 
 export function buildGrowthSuggestions({
