@@ -157,7 +157,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { isConfigured, isLoading, user, authUser } = useSupabaseAuth();
   const { isReadOnlyViewer, sharedPurposeIds } = useViewerAccess();
   const [authTimedOut, setAuthTimedOut] = useState(false);
-  const { isAdmin, isLoading: isAdminLoading } = useIsAdmin();
+  const { isAdmin } = useIsAdmin();
   const { resolvedTheme, setTheme } = useTheme();
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -363,11 +363,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
         </div>
 
-        {isAdminLoading ? (
-          <nav className="mt-7 grid gap-1 px-3 text-xs text-muted-foreground">
-            Loading…
-          </nav>
-        ) : isAdmin ? (
+        {isAdmin ? (
           <nav className="mt-6 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
             <div className="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
               ADMINISTRATION
@@ -420,14 +416,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               {getPageTitle(pendingPath ?? pathname)}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
-              {!isReadOnlyViewer && !isAdmin && !isAdminLoading ? (
+              {!isReadOnlyViewer && !isAdmin ? (
                 <div className="mr-1 hidden sm:block">
                   <ExportButton />
                 </div>
               ) : null}
-              {!isAdmin && !isAdminLoading ? (
-                <NotificationBell />
-              ) : null}
+              {!isAdmin ? <NotificationBell /> : null}
               <button
                 type="button"
                 onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}

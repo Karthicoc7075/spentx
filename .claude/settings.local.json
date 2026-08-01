@@ -70,7 +70,9 @@
       "Bash(adb -s 192.168.0.141:37337 shell input text \"123456\")",
       "Bash(adb -s 192.168.0.141:37337 shell run-as com.spentx.app.spentx)",
       "Bash(adb -s 192.168.0.141:37337 shell pm list packages)",
-      "Bash(adb *)"
+      "Bash(adb *)",
+      "Bash(awk -F= '/^NEXT_PUBLIC_SUPABASE_ANON_KEY/{print length\\($2\\)}' \"/Users/karthi/Documents/SpentX Web/spentx-web copy 3/.env.local\")",
+      "Bash(awk -F= '/^SUPABASE_SERVICE_ROLE_KEY/{print length\\($2\\)}' \"/Users/karthi/Documents/SpentX Web/spentx-web copy 3/.env.local\")"
     ]
   }
 }
