@@ -22,8 +22,11 @@ export async function GET(request: Request) {
   if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      if (next === "/auth/reset-password") {
+      if (next === "/auth/reset-password" || type === "recovery") {
         return NextResponse.redirect(`${origin}/auth/reset-password`);
+      }
+      if (next === "/") {
+        return NextResponse.redirect(`${origin}/auth/verified?status=success`);
       }
       return NextResponse.redirect(`${origin}${next}`);
     }
@@ -39,18 +42,11 @@ export async function GET(request: Request) {
         return NextResponse.redirect(`${origin}/auth/reset-password`);
       }
       if (type === "signup" || type === "email") {
-        return NextResponse.redirect(`${origin}/?verified=1`);
+        return NextResponse.redirect(`${origin}/auth/verified?status=success`);
       }
       return NextResponse.redirect(`${origin}${next}`);
     }
   }
 
-  const authError = requestUrl.searchParams.get("error_description")
-    ?? requestUrl.searchParams.get("error");
-  const signInUrl = new URL("/auth/sign-in", origin);
-  signInUrl.searchParams.set("error", "auth_callback_error");
-  if (authError) {
-    signInUrl.searchParams.set("message", authError);
-  }
-  return NextResponse.redirect(signInUrl.toString());
+  return NextResponse.redirect(`${origin}/auth/verified?status=error`);
 }

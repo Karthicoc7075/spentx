@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,6 @@ import { useToast } from "@/providers/toast-provider";
 
 export function SignInForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { notify } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -30,33 +29,6 @@ export function SignInForm() {
   const [isResending, setIsResending] = useState(false);
   const [showResendVerification, setShowResendVerification] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<SignInFieldErrors>({});
-  const handledQueryRef = useRef(false);
-
-  useEffect(() => {
-    if (handledQueryRef.current) return;
-
-    if (searchParams.get("verified") === "1") {
-      handledQueryRef.current = true;
-      notify({
-        title: "Email verified",
-        description: "Your email is confirmed. Sign in to continue.",
-      });
-      router.replace("/auth/sign-in");
-      return;
-    }
-
-    if (searchParams.get("error") === "auth_callback_error") {
-      handledQueryRef.current = true;
-      notify({
-        title: "Verification link expired",
-        description:
-          searchParams.get("message") ??
-          "Request a new verification email and try again.",
-        variant: "destructive",
-      });
-      router.replace("/auth/sign-in");
-    }
-  }, [notify, router, searchParams]);
 
   async function handleResendVerification() {
     const trimmedEmail = email.trim();

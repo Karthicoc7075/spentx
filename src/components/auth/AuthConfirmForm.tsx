@@ -61,7 +61,7 @@ export function AuthConfirmForm() {
       }
 
       if (type === "signup" || type === "email" || type === "magiclink") {
-        router.replace("/?verified=1");
+        router.replace("/auth/verified?status=success");
         return;
       }
 

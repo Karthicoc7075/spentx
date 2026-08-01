@@ -28,10 +28,9 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode, Suspense, useEffect, useState, useTransition } from "react";
+import { ReactNode, useEffect, useState, useTransition } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { AuthQueryEffects } from "@/components/shared/AuthQueryEffects";
 import { ExportButton } from "@/components/shared/ExportButton";
 import { NotificationBell } from "@/components/shared/NotificationBell";
 import { SupabaseSetupScreen } from "@/components/shared/SupabaseSetupScreen";
@@ -242,14 +241,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (isAuthRoute || isShareRoute) {
-    return (
-      <>
-        <Suspense fallback={null}>
-          <AuthQueryEffects />
-        </Suspense>
-        {children}
-      </>
-    );
+    return <>{children}</>;
   }
 
   const shouldShowAuth = !user && (!isLoading || authTimedOut) && !authUser;
@@ -325,9 +317,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     // share one row so content height matches the padded viewport (no extra
     // bottom scroll or content jumping under the header).
     <div className="flex h-dvh overflow-hidden bg-page text-foreground lg:gap-0 lg:p-3">
-      <Suspense fallback={null}>
-        <AuthQueryEffects />
-      </Suspense>
       {sidebarOpen ? (
         <div
           aria-hidden
