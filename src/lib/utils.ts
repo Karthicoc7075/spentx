@@ -320,7 +320,20 @@ export function matchingTransactionSplits(
 ): MatchedSplitRow[] {
   const filterActive = filters.categories.length > 0 || Boolean(filters.purposeId);
   if (!filterActive) {
-    return [{ amount: transactionMoney(transaction) }];
+    if (hasMultiSplit(transaction)) {
+      return transaction.splits!.map((split) => ({
+        amount: split.amount,
+        categoryId: split.categoryId,
+        purposeId: split.purposeId,
+      }));
+    }
+    return [
+      {
+        amount: transactionMoney(transaction),
+        categoryId: transaction.category,
+        purposeId: transaction.purposeId ?? transaction.purpose,
+      },
+    ];
   }
 
   if (!hasMultiSplit(transaction)) {
@@ -349,11 +362,6 @@ export function matchingTransactionSplits(
  * split's own amount/category/purpose — so category-based aggregation
  * (Top Categories, Category Breakdown) still attributes each slice
  * correctly instead of collapsing them into one row under one category.
- *
- * No-op when no Purpose/Category filter is active, and for any transaction
- * that isn't a real multi-split — those are returned unchanged so callers
- * with their own split-aware logic (e.g. buildCategoryTotals) keep working
- * off the real `splits` array exactly as before.
  */
 export function narrowTransactionsToFilter(
   transactions: Transaction[],
@@ -361,7 +369,30 @@ export function narrowTransactionsToFilter(
   purposes: Purpose[] = [],
 ): Transaction[] {
   const filterActive = filters.categories.length > 0 || Boolean(filters.purposeId);
-  if (!filterActive) return transactions;
+  if (!filterActive) {
+    const result: Transaction[] = [];
+    for (const transaction of transactions) {
+      if (!hasMultiSplit(transaction)) {
+        result.push(transaction);
+        continue;
+      }
+
+      transaction.splits!.forEach((split, index) => {
+        result.push({
+          ...transaction,
+          id: `${transaction.id}::split:${index}`,
+          amount: split.amount,
+          totalAmount: split.amount,
+          category: split.categoryId || transaction.category,
+          purpose: split.purposeId || transaction.purpose,
+          purposeId: split.purposeId || transaction.purposeId,
+          hasSplits: false,
+          splits: undefined,
+        });
+      });
+    }
+    return result;
+  }
 
   const result: Transaction[] = [];
   for (const transaction of transactions) {
@@ -388,6 +419,7 @@ export function narrowTransactionsToFilter(
   }
   return result;
 }
+
 
 /** Sum of the split rows matching the active Category/Purpose filters — the
  * total when no such filter is active, the matched slice(s) otherwise. */

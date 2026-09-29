@@ -62,6 +62,31 @@ export function writeQueryCache(
   }
 }
 
+/** Drops every browser copy of account data. Theme is left alone. */
+export function clearBrowserUserCache() {
+  if (typeof window === "undefined") return;
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith("spentx-cache:") ||
+        key.startsWith("spentx:") ||
+        key === "spentx_cached_user" ||
+        key === "spentx-dashboard-kpi-config" ||
+        key === "spentx-last-auto-backup"
+      ) {
+        keys.push(key);
+      }
+    }
+    for (const key of keys) window.localStorage.removeItem(key);
+    window.localStorage.setItem("spentx_has_session", "false");
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
 export function removeQueryCache(userId: string | undefined, key: string) {
   if (!userId || typeof window === "undefined") return;
 

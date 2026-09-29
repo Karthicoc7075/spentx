@@ -11,21 +11,32 @@ import { usePathname } from "next/navigation";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 
+import { useEffect, useRef } from "react";
+
 export function usePurposeShares() {
   const pathname = usePathname();
   const isBypassedRoute = pathname.startsWith("/share") || pathname.startsWith("/admin");
   const { user, isConfigured, isReady } = useAuthReady();
   const queryClient = useQueryClient();
+  const linkedSessionRef = useRef<string | null>(null);
+
+  // Link claimed pending shares once per signed-in user session
+  useEffect(() => {
+    if (!user?.id || !user.email || linkedSessionRef.current === user.id) return;
+    linkedSessionRef.current = user.id;
+    void linkPurposeSharesForViewer(user.id, user.email).then(() => {
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.purposeShares(user.id),
+      });
+    }).catch(() => {
+      // Non-fatal
+    });
+  }, [user?.id, user?.email, queryClient]);
 
   const query = useQuery({
     queryKey: queryKeys.purposeShares(user?.id),
     queryFn: async () => {
       if (!user?.id || !user.email) return [];
-      try {
-        await linkPurposeSharesForViewer(user.id, user.email);
-      } catch {
-        // Non-fatal: viewer linking can fail before invite policies are applied.
-      }
       return fetchPurposeShares(user.id, user.email);
     },
     enabled: (isReady || !isConfigured) && Boolean(user?.id && user.email) && !isBypassedRoute,
@@ -37,6 +48,7 @@ export function usePurposeShares() {
     linkToken?: string,
     contributorId?: string | null,
     expiresAt?: string | null,
+    kind?: "link" | "email",
   ) {
     const share = await createPurposeShare(
       user?.id,
@@ -45,6 +57,7 @@ export function usePurposeShares() {
       linkToken,
       contributorId,
       expiresAt,
+      kind,
     );
     await queryClient.invalidateQueries({
       queryKey: queryKeys.purposeShares(user?.id),

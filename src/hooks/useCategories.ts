@@ -2,12 +2,13 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCustomCategories, fetchGlobalSettings } from "@/lib/supabase-data";
+import { fetchCustomCategories, fetchGlobalSettings, fetchSharedCategories } from "@/lib/supabase-data";
 import { defaultCategories } from "@/lib/mock-data";
 import { cacheKeys, readQueryCache, writeQueryCache } from "@/lib/query-cache";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useViewerAccess } from "@/providers/viewer-provider";
+import { useShareSession } from "@/providers/share-provider";
 import type { Category, DefaultCategory } from "@/types";
 
 const FALLBACK_GLOBAL: Category[] = defaultCategories.map((c) => ({
@@ -34,16 +35,14 @@ function mapGlobalDefaults(list: DefaultCategory[]): Category[] {
 }
 
 /**
- * FIRESTORE_REBUILD_SPEC Step 7 — merged category list:
- *   globalSettings.defaultCategories (admin-owned, shared)
- *   + this user's own `categories` docs (custom).
- * Each merged entry carries `source: "global" | "custom"` so Settings can hide
- * edit/delete affordances on global ones. Consumers see the same combined
- * shape as before, so no component markup changes.
+ * Merged category list:
+ * - Signed-in / owner view: globalSettings.defaultCategories + user's custom categories
+ * - Shared viewer: globalSettings.defaultCategories + custom categories on that token's splits
  */
 export function useCategories() {
   const { user, isConfigured, isReady } = useAuthReady();
   const { dataOwnerId } = useViewerAccess();
+  const share = useShareSession();
   const effectiveUserId = dataOwnerId ?? user?.id;
 
   const globalQuery = useQuery<Category[]>({
@@ -68,32 +67,58 @@ export function useCategories() {
       writeQueryCache(effectiveUserId, cacheKeys.categories, tagged);
       return tagged;
     },
-    enabled: (isReady || !isConfigured) && Boolean(effectiveUserId),
+    enabled: !share && (isReady || !isConfigured) && Boolean(effectiveUserId),
     placeholderData: (previousData) => {
+      if (share) return [];
       if (previousData !== undefined) return previousData;
       return readQueryCache<Category[]>(effectiveUserId, cacheKeys.categories) ?? [];
     },
     staleTime: 60_000,
   });
 
+  const sharedQuery = useQuery<Category[]>({
+    queryKey: queryKeys.sharedCategories(share?.token ?? ""),
+    queryFn: async (): Promise<Category[]> => {
+      if (!share?.token) return [];
+      return fetchSharedCategories(share.token);
+    },
+    enabled: Boolean(share?.token),
+    staleTime: 60_000,
+  });
+
   const globalDefaults = globalQuery.data;
   const customData = customQuery.data;
+  const sharedData = sharedQuery.data;
 
   const categories = useMemo(() => {
     const defaults = globalDefaults ?? FALLBACK_GLOBAL;
-    const custom = customData ?? [];
     const byKey = new Map<string, Category>();
     for (const cat of defaults) byKey.set(cat.id, cat);
+
+    if (share) {
+      for (const cat of sharedData ?? []) {
+        byKey.set(cat.id, { ...cat, source: "custom" });
+      }
+      return [...byKey.values()];
+    }
+
+    const custom = customData ?? [];
     for (const cat of custom) byKey.set(cat.id, cat);
     return [...byKey.values()];
-  }, [globalDefaults, customData]);
+  }, [share, globalDefaults, customData, sharedData]);
 
   return {
     categories,
-    isLoading:
-      (globalQuery.isPending && globalQuery.data === undefined) ||
-      (customQuery.isPending && customQuery.data === undefined),
-    isRefreshing: globalQuery.isFetching || customQuery.isFetching,
-    error: globalQuery.error ?? customQuery.error,
+    isLoading: share
+      ? (globalQuery.isPending && globalQuery.data === undefined) ||
+        (sharedQuery.isPending && sharedQuery.data === undefined)
+      : (globalQuery.isPending && globalQuery.data === undefined) ||
+        (customQuery.isPending && customQuery.data === undefined),
+    isRefreshing: share
+      ? globalQuery.isFetching || sharedQuery.isFetching
+      : globalQuery.isFetching || customQuery.isFetching,
+    error: share
+      ? globalQuery.error ?? sharedQuery.error
+      : globalQuery.error ?? customQuery.error,
   };
 }

@@ -148,6 +148,22 @@ export function computeCategorySpentActuals(
       transaction.type === "expense" &&
       !isTransferTransaction(transaction)
     ) {
+      if (transaction.hasSplits && (transaction.splits?.length ?? 0) > 1) {
+        for (const split of transaction.splits!) {
+          if (split.amount <= 0) continue;
+          const isOuting =
+            split.categoryId === "Outings" ||
+            split.categoryId === "Outing" ||
+            Boolean(split.outingId) ||
+            Boolean(transaction.outingId) ||
+            (Array.isArray(transaction.tags) && transaction.tags.includes("outing"));
+
+          const categoryKey = isOuting ? "Outings" : split.categoryId;
+          map[categoryKey] = (map[categoryKey] || 0) + split.amount;
+        }
+        return;
+      }
+
       const isOuting =
         transaction.category === "Outings" ||
         transaction.category === "Outing" ||
@@ -155,11 +171,14 @@ export function computeCategorySpentActuals(
         (Array.isArray(transaction.tags) && transaction.tags.includes("outing"));
 
       const categoryKey = isOuting ? "Outings" : transaction.category;
-      map[categoryKey] = (map[categoryKey] || 0) + transaction.amount;
+      map[categoryKey] =
+        (map[categoryKey] || 0) +
+        (transaction.amount ?? transaction.totalAmount ?? 0);
     }
   });
   return map;
 }
+
 
 export function sumPlannedForBuffer(allocations: PlanAllocation[]) {
   return allocations.reduce((sum, item) => {

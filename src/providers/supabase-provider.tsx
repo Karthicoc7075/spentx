@@ -22,6 +22,7 @@ import {
   setProfileSavedListener,
   subscribeToUserRevoked,
 } from "@/lib/supabase-data";
+import { clearBrowserUserCache } from "@/lib/query-cache";
 import type { User } from "@/types";
 
 type AuthContextValue = {
@@ -351,6 +352,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       // every refresh token this account holds, killing the user's other
       // devices (mobile included) as a side effect.
       await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      clearBrowserUserCache();
       if (typeof window !== "undefined") {
         window.location.href = "/auth/sign-in";
       }

@@ -84,7 +84,7 @@ export function TransactionsPage() {
   const { data: userProfile } = useQuery({
     queryKey: ["user-profile-joined", user?.id],
     queryFn: () => fetchUserProfile(user?.id),
-    enabled: Boolean(user?.id),
+    enabled: !share && !isReadOnlyViewer && Boolean(user?.id),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -105,7 +105,6 @@ export function TransactionsPage() {
     isLoading: transactionsLoading,
     isMutating,
     updateTransaction,
-    refetchTransactions,
   } = useTransactions();
   // Live outing expense totals — rollup row amount must match outing detail
   // (e.g. "test" ₹8,788), not a stale first-expense amount on the ledger row.
@@ -138,12 +137,6 @@ export function TransactionsPage() {
       timers.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
-
-  useEffect(() => {
-    if (user?.id) {
-      void refetchTransactions();
-    }
-  }, [refetchTransactions, user?.id]);
 
   // Settlement rows (both directions) stay visible here — the ledger is where
   // users check "did that repayment get recorded?". They're still excluded

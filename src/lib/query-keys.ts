@@ -5,6 +5,7 @@ export const queryKeys = {
   purposes: (userId?: string) => ["purposes", userId] as const,
   transactions: (userId?: string) => ["transactions", userId] as const,
   sharedTransactions: (token: string) => ["sharedTransactions", token] as const,
+  sharedCategories: (token: string) => ["sharedCategories", token] as const,
   sharedPersonalAccounts: (token: string) =>
     ["sharedPersonalAccounts", token] as const,
   sharedPurposes: (token: string) => ["sharedPurposes", token] as const,

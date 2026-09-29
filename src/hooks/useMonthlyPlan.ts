@@ -29,6 +29,7 @@ import {
   PERSONAL_PURPOSE_ID,
   transactionMatchesPurpose,
 } from "@/lib/purposes";
+import { narrowTransactionsToFilter } from "@/lib/utils";
 import { queryKeys } from "@/lib/query-keys";
 import { useCategories } from "@/hooks/useCategories";
 import { usePurposes } from "@/hooks/usePurposes";
@@ -107,8 +108,10 @@ export function useMonthlyPlan(
 
   const purposeTransactions = useMemo(
     () =>
-      allTransactions.filter((transaction) =>
-        transactionMatchesPurpose(transaction.purpose, purposeId, purposes),
+      narrowTransactionsToFilter(
+        allTransactions,
+        { purposeId, categories: [] },
+        purposes,
       ),
     [allTransactions, purposeId, purposes],
   );

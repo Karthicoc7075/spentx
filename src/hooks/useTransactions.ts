@@ -58,9 +58,9 @@ export function useTransactions() {
         ? fetchSharedTransactions(share.token, share.purposeId)
         : withoutMockTransactions(await fetchTransactions(effectiveUserId)),
     enabled: Boolean(share) || Boolean(effectiveUserId && (isReady || !isConfigured)),
-    refetchOnMount: "always",
-    refetchInterval: share ? 45_000 : undefined,
-    staleTime: 0,
+    refetchOnMount: share ? "always" : false,
+    refetchOnWindowFocus: Boolean(share),
+    staleTime: share ? 0 : 10 * 60 * 1000,
   });
 
   const transactions = useMemo(

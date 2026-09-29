@@ -54,8 +54,9 @@ export function SharingTab() {
   const [isInviting, setIsInviting] = useState(false);
   const [createdLink, setCreatedLink] = useState<{
     url: string;
-    email: string;
-    emailSent: boolean;
+    email?: string;
+    emailSent?: boolean;
+    kind: "link" | "email";
   } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [shareToRevoke, setShareToRevoke] = useState<{
@@ -69,9 +70,7 @@ export function SharingTab() {
   const ownedShares = useMemo(
     () =>
       getOwnedShares(shares, user?.id).filter(
-        (share) =>
-          !(share.linkToken && share.viewerUid) &&
-          share.status !== "revoked",
+        (share) => share.status !== "revoked",
       ),
     [shares, user?.id],
   );
@@ -88,9 +87,12 @@ export function SharingTab() {
     }
 
     if (shareMethod === "link") {
-      // Rule 1: Maximum 3 active share links per purpose
+      // Rule 1: Maximum 3 active share links per purpose (counts kind = 'link' and status <> 'revoked')
       const activePurposeLinks = ownedShares.filter(
-        (share) => share.purposeId === purposeId && share.status !== "revoked"
+        (share) =>
+          (share.kind === "link" || !share.viewerEmail || share.viewerEmail.startsWith("link-share-")) &&
+          share.purposeId === purposeId &&
+          share.status !== "revoked",
       );
 
       if (activePurposeLinks.length >= 3) {
@@ -107,18 +109,16 @@ export function SharingTab() {
       try {
         const purposeName = getPurposeLabel(purposeId, purposes);
         const expiresAt = computeShareExpiresAt(expiryPreset);
-        const placeholderEmail = `link-share-${Date.now().toString().slice(-4)}@spentx.app`;
 
         const token = await getOrCreateShareLink({
           ownerId: user?.id,
           purposeId,
           purposeName,
-          viewerEmail: placeholderEmail,
           contributorId: contributorId || null,
           expiresAt,
         });
 
-        await inviteViewer(placeholderEmail, purposeId, token, contributorId || null, expiresAt);
+        await inviteViewer("", purposeId, token, contributorId || null, expiresAt, "link");
         const shareUrl = `${window.location.origin}/share/${token}`;
 
         notify({
@@ -131,7 +131,7 @@ export function SharingTab() {
         setContributorId("");
         setExpiryPreset("always");
         setLinkCopied(false);
-        setCreatedLink({ url: shareUrl, email: placeholderEmail, emailSent: false });
+        setCreatedLink({ url: shareUrl, kind: "link" });
       } catch (error) {
         notify({
           title: "Link generation failed",
@@ -208,7 +208,7 @@ export function SharingTab() {
       setContributorId("");
       setExpiryPreset("always");
       setLinkCopied(false);
-      setCreatedLink({ url: shareUrl, email, emailSent });
+      setCreatedLink({ url: shareUrl, email, emailSent, kind: "email" });
     } catch (error) {
       notify({
         title: "Invite failed",
@@ -275,7 +275,10 @@ export function SharingTab() {
       await removeShare(id, revokePurposeId, email);
       notify({
         title: "Access revoked",
-        description: `${email} can no longer view shared data.`,
+        description:
+          email && !email.startsWith("link-share-")
+            ? `${email} can no longer view shared data.`
+            : "Share link has been revoked.",
       });
       setShareToRevoke(null);
     } catch (error) {
@@ -339,7 +342,11 @@ export function SharingTab() {
                 <TableBody>
                   {ownedShares.map((share) => (
                     <TableRow key={share.id}>
-                      <TableCell className="font-medium">{share.viewerEmail}</TableCell>
+                      <TableCell className="font-medium">
+                        {share.kind === "link" || share.viewerEmail.startsWith("link-share-")
+                          ? "View link"
+                          : share.viewerEmail}
+                      </TableCell>
                       <TableCell>
                         {getPurposeLabel(share.purposeId, purposes)}
                       </TableCell>
@@ -559,7 +566,9 @@ export function SharingTab() {
           <DialogHeader>
             <DialogTitle>View-only link ready</DialogTitle>
             <DialogDescription>
-              {createdLink?.emailSent
+              {createdLink?.kind === "link"
+                ? "Your view-only link is ready. Anyone with this link can view transactions for this purpose."
+                : createdLink?.emailSent
                 ? `The link was emailed to ${createdLink?.email}. You can also copy and share it directly.`
                 : `The invite email to ${createdLink?.email} couldn't be sent — copy the link below and share it with them.`}
             </DialogDescription>
@@ -609,8 +618,9 @@ export function SharingTab() {
           <DialogHeader>
             <DialogTitle>Revoke access?</DialogTitle>
             <DialogDescription>
-              {shareToRevoke?.email} will no longer be able to view the shared
-              purpose. You can re-invite them at any time.
+              {shareToRevoke?.email && !shareToRevoke.email.startsWith("link-share-")
+                ? `${shareToRevoke.email} will no longer be able to view the shared purpose. You can re-invite them at any time.`
+                : "This view link will be deactivated immediately. Anyone with the link will no longer be able to view the shared purpose."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -18,7 +18,6 @@ import {
   deleteTransaction,
   updateTransaction,
   fetchAccounts,
-  fetchCategories,
   fetchPurposes,
   fetchTransactions,
   saveOuting,
@@ -330,11 +329,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         queryKeys.accounts(dataUserId),
         cacheKeys.accounts,
         () => fetchAccounts(dataUserId),
-      ),
-      prefetchWithCache(
-        queryKeys.categories(dataUserId),
-        cacheKeys.categories,
-        () => fetchCategories(dataUserId),
       ),
       prefetchWithCache(
         queryKeys.purposes(dataUserId),

@@ -124,6 +124,10 @@ export type Transaction = {
   updatedAt?: string;
   /** Who contributed income — Home/Family income only */
   contributorSource?: ContributorSource;
+  /** When represented as an individual split (e.g. from shared purpose views) */
+  splitId?: string;
+  /** Parent transaction ID if this row represents an uncollapsed split */
+  parentTransactionId?: string;
 };
 
 export type Account = {
@@ -223,6 +227,7 @@ export type PurposeShare = {
   /** spec §2.15 */
   expiresAt?: string;
   status: PurposeShareStatus;
+  kind?: "link" | "email";
   /** Denormalized rollup of shareAccessLogs (spec §2.15) — updated atomically
    * alongside each shareAccessLogs write via logShareAccess(). */
   lastViewedAt?: string;

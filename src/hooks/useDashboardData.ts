@@ -67,23 +67,17 @@ export function useDashboardData() {
   const sharedAccountsQuery = useQuery({
     queryKey: queryKeys.sharedPersonalAccounts(share?.token ?? ""),
     queryFn: () => fetchSharedPersonalAccounts(share!.token),
-    enabled: personalShare && !accountsLoading && accounts.length === 0,
+    enabled: Boolean(share && personalShare),
   });
   const netWorthAccounts = useMemo(() => {
-    if (!personalShare || accounts.length > 0) return accounts;
-    return sharedAccountsQuery.data ?? [];
-  }, [accounts, personalShare, sharedAccountsQuery.data]);
-  // useTransactions collapses rows that share an id. A Personal share is one
-  // row per split, often with the same transaction id, so that collapse
-  // under-counts Personal net worth. The query cache still has every split.
-  const netWorthLedger = useMemo(() => {
-    if (!personalShare || !share) return transactions;
-    const raw = queryClient.getQueryData<Transaction[]>(
-      queryKeys.sharedTransactions(share.token),
-    );
-    if (!raw) return transactions;
-    return buildTransactionsListRows(raw, outingExpenses, outings);
-  }, [outingExpenses, outings, personalShare, queryClient, share, transactions]);
+    if (share) {
+      return personalShare ? (sharedAccountsQuery.data ?? []) : [];
+    }
+    return accounts;
+  }, [accounts, personalShare, share, sharedAccountsQuery.data]);
+
+  // All share consumers now use the uncollapsed transaction list directly.
+  const netWorthLedger = transactions;
 
   const isInitialLoading = transactionsLoading && rawTransactions.length === 0;
 

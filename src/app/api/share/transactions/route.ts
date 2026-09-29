@@ -3,14 +3,17 @@ import { createClient } from "@supabase/supabase-js";
 import { getServiceRoleKey } from "@/lib/supabase/admin";
 import { getSupabaseUrl } from "@/lib/supabase/env";
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const token = searchParams.get("token");
-    const purposeId = searchParams.get("purposeId");
+    const token = searchParams.get("token")?.trim() ?? "";
+    const purposeId = searchParams.get("purposeId")?.trim() ?? "";
 
-    if (!token) {
-      return NextResponse.json({ error: "Missing share token" }, { status: 400 });
+    if (!UUID_RE.test(token)) {
+      return NextResponse.json({ error: "Missing or invalid share token" }, { status: 400 });
     }
 
     const supabaseUrl = getSupabaseUrl();
@@ -19,7 +22,24 @@ export async function GET(request: NextRequest) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // 1. Fetch raw shared transactions via RPC
+    // 1. Validate token existence and expiration
+    const { data: link, error: linkError } = await admin
+      .from("share_links")
+      .select("owner_id, purpose_id, expires_at")
+      .eq("token", token)
+      .maybeSingle();
+
+    if (linkError) {
+      return NextResponse.json({ error: linkError.message }, { status: 500 });
+    }
+    if (!link || (link.expires_at && new Date(link.expires_at) <= new Date())) {
+      return NextResponse.json(
+        { error: "This share link is invalid or has expired." },
+        { status: 404 },
+      );
+    }
+
+    // 2. Fetch shared transactions via RPC (handles soft-deletes and cancelled outings in 1 query)
     const { data: rows, error: rpcError } = await admin.rpc("get_shared_transactions", {
       p_token: token,
     });
@@ -32,92 +52,39 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ transactions: [] });
     }
 
-    const txIds = (rows as Array<{ id: string }>).map((r) => r.id).filter(Boolean);
+    // 3. Map clean transactions with unique split identity and privacy-safe account labels
+    const resolvedPurposeId = purposeId || link.purpose_id || "";
+    const transactions = (rows as Array<any>).map((row) => {
+      const totalAmount = Number(row.amount ?? 0);
+      const transactionDate = row.transaction_date ?? new Date().toISOString();
+      const splitId = row.split_id ? String(row.split_id) : undefined;
+      const parentTransactionId = String(row.id);
+      const uniqueId = splitId ? `${parentTransactionId}_${splitId}` : parentTransactionId;
 
-    // 2. Fetch live status from transactions table (bypassing RLS with service role)
-    const { data: txRecords } = await admin
-      .from("transactions")
-      .select("id, is_active, deleted_at, outing_id, status")
-      .in("id", txIds);
-
-    const txMap = new Map(
-      (txRecords ?? []).map((t) => [t.id, t]),
-    );
-
-    // 3. Fetch status of any referenced outings
-    const outingIds = Array.from(
-      new Set(
-        (txRecords ?? [])
-          .map((t) => t.outing_id)
-          .filter((id): id is string => Boolean(id)),
-      ),
-    );
-
-    let deletedOutingIds = new Set<string>();
-    if (outingIds.length > 0) {
-      const { data: outingRecords } = await admin
-        .from("outings")
-        .select("id, is_active, deleted_at, status")
-        .in("id", outingIds);
-
-      deletedOutingIds = new Set(
-        (outingRecords ?? [])
-          .filter(
-            (o) =>
-              o.is_active === false ||
-              Boolean(o.deleted_at) ||
-              o.status === "cancelled",
-          )
-          .map((o) => o.id),
-      );
-    }
-
-    // 4. Filter and map clean transactions
-    const transactions = (rows as Array<any>)
-      .filter((row) => {
-        const live = txMap.get(row.id);
-        if (live) {
-          if (live.is_active === false || live.deleted_at || live.status === "deleted") {
-            return false;
-          }
-          if (live.outing_id && deletedOutingIds.has(live.outing_id)) {
-            return false;
-          }
-        }
-        if (row.is_active === false || row.deleted_at || row.status === "deleted") {
-          return false;
-        }
-        return true;
-      })
-      .map((row) => {
-        const live = txMap.get(row.id);
-        const resolvedPurposeId = purposeId || row.purpose_id || "";
-        const totalAmount = Number(row.amount ?? 0);
-        const transactionDate = row.transaction_date ?? new Date().toISOString();
-
-        return {
-          id: row.id,
-          type: row.type,
-          merchant: row.merchant ?? "",
-          totalAmount,
-          amount: totalAmount,
-          category: row.category_id ?? "",
-          accountName: row.account_name ?? "",
-          account: row.account_name ?? "",
-          purposeId: resolvedPurposeId,
-          purpose: resolvedPurposeId,
-          source: "manual",
-          transactionDate,
-          date: transactionDate,
-          note: row.note ?? undefined,
-          description: row.description ?? undefined,
-          contributorSource: row.contributor_name ?? undefined,
-          tags: row.tags ?? undefined,
-          status: row.status ?? "completed",
-          outingId: live?.outing_id ?? row.outing_id ?? undefined,
-          isActive: true,
-        };
-      });
+      return {
+        id: uniqueId,
+        parentTransactionId,
+        splitId,
+        type: row.type,
+        merchant: row.merchant ?? "",
+        totalAmount,
+        amount: totalAmount,
+        category: row.category_id ?? "",
+        accountName: row.account_name ?? "Account",
+        account: row.account_name ?? "Account",
+        purposeId: resolvedPurposeId,
+        purpose: resolvedPurposeId,
+        source: "manual",
+        transactionDate,
+        date: transactionDate,
+        note: row.note ?? undefined,
+        description: row.description ?? undefined,
+        contributorSource: row.contributor_name ?? undefined,
+        tags: row.tags ?? undefined,
+        status: row.status ?? "completed",
+        isActive: true,
+      };
+    });
 
     return NextResponse.json({ transactions });
   } catch (error) {

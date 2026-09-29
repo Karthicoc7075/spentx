@@ -722,7 +722,61 @@ export function buildTransactionsListRows(
     return next;
   });
 
-  return [...rows, ...withLiveTotals];
+  // Group multiple splits of the same parent transaction into one line for the transaction list
+  const splitGroupMap = new Map<
+    string,
+    { base: Transaction; splits: Array<{ category: string; amount: number }>; total: number }
+  >();
+  const finalRows: Transaction[] = [];
+
+  for (const row of rows) {
+    const parentId = row.parentTransactionId;
+    if (!parentId || parentId === row.id) {
+      finalRows.push(row);
+      continue;
+    }
+
+    const existing = splitGroupMap.get(parentId);
+    const rowAmount = Number(row.totalAmount ?? row.amount ?? 0);
+    if (!existing) {
+      splitGroupMap.set(parentId, {
+        base: row,
+        splits: [{ category: row.category, amount: rowAmount }],
+        total: rowAmount,
+      });
+    } else {
+      existing.splits.push({ category: row.category, amount: rowAmount });
+      existing.total += rowAmount;
+    }
+  }
+
+  for (const [parentId, group] of splitGroupMap.entries()) {
+    if (group.splits.length === 1) {
+      finalRows.push(group.base);
+    } else {
+      const hasDifferentCategories = new Set(group.splits.map((s) => s.category)).size > 1;
+      const consolidated: Transaction = {
+        ...group.base,
+        id: parentId,
+        amount: group.total,
+        totalAmount: group.total,
+        hasSplits: true,
+        splits: group.splits.map((s, idx) => ({
+          id: `${parentId}_split_${idx}`,
+          transactionId: parentId,
+          categoryId: s.category,
+          category: s.category,
+          amount: s.amount,
+          purposeId: group.base.purposeId ?? "",
+          userId: group.base.userId ?? "",
+        })),
+        category: hasDifferentCategories ? "Split Expense" : group.base.category,
+      };
+      finalRows.push(consolidated);
+    }
+  }
+
+  return [...finalRows, ...withLiveTotals];
 }
 
 export function latestOutingExpenseDate(expenses: OutingExpense[]) {

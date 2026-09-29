@@ -17,6 +17,7 @@ import {
   defaultNotificationPreferences,
 } from "@/lib/mock-data";
 import { deriveMonthKey } from "@/lib/data-schema";
+import { clearBrowserUserCache } from "@/lib/query-cache";
 import { getTodayCalendarDate } from "@/lib/date-filters";
 import { buildOpeningBalanceTransaction } from "@/lib/wealth";
 import {
@@ -690,6 +691,7 @@ export async function signOutUser() {
   // any other browser, showing up over there as a random automatic logout.
   const { error } = await client().auth.signOut({ scope: "local" });
   clearUserWorkspaceSessionCache();
+  clearBrowserUserCache();
   if (error) throw error;
 }
 
@@ -1331,6 +1333,30 @@ export async function fetchCustomCategories(userId?: string) {
   return selectByUser("categories", userId, (row) => toCategory(row, "custom"), "name");
 }
 
+export async function fetchSharedCategories(token: string): Promise<Category[]> {
+  if (!token) return [];
+  try {
+    const { data, error } = await client().rpc("get_shared_categories", { p_token: token });
+    if (error || !Array.isArray(data)) return [];
+    return (data as Array<{ id: string; name: string; color: string; icon: string; type: string }>).map(
+      (row) => ({
+        id: row.id,
+        name: row.name,
+        color: row.color,
+        icon: row.icon || undefined,
+        type: (row.type as Category["type"]) || "expense",
+        isDefault: false,
+        canDelete: false,
+        isActive: true,
+        source: "custom" as const,
+        isInvestment: false,
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
 export async function saveCustomCategory(userId: string | undefined, category: Category) {
   if (!userId) throw new Error("Sign in before saving categories.");
   return upsertById("categories", categoryPayload(userId, category), (row) =>
@@ -1407,6 +1433,7 @@ export async function fetchPurposeShares(
     viewerUid: row.viewer_id ?? undefined,
     purposeId: row.purpose_id,
     role: row.role ?? "viewer",
+    kind: (row.kind as "link" | "email") ?? (row.viewer_email?.startsWith("link-share-") ? "link" : "email"),
     linkToken: row.link_token ?? undefined,
     contributorId: row.contributor_id ?? undefined,
     expiresAt: row.expires_at ?? undefined,
@@ -1449,21 +1476,44 @@ export async function fetchPurposeShares(
 
 export async function createPurposeShare(
   ownerId: string | undefined,
-  viewerEmail: string,
+  viewerEmail: string | undefined,
   purposeId: string,
   linkToken?: string,
   contributorId?: string | null,
   expiresAt?: string | null,
+  kind?: "link" | "email",
 ) {
   if (!ownerId) throw new Error("Sign in before sharing purposes.");
+  const normalizedEmail = viewerEmail?.trim().toLowerCase() || "";
+  const resolvedKind =
+    kind ?? (normalizedEmail && !normalizedEmail.startsWith("link-share-") ? "email" : "link");
+
+  // Cap check for link shares before insert: maximum 3 active links per purpose
+  if (resolvedKind === "link") {
+    const { count, error: countError } = await client()
+      .from("purpose_shares")
+      .select("id", { count: "exact", head: true })
+      .eq("owner_id", ownerId)
+      .eq("purpose_id", purposeId)
+      .eq("kind", "link")
+      .neq("status", "revoked");
+
+    if (!countError && (count ?? 0) >= 3) {
+      throw new Error(
+        "Maximum 3 active share links allowed for this purpose. Delete an existing link to generate a new one.",
+      );
+    }
+  }
+
   const { data, error } = await client()
     .from("purpose_shares")
     .insert({
       owner_id: ownerId,
-      viewer_email: viewerEmail.trim().toLowerCase(),
+      viewer_email: resolvedKind === "link" ? (normalizedEmail || null) : normalizedEmail,
       purpose_id: purposeId,
       role: "viewer",
       status: "pending",
+      kind: resolvedKind,
       // Records exactly which share_links row this invite's URL is, so
       // revoke can delete that row by an exact token match instead of
       // re-deriving it from (owner_id, purpose_id, viewer_email), which
@@ -1491,10 +1541,11 @@ export async function createPurposeShare(
     shares.find((share) => share.id === inserted.id) ?? {
       id: inserted.id,
       ownerId: inserted.owner_id,
-      viewerEmail: inserted.viewer_email,
+      viewerEmail: inserted.viewer_email ?? "",
       viewerUid: inserted.viewer_id ?? undefined,
       purposeId: inserted.purpose_id,
       role: inserted.role ?? "viewer",
+      kind: (inserted.kind as "link" | "email") ?? resolvedKind,
       linkToken: inserted.link_token ?? undefined,
       contributorId: inserted.contributor_id ?? undefined,
       expiresAt: inserted.expires_at ?? undefined,
@@ -1548,7 +1599,7 @@ export async function getOrCreateShareLink(params: {
   ownerId?: string;
   purposeId: string;
   purposeName: string;
-  viewerEmail: string;
+  viewerEmail?: string;
   /** Scopes the link to one contributor's transactions within the purpose.
    * Undefined/null means every contributor (today's default behavior). */
   contributorId?: string | null;
@@ -1558,17 +1609,22 @@ export async function getOrCreateShareLink(params: {
 }) {
   if (!params.ownerId) throw new Error("Sign in before sharing purposes.");
   const contributorId = params.contributorId ?? null;
-  let existingQuery = client()
-    .from("share_links")
-    .select("*")
-    .eq("owner_id", params.ownerId)
-    .eq("purpose_id", params.purposeId)
-    .eq("viewer_email", params.viewerEmail.toLowerCase());
-  existingQuery = contributorId
-    ? existingQuery.eq("contributor_id", contributorId)
-    : existingQuery.is("contributor_id", null);
-  const existing = await throwIfError(existingQuery.maybeSingle());
-  if (existing) return (existing as Row).token as string;
+  const normalizedEmail = params.viewerEmail?.trim().toLowerCase() || null;
+
+  if (normalizedEmail) {
+    let existingQuery = client()
+      .from("share_links")
+      .select("*")
+      .eq("owner_id", params.ownerId)
+      .eq("purpose_id", params.purposeId)
+      .eq("viewer_email", normalizedEmail);
+    existingQuery = contributorId
+      ? existingQuery.eq("contributor_id", contributorId)
+      : existingQuery.is("contributor_id", null);
+    const existing = await throwIfError(existingQuery.maybeSingle());
+    if (existing) return (existing as Row).token as string;
+  }
+
   const data = await throwIfError(
     client()
       .from("share_links")
@@ -1576,7 +1632,7 @@ export async function getOrCreateShareLink(params: {
         owner_id: params.ownerId,
         purpose_id: params.purposeId,
         purpose_name: params.purposeName,
-        viewer_email: params.viewerEmail.toLowerCase(),
+        viewer_email: normalizedEmail,
         contributor_id: contributorId,
         expires_at: params.expiresAt ?? null,
       })
@@ -1585,6 +1641,7 @@ export async function getOrCreateShareLink(params: {
   );
   return (data as Row).token as string;
 }
+
 
 export type ClaimedShareLink = {
   shareId?: string;
@@ -1611,8 +1668,14 @@ export async function claimShareLink(token: string): Promise<ClaimedShareLink> {
 function toSharedTransaction(row: Row, purposeId: string): Transaction {
   const totalAmount = Number(row.amount ?? 0);
   const transactionDate = row.transaction_date ?? nowIso();
+  const splitId = row.split_id ? String(row.split_id) : undefined;
+  const parentTransactionId = String(row.id);
+  const uniqueId = splitId ? `${parentTransactionId}_${splitId}` : parentTransactionId;
+
   return {
-    id: row.id,
+    id: uniqueId,
+    parentTransactionId,
+    splitId,
     type: row.type,
     merchant: row.merchant ?? "",
     totalAmount,
@@ -1777,10 +1840,25 @@ export async function revokePurposeShare(
 }
 
 export async function linkPurposeSharesForViewer(viewerUid: string, viewerEmail: string) {
+  const normalizedEmail = viewerEmail.trim().toLowerCase();
+  try {
+    const { error: rpcError } = await client().rpc("link_purpose_shares_for_viewer", {
+      p_viewer_id: viewerUid,
+      p_email: normalizedEmail,
+    });
+    if (!rpcError) return;
+  } catch {
+    // fallback if RPC is not deployed yet
+  }
+
   const { error } = await client()
     .from("purpose_shares")
     .update({ viewer_id: viewerUid, status: "active" })
-    .eq("viewer_email", viewerEmail.toLowerCase());
+    .eq("status", "pending")
+    .eq("kind", "email")
+    .is("viewer_id", null)
+    .filter("viewer_email", "ilike", normalizedEmail);
+
   if (error) {
     console.warn("[purpose_shares] viewer link skipped:", error.message);
   }

@@ -61,7 +61,7 @@ async function handler(request: Request) {
 
     const { data: rows, error: accountsError } = await admin
       .from("accounts")
-      .select("id, name, type, opening_balance, opening_balance_date")
+      .select("id, type, opening_balance, opening_balance_date")
       .eq("user_id", link.owner_id)
       .eq("is_active", true)
       .is("deleted_at", null);
@@ -72,9 +72,19 @@ async function handler(request: Request) {
 
     const accounts = (rows ?? []).map((row) => {
       const type = ACCOUNT_TYPES.has(row.type) ? row.type : "bank";
+      const displayLabel =
+        type === "bank"
+          ? "Bank"
+          : type === "cash"
+            ? "Cash"
+            : type === "wallet"
+              ? "Wallet"
+              : type === "credit"
+                ? "Credit"
+                : "Account";
       return {
         id: row.id,
-        name: row.name,
+        name: displayLabel,
         type,
         openingBalance: Number(row.opening_balance ?? 0),
         openingBalanceDate: row.opening_balance_date ?? undefined,

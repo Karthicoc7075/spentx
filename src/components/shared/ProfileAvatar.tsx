@@ -12,12 +12,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useQueryClient } from "@tanstack/react-query";
 import { signOutUser } from "@/lib/supabase-data";
 import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useToast } from "@/providers/toast-provider";
 
 export function ProfileAvatar() {
   const { user, isConfigured } = useSupabaseAuth();
+  const queryClient = useQueryClient();
   const { notify } = useToast();
   const initials = user?.name
     ? user.name
@@ -31,6 +33,7 @@ export function ProfileAvatar() {
   async function handleSignOut() {
     try {
       await signOutUser();
+      queryClient.clear();
       notify({ title: "Signed out" });
     } catch {
       notify({

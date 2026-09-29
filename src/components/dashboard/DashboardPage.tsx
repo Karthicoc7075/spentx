@@ -187,15 +187,15 @@ export function DashboardPage() {
   const [showComparison, setShowComparison] = useState(true);
   const { notify } = useToast();
 
+  const share = useShareSession();
+  const effectivePurposeId = share?.purposeId || filters.purposeId;
+
   const { data: userProfile } = useQuery({
     queryKey: ["user-profile-joined", user?.id],
     queryFn: () => fetchUserProfile(user?.id),
-    enabled: Boolean(user?.id),
+    enabled: !share && !isReadOnlyViewer && Boolean(user?.id),
     staleTime: 5 * 60 * 1000,
   });
-
-  const share = useShareSession();
-  const effectivePurposeId = share?.purposeId || filters.purposeId;
 
   const currentMonth = getCurrentPlanMonth();
 
@@ -223,7 +223,7 @@ export function DashboardPage() {
   const onboardingQuery = useQuery({
     queryKey: ["onboarding", user?.id],
     queryFn: () => fetchOnboardingState(user?.id),
-    enabled: Boolean(user?.id),
+    enabled: !share && !isReadOnlyViewer && Boolean(user?.id),
   });
 
   const firstName = user?.name?.split(" ")[0] ?? "there";
