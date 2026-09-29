@@ -17,6 +17,13 @@ function mergeTransactions(...groups: Transaction[][]) {
 
   for (const group of groups) {
     for (const transaction of group) {
+      if (
+        transaction.isActive === false ||
+        Boolean(transaction.deletedAt) ||
+        transaction.status === "deleted"
+      ) {
+        continue;
+      }
       merged.set(transaction.id, transaction);
     }
   }

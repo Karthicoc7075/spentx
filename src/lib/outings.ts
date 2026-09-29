@@ -567,10 +567,18 @@ export function buildTransactionsListRows(
   expenses: OutingExpense[] = [],
   outings: Outing[] = [],
 ): Transaction[] {
+  const activeOutings = outings.filter(
+    (outing) => outing.isActive !== false && !outing.deletedAt && outing.status !== "cancelled",
+  );
   const outingById = new Map(outings.map((outing) => [outing.id, outing]));
+  const deletedOutingIds = new Set(
+    outings
+      .filter((outing) => outing.isActive === false || Boolean(outing.deletedAt) || outing.status === "cancelled")
+      .map((outing) => outing.id),
+  );
   const hasRollupFor = new Set(
     ledgerTransactions
-      .filter((t) => isOutingRollupTransaction(t))
+      .filter((t) => isOutingRollupTransaction(t) && (!t.outingId || !deletedOutingIds.has(t.outingId)))
       .map((t) => t.outingId)
       .filter((id): id is string => Boolean(id)),
   );
@@ -579,6 +587,14 @@ export function buildTransactionsListRows(
   const rows: Transaction[] = [];
 
   for (const transaction of ledgerTransactions) {
+    if (transaction.isActive === false || transaction.deletedAt) {
+      continue;
+    }
+
+    if (transaction.outingId && deletedOutingIds.has(transaction.outingId)) {
+      continue;
+    }
+
     if (isOutingRollupTransaction(transaction) && transaction.outingId) {
       const prev = bestRollupByOuting.get(transaction.outingId);
       const amount = Number(transaction.totalAmount ?? transaction.amount ?? 0);
@@ -598,7 +614,7 @@ export function buildTransactionsListRows(
   }
 
   // Synthesize rollups for active outings that don't have a DB rollup row yet
-  for (const outing of outings) {
+  for (const outing of activeOutings) {
     if (bestRollupByOuting.has(outing.id)) continue;
     const outingExpenses = expenses.filter((e) => e.outingId === outing.id);
     if (!outingExpenses.length) continue;

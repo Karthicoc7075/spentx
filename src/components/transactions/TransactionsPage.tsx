@@ -314,8 +314,8 @@ export function TransactionsPage() {
   const [convertToSplit, setConvertToSplit] = useState(false);
 
   function handleSelectTransaction(transaction: Transaction) {
-    // Outing total line (e.g. "Goa Trip") → open trip details.
-    if (transaction.outingId && isOutingRollupTransaction(transaction)) {
+    // Outing total line (e.g. "Goa Trip") → open trip details (unless read-only viewer).
+    if (!isReadOnlyViewer && transaction.outingId && isOutingRollupTransaction(transaction)) {
       router.push(`/outings/${transaction.outingId}`);
       return;
     }
@@ -447,17 +447,16 @@ export function TransactionsPage() {
         const tags = values.outingId
           ? withoutOutingUnlinkedTag(values.tags)
           : values.tags;
-        await addTransaction({ ...values, tags });
-        // Newest-first ordering puts a new row on page 1 — without this the
-        // user stays on page N and thinks the save didn't work. Filters are
-        // reapplied automatically by the filteredTransactions memo.
         setCurrentPage(1);
+        setEditingTransaction(null);
+        setSlideOverOpen(false);
         notify({
           title: "Transaction saved.",
           description: values.outingId
             ? "Linked to outing — trip total updated."
             : undefined,
         });
+        await addTransaction({ ...values, tags });
         const outingId = values.outingId;
         void (async () => {
           try {
@@ -472,8 +471,6 @@ export function TransactionsPage() {
           }
         })();
       }
-      setEditingTransaction(null);
-      setSlideOverOpen(false);
     } catch (submitError) {
       notify({
         title: editingTransaction ? "Couldn't update transaction" : "Couldn't save transaction",

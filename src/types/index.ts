@@ -44,11 +44,14 @@ export type TransactionStatus =
   | "completed"
   | "pending"
   | "failed"
-  | "refunded";
+  | "refunded"
+  | "deleted";
 
 export type Transaction = {
   id: string;
   userId?: string;
+  isActive?: boolean;
+  deletedAt?: string;
   type: TransactionType;
   merchant: string;
   /**

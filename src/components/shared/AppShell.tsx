@@ -401,9 +401,17 @@ export function AppShell({ children }: { children: ReactNode }) {
             >
               <Menu className="size-4" />
             </Button>
-            <h1 className="truncate text-lg font-semibold tracking-tight lg:text-xl">
-              {getPageTitle(pendingPath ?? pathname)}
-            </h1>
+            {(() => {
+              const currentTitle = getPageTitle(pendingPath ?? pathname);
+              if (currentTitle === "Overview" || currentTitle === "Transactions") {
+                return null;
+              }
+              return (
+                <h1 className="truncate text-lg font-semibold tracking-tight lg:text-xl">
+                  {currentTitle}
+                </h1>
+              );
+            })()}
             <div className="ml-auto flex items-center gap-1.5">
               <RoleSwitchControl />
               {!isReadOnlyViewer && !isAdminView ? (

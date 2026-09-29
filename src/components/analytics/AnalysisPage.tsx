@@ -156,19 +156,19 @@ export function AnalysisPage() {
   const showEmptyHint = hasLoaded && !hasTransactions;
 
   return (
-    <div className="grid gap-6 pb-12">
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-        <div>
+    <div className="grid gap-6 pb-12 min-w-0 max-w-full overflow-x-clip">
+      <div className="flex flex-col justify-between gap-3 sm:gap-4 sm:flex-row sm:items-start min-w-0">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-normal">Analysis</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-0.5 text-xs sm:text-sm text-muted-foreground truncate">
             Understand where your money goes.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button
             disabled={isLoading || filtered.length === 0}
             variant="outline"
-            className="h-9 gap-2 rounded-[0.5rem] text-xs font-semibold shadow-xs"
+            className="flex-1 sm:flex-none h-8 sm:h-9 gap-1.5 rounded-[0.5rem] text-xs font-semibold shadow-xs px-2.5 sm:px-3"
             onClick={() => downloadCsv("spentx-analysis.csv", toCsv(filtered, { purposes }))}
           >
             <Download className="size-3.5" />
@@ -177,7 +177,7 @@ export function AnalysisPage() {
           <Button
             disabled={isLoading || filtered.length === 0}
             variant="outline"
-            className="h-9 gap-2 rounded-[0.5rem] text-xs font-semibold shadow-xs"
+            className="flex-1 sm:flex-none h-8 sm:h-9 gap-1.5 rounded-[0.5rem] text-xs font-semibold shadow-xs px-2.5 sm:px-3"
             onClick={handleExportPdf}
           >
             <FileText className="size-3.5" />
@@ -186,30 +186,52 @@ export function AnalysisPage() {
         </div>
       </div>
 
-      <div className="sx-surface flex flex-wrap items-center gap-3 p-4">
-        <AnalysisDateFilter
-          preset={appliedFiltersForData.datePreset}
-          onPresetChange={handleDatePresetChange}
-        />
-        
-        {!isReadOnlyViewer ? (<>
-          <PurposeFilterChips
-          value={appliedFiltersForData.purposeId}
-          onChange={handlePurposeChange}
-        />
-          <SmartViewsPanel
-            filters={appliedFiltersForData}
-            onApplyPartial={(partial) => {
-              applyPartialFilters(partial);
-              setHighlightedCategory(null);
-              setHighlightedMerchant(null);
-            }}
-          /></>
+      <div className="sx-surface flex flex-col gap-3 p-3 sm:p-4 sm:flex-row sm:flex-wrap sm:items-center overflow-hidden min-w-0">
+        <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+          <div className="flex-1 sm:flex-none min-w-0">
+            <AnalysisDateFilter
+              preset={appliedFiltersForData.datePreset}
+              onPresetChange={handleDatePresetChange}
+            />
+          </div>
+          {!isReadOnlyViewer ? (
+            <div className="shrink-0 sm:hidden">
+              <SmartViewsPanel
+                filters={appliedFiltersForData}
+                onApplyPartial={(partial) => {
+                  applyPartialFilters(partial);
+                  setHighlightedCategory(null);
+                  setHighlightedMerchant(null);
+                }}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        {!isReadOnlyViewer ? (
+          <>
+            <div className="w-full sm:w-auto overflow-x-auto no-scrollbar min-w-0">
+              <PurposeFilterChips
+                value={appliedFiltersForData.purposeId}
+                onChange={handlePurposeChange}
+              />
+            </div>
+            <div className="hidden sm:block">
+              <SmartViewsPanel
+                filters={appliedFiltersForData}
+                onApplyPartial={(partial) => {
+                  applyPartialFilters(partial);
+                  setHighlightedCategory(null);
+                  setHighlightedMerchant(null);
+                }}
+              />
+            </div>
+          </>
         ) : null}
       </div>
 
       {activeFilterCount > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <span className="text-xs font-medium text-muted-foreground">
             Active filters:
           </span>
@@ -217,21 +239,21 @@ export function AnalysisPage() {
             <button
               key={chip.key}
               type="button"
-              className="inline-flex items-center gap-1.5 rounded-full border bg-muted/50 px-3 py-1 text-xs font-medium hover:bg-muted"
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted/50 px-3 py-1 text-xs font-medium hover:bg-muted truncate"
               onClick={() => {
                 removeFilterChip(chip.key);
                 setHighlightedCategory(null);
                 setHighlightedMerchant(null);
               }}
             >
-              {chip.label}
-              <X className="size-3" />
+              <span className="truncate">{chip.label}</span>
+              <X className="size-3 shrink-0" />
             </button>
           ))}
           {activeFilterChips.length > 1 ? (
             <button
               type="button"
-              className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline"
+              className="text-xs font-medium text-muted-foreground underline-offset-2 hover:underline shrink-0"
               onClick={() => {
                 resetFilters();
                 setHighlightedCategory(null);
@@ -259,9 +281,9 @@ export function AnalysisPage() {
       ) : null}
 
       {isLoading ? (
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           <Skeleton className="h-72" />
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 xl:grid-cols-2 min-w-0">
             <Skeleton className="h-80" />
             <Skeleton className="h-80" />
           </div>
@@ -270,30 +292,30 @@ export function AnalysisPage() {
         </div>
       ) : (
         <>
-          <Card>
-            <CardHeader>
+          <Card className="min-w-0 overflow-hidden">
+            <CardHeader className="p-4 sm:p-6">
               <CardTitle>Cash Flow Trend</CardTitle>
               <p className="text-sm text-muted-foreground">
                 Income vs expense for {merchantsPeriodLabel}, including outing
                 totals.
               </p>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-3 sm:p-6 pt-0 sm:pt-0 min-w-0 overflow-hidden">
               {cashFlowTrendData.length === 0 ? (
                 <p className="py-10 text-center text-sm text-muted-foreground">
                   No cash-flow activity in this period yet.
                 </p>
               ) : (
-                <div className="h-72">
+                <div className="h-72 min-w-0 w-full overflow-hidden">
                   <TrendChart data={cashFlowTrendData} />
                 </div>
               )}
             </CardContent>
           </Card>
 
-          <div className="grid gap-6 xl:grid-cols-2">
-            <Card>
-              <CardHeader>
+          <div className="grid gap-6 xl:grid-cols-2 min-w-0 max-w-full">
+            <Card className="min-w-0 overflow-hidden">
+              <CardHeader className="p-4 sm:p-6">
                 <CardTitle>Category Breakdown</CardTitle>
                 <p className="text-sm text-muted-foreground">
                   Spend by category for {merchantsPeriodLabel}. Outings group as{" "}
@@ -302,7 +324,7 @@ export function AnalysisPage() {
                   </span>
                 </p>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-3 sm:p-6 pt-0 sm:pt-0 min-w-0 overflow-hidden">
                 <CategoryBreakdown
                   data={categoryBreakdown}
                   onCategoryClick={handleCategorySelect}

@@ -15,7 +15,6 @@ import { useAuthReady } from "@/hooks/useAuthReady";
 import { useFriendSplits } from "@/hooks/useFriendSplits";
 import { useMonthlyPlanQuery } from "@/hooks/useMonthlyPlanQuery";
 import { useOutings } from "@/hooks/useOutings";
-import { useReflections } from "@/hooks/useReflections";
 import { useTransactions } from "@/hooks/useTransactions";
 import { useUserSettings } from "@/hooks/useUserSettings";
 
@@ -23,7 +22,6 @@ export function useSmartAlerts() {
   const { user, isConfigured, isReady } = useAuthReady();
   const queryClient = useQueryClient();
   const { transactions } = useTransactions();
-  const { reflections } = useReflections();
   const { splits: friendSplits, settlements: friendSettlements } =
     useFriendSplits();
   const { outings } = useOutings();

@@ -1630,25 +1630,74 @@ function toSharedTransaction(row: Row, purposeId: string): Transaction {
     contributorSource: row.contributor_name ?? undefined,
     tags: row.tags ?? undefined,
     status: row.status ?? "completed",
+    outingId: row.outing_id ?? undefined,
+    isActive: row.is_active ?? true,
+    deletedAt: row.deleted_at ?? undefined,
   };
 }
 
 // The anonymous viewer has no auth.uid(), so a plain RLS-scoped fetch (the
 // same client used everywhere else) always returns zero rows for them.
-// get_shared_transactions/get_shared_purposes/get_shared_monthly_plan are all
-// security definer and re-validate the token/expiry themselves, so they're
-// the only safe way to read the owner's data here — scoped strictly to that
-// token's own owner_id/purpose_id, never a caller-supplied one. Realtime
-// (postgres_changes) is RLS-gated too, so the reused Dashboard/Transactions/
-// Analysis hooks poll these on an interval instead of subscribing.
+// We call /api/share/transactions which validates the token, queries the
+// transactions table to strip soft-deleted transactions and deleted outings,
+// and falls back to get_shared_transactions RPC if offline.
 export async function fetchSharedTransactions(
   token: string,
   purposeId: string,
 ): Promise<Transaction[]> {
+  try {
+    const res = await fetch(
+      `/api/share/transactions?token=${encodeURIComponent(token)}&purposeId=${encodeURIComponent(purposeId)}`,
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.transactions)) {
+        return data.transactions;
+      }
+    }
+  } catch {
+    // Fall back to direct RPC below
+  }
+
   const rows = await throwIfError(
     client().rpc("get_shared_transactions", { p_token: token }),
   );
-  return ((rows as Row[]) ?? []).map((row) => toSharedTransaction(row, purposeId));
+  return ((rows as Row[]) ?? [])
+    .filter((row) => row.is_active !== false && !row.deleted_at && row.status !== "deleted")
+    .map((row) => toSharedTransaction(row, purposeId));
+}
+
+/**
+ * Opening balances for a Personal share. Anonymous viewers cannot read
+ * `accounts` (RLS is owner-only), and Personal net worth counts those
+ * opening balances. Non-personal shares get an empty list — opening
+ * balance stays attributed to Personal only.
+ */
+export async function fetchSharedPersonalAccounts(token: string): Promise<Account[]> {
+  const res = await fetch(
+    `/api/share/personal-accounts?token=${encodeURIComponent(token)}`,
+  );
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error || "Could not load shared account balances");
+  }
+  const data = (await res.json()) as {
+    accounts?: Array<{
+      id: string;
+      name: string;
+      type: Account["type"];
+      openingBalance: number;
+      openingBalanceDate?: string;
+    }>;
+  };
+  return (data.accounts ?? []).map((account) => ({
+    id: account.id,
+    name: account.name,
+    type: account.type,
+    openingBalance: Number(account.openingBalance) || 0,
+    openingBalanceDate: account.openingBalanceDate,
+    isActive: true,
+  }));
 }
 
 export async function fetchSharedPurposes(token: string): Promise<Purpose[]> {
@@ -2802,7 +2851,7 @@ export async function saveProjectorSettings(userId: string | undefined, settings
 
 export async function fetchOutings(userId?: string) {
   const outings = await selectByUser("outings", userId, toOuting);
-  return outings.filter((outing) => outing.isActive !== false);
+  return outings.filter((outing) => outing.isActive !== false && !outing.deletedAt);
 }
 
 export function subscribeToOutings(
@@ -4015,12 +4064,14 @@ export function isValidBackupFile(data: unknown): data is SpentXBackup {
 
 export async function gatherAllUserData(userId: string): Promise<SpentXBackup> {
   const data: Record<string, unknown[]> = {};
-  for (const table of backupTables) {
-    const rows = await throwIfError(
-      client().from(table).select("*").eq("user_id", userId),
-    ).catch(() => []);
-    data[table] = (rows as unknown[]) ?? [];
-  }
+  await Promise.all(
+    backupTables.map(async (table) => {
+      const rows = await throwIfError(
+        client().from(table).select("*").eq("user_id", userId),
+      ).catch(() => []);
+      data[table] = (rows as unknown[]) ?? [];
+    }),
+  );
   const exportedAt = nowIso();
   return {
     version: BACKUP_VERSION,

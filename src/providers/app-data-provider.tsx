@@ -19,15 +19,7 @@ import {
   updateTransaction,
   fetchAccounts,
   fetchCategories,
-  fetchFriends,
-  fetchIncomeStreams,
-  fetchIncomeTargets,
-  fetchMonthlyPlan,
-  fetchPlanTemplates,
-  fetchProjectorSettings,
   fetchPurposes,
-  fetchReflections,
-  fetchSavingsGoals,
   fetchTransactions,
   saveOuting,
   subscribeToOutings,
@@ -36,7 +28,6 @@ import {
   deleteOuting,
 } from "@/lib/supabase-data";
 import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
-import { getCurrentPlanMonth } from "@/lib/plan";
 import { isOutingActive } from "@/lib/outing-display";
 import { useAutoBackup } from "@/hooks/useAutoBackup";
 import { useApplyUserPreferences } from "@/hooks/useApplyUserPreferences";
@@ -312,7 +303,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
     const userId = user.id;
     const dataUserId = effectiveUserId;
-    const currentMonth = getCurrentPlanMonth();
 
     function prefetchWithCache<T>(
       queryKey: readonly unknown[],
@@ -353,72 +343,74 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       ),
     ];
 
-    if (isReadOnlyViewer) {
-      void Promise.all(viewerPrefetches);
-      return;
-    }
-
-    void Promise.all([
-      ...viewerPrefetches,
-      prefetchWithCache(
-        queryKeys.friends(userId),
-        cacheKeys.friends,
-        () => fetchFriends(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.incomeStreams(userId),
-        cacheKeys.incomeStreams,
-        () => fetchIncomeStreams(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.incomeTargets(userId),
-        cacheKeys.incomeTargets,
-        () => fetchIncomeTargets(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.savingsGoals(userId),
-        cacheKeys.savingsGoals,
-        () => fetchSavingsGoals(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.projectorSettings(userId),
-        cacheKeys.projectorSettings,
-        () => fetchProjectorSettings(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.reflections(userId),
-        cacheKeys.reflections,
-        () => fetchReflections(userId),
-      ),
-      prefetchWithCache(
-        queryKeys.monthlyPlan(userId, currentMonth, "personal"),
-        cacheKeys.monthlyPlan(currentMonth, "personal"),
-        () => fetchMonthlyPlan(userId, currentMonth, "personal"),
-      ),
-      prefetchWithCache(
-        queryKeys.planTemplates(userId),
-        cacheKeys.planTemplates,
-        () => fetchPlanTemplates(userId),
-      ),
-    ]);
+    void Promise.all(viewerPrefetches);
   }, [effectiveUserId, isReadOnlyViewer, queryClient, user?.id]);
 
   const addMutation = useMutation({
+    onMutate: async (newTxData: Omit<Transaction, "id">) => {
+      assertCanMutate(isReadOnlyViewer);
+      const tempId = `temp-${crypto.randomUUID()}`;
+      const now = new Date().toISOString();
+      const optimisticTx: Transaction = {
+        ...newTxData,
+        id: tempId,
+        userId: user?.id,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      setTransactions((current) => {
+        const next = [optimisticTx, ...current.filter((t) => t.id !== tempId)];
+        transactionsRef.current = next;
+        return next;
+      });
+
+      if (user?.id) {
+        queryClient.setQueryData(
+          queryKeys.transactions(user.id),
+          (current: Transaction[] | undefined) => [
+            optimisticTx,
+            ...(current ? current.filter((t) => t.id !== tempId) : []),
+          ],
+        );
+      }
+
+      return { tempId, optimisticTx };
+    },
     mutationFn: (transaction: Omit<Transaction, "id">) => {
       assertCanMutate(isReadOnlyViewer);
       return addTransaction(user?.id, transaction);
     },
-    onSuccess: (newTx) => {
+    onSuccess: (newTx, _variables, context) => {
       setTransactions((current) => {
-        const next = [newTx, ...current.filter((t) => t.id !== newTx.id)];
-        transactionsRef.current = next;
+        const next = current.map((t) => (t.id === context?.tempId ? newTx : t));
+        const finalNext = next.some((t) => t.id === newTx.id)
+          ? next
+          : [newTx, ...next.filter((t) => t.id !== context?.tempId)];
+        transactionsRef.current = finalNext;
         if (user?.id) {
-          queryClient.setQueryData(queryKeys.transactions(user.id), next);
-          writeQueryCache(user.id, cacheKeys.transactions, next);
+          queryClient.setQueryData(queryKeys.transactions(user.id), finalNext);
+          writeQueryCache(user.id, cacheKeys.transactions, finalNext);
         }
-        return next;
+        return finalNext;
       });
       setTransactionsLoading(false);
+    },
+    onError: (err, _variables, context) => {
+      if (context?.tempId) {
+        setTransactions((current) => {
+          const next = current.filter((t) => t.id !== context.tempId);
+          transactionsRef.current = next;
+          if (user?.id) {
+            queryClient.setQueryData(
+              queryKeys.transactions(user.id),
+              (cur: Transaction[] | undefined) =>
+                cur ? cur.filter((t) => t.id !== context.tempId) : [],
+            );
+          }
+          return next;
+        });
+      }
     },
   });
 

@@ -102,7 +102,12 @@ export function TransactionDetailPanel({
   );
 
   const linkedOuting = transaction.outingId
-    ? outings.find((outing) => outing.id === transaction.outingId)
+    ? outings.find(
+        (outing) =>
+          outing.id === transaction.outingId &&
+          outing.isActive !== false &&
+          !outing.deletedAt,
+      )
     : null;
 
   // Only a link the system made by itself (SMS / bank sync / import) can be
@@ -302,20 +307,29 @@ export function TransactionDetailPanel({
         <div className="grid gap-3 px-6 py-5">
           {transaction.outingId ? (
             <div className="grid gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3">
-              <Link
-                className="flex items-center justify-between gap-4 transition-colors hover:opacity-90"
-                href={`/outings/${transaction.outingId}`}
-                onClick={() => onOpenChange(false)}
-              >
-                <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
-                  <MapPin className="size-3.5 text-primary" />
-                  {linkedOuting?.name ?? "View outing"}
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-primary">
-                  Open
-                  <ExternalLink className="size-3.5" />
-                </span>
-              </Link>
+              {isReadOnlyViewer || !linkedOuting ? (
+                <div className="flex items-center justify-between gap-4">
+                  <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+                    <MapPin className="size-3.5 text-primary" />
+                    {linkedOuting?.name || transaction.merchant || "Outing"}
+                  </span>
+                </div>
+              ) : (
+                <Link
+                  className="flex items-center justify-between gap-4 transition-colors hover:opacity-90"
+                  href={`/outings/${transaction.outingId}`}
+                  onClick={() => onOpenChange(false)}
+                >
+                  <span className="inline-flex items-center gap-2 text-sm font-medium text-foreground">
+                    <MapPin className="size-3.5 text-primary" />
+                    {linkedOuting.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium text-primary">
+                    Open
+                    <ExternalLink className="size-3.5" />
+                  </span>
+                </Link>
+              )}
               {!isReadOnlyViewer && onUnlinkOuting ? (
                 <Button
                   className="h-8 w-full text-xs cursor-pointer"

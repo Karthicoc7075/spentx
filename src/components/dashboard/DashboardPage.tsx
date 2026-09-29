@@ -48,6 +48,7 @@ import { getCurrentPlanMonth } from "@/lib/plan";
 import { PERSONAL_PURPOSE_ID } from "@/lib/purposes";
 import { cn, compareTransactionsNewestFirst, formatCurrency } from "@/lib/utils";
 import { useViewerAccess } from "@/providers/viewer-provider";
+import { useShareSession } from "@/providers/share-provider";
 import { useToast } from "@/providers/toast-provider";
 import type { AnalyticsFilters, DashboardDatePreset, Transaction } from "@/types";
 
@@ -151,11 +152,19 @@ export function DashboardPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { settings } = useUserSettings();
-  const { data, error, isLoading, unlinkedOutingExpenses, netWorthTransactions } =
-    useDashboardData();
+  const {
+    data,
+    error,
+    isLoading,
+    personalNetWorthLoading,
+    unlinkedOutingExpenses,
+    accounts: dashboardAccounts,
+    netWorthTransactions,
+  } = useDashboardData();
   const { user, authUser } = useAuthReady();
   const { purposes } = usePurposes();
-  const { accounts } = useAccounts();
+  const { accounts: userAccounts } = useAccounts();
+  const accounts = dashboardAccounts && dashboardAccounts.length > 0 ? dashboardAccounts : userAccounts;
   const { totalInvested } = useInvestmentTotal();
   const {
     addTransaction,
@@ -165,7 +174,7 @@ export function DashboardPage() {
   const { expenses: allOutingExpenses } = useAllOutingExpenses();
   const { outings } = useOutings();
   const activeOuting = useMemo(
-    () => outings.find((o) => isOutingActive(o) && o.isActive !== false),
+    () => outings.find((o) => isOutingActive(o) && o.isActive !== false && !o.deletedAt),
     [outings],
   );
   const { filters, updateFilter } = useGlobalFilters();
@@ -185,15 +194,29 @@ export function DashboardPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const share = useShareSession();
+  const effectivePurposeId = share?.purposeId || filters.purposeId;
+
   const currentMonth = getCurrentPlanMonth();
 
   const accountCreatedMonth = useMemo(() => {
     const rawDate = userProfile?.joinedAt ?? user?.createdAt ?? authUser?.created_at;
-    if (!rawDate) return currentMonth;
-    const match = rawDate.match(/^(\d{4})-(\d{2})/);
-    const parsed = match ? `${match[1]}-${match[2]}` : currentMonth;
-    return parsed > currentMonth ? currentMonth : parsed;
-  }, [userProfile?.joinedAt, user?.createdAt, authUser?.created_at, currentMonth]);
+    if (rawDate) {
+      const match = rawDate.match(/^(\d{4})-(\d{2})/);
+      const parsed = match ? `${match[1]}-${match[2]}` : currentMonth;
+      return parsed > currentMonth ? currentMonth : parsed;
+    }
+    if (transactions.length > 0) {
+      const months = transactions
+        .map((t) => (t.transactionDate ?? t.date ?? "").slice(0, 7))
+        .filter((m) => /^\d{4}-\d{2}$/.test(m))
+        .sort();
+      if (months.length > 0 && months[0] <= currentMonth) {
+        return months[0];
+      }
+    }
+    return currentMonth;
+  }, [userProfile?.joinedAt, user?.createdAt, authUser?.created_at, currentMonth, transactions]);
 
   const planMonth = filters.dashboardMonth || currentMonth;
   const { data: plan } = useMonthlyPlanQuery(planMonth, PERSONAL_PURPOSE_ID);
@@ -272,7 +295,8 @@ export function DashboardPage() {
   const filteredTransactions = useMemo(() => {
     const analyticsFilters: AnalyticsFilters = {
       ...filters,
-      purpose: filters.purposeId,
+      purposeId: effectivePurposeId,
+      purpose: effectivePurposeId,
       merchant: "",
       transactionStatus: "",
       tags: [],
@@ -290,7 +314,7 @@ export function DashboardPage() {
         !(transaction.category === "Settlements" && transaction.type === "income"),
     );
     return filterAnalyticsTransactions(processed, analyticsFilters, { purposes });
-  }, [filters, transactions, purposes]);
+  }, [effectivePurposeId, filters, transactions, purposes]);
 
   const trend = useMemo(
     () =>
@@ -298,9 +322,9 @@ export function DashboardPage() {
         filteredTransactions,
         purposes,
         { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
-        filters.purposeId,
+        effectivePurposeId,
       ),
-    [filteredTransactions, filters.dateFrom, filters.dateTo, filters.purposeId, purposes],
+    [filteredTransactions, filters.dateFrom, filters.dateTo, effectivePurposeId, purposes],
   );
 
   const [selectedTrendKey, setSelectedTrendKey] = useState<string | null>(null);
@@ -335,10 +359,10 @@ export function DashboardPage() {
   );
 
   async function handleAdd(values: Omit<Transaction, "id">) {
+    setSlideOverOpen(false);
+    notify({ title: "Transaction saved." });
     try {
       await addTransaction(values);
-      setSlideOverOpen(false);
-      notify({ title: "Transaction saved." });
     } catch (err) {
       notify({
         title: "Couldn't save transaction",
@@ -395,7 +419,7 @@ export function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 self-start">
+          <div className="flex items-center justify-between sm:justify-start gap-2 max-w-full">
             <DashboardDateFilter
               preset={filters.dashboardDatePreset}
               specificMonth={filters.specificMonth}
@@ -423,13 +447,18 @@ export function DashboardPage() {
         </div>
 
         {
-          !isReadOnlyViewer &&   <PurposeFilterChips
-          value={filters.purposeId}
-          onChange={(purposeId) => updateFilter("purposeId", purposeId)}/>
+          !isReadOnlyViewer && (
+            <div className="w-full overflow-x-auto no-scrollbar">
+              <PurposeFilterChips
+                value={filters.purposeId}
+                onChange={(purposeId) => updateFilter("purposeId", purposeId)}
+              />
+            </div>
+          )
         }
       </header>
 
-      {activeOuting ? (
+      {activeOuting && !isReadOnlyViewer ? (
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
@@ -483,8 +512,8 @@ export function DashboardPage() {
           eyebrow="Summary"
           title="Overview"
           action={
-            <div className="flex items-center gap-2.5 sm:gap-4">
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 py-1 pr-3 pl-1.5">
+            <div className="flex items-center gap-2 sm:gap-4">
+              <div className="flex items-center gap-1.5 sm:gap-2 rounded-lg border border-border bg-muted/40 py-1 pr-2.5 sm:pr-3 pl-1.5">
                 <Switch
                   id="comparison-mode"
                   checked={showComparison}
@@ -499,12 +528,13 @@ export function DashboardPage() {
               </div>
               {!isReadOnlyViewer ? (
                 <Button
-                  className="hidden gap-1.5 rounded-lg sm:inline-flex"
+                  className="inline-flex items-center gap-1.5 rounded-lg text-xs h-8 px-2.5 sm:h-9 sm:px-3 sm:text-xs"
                   variant="outline"
                   onClick={() => setKpiConfigOpen(true)}
+                  title="Customise Dashboard Cards"
                 >
                   <Settings2 className="size-3.5" />
-                  Customise
+                  <span>Customise</span>
                 </Button>
               ) : null}
             </div>
@@ -515,6 +545,7 @@ export function DashboardPage() {
             accounts={accounts}
             investmentsTotal={totalInvested}
             isLoading={isLoading}
+            netWorthLoading={personalNetWorthLoading}
             kpis={kpis ?? null}
             configOpen={kpiConfigOpen}
             showComparison={showComparison}

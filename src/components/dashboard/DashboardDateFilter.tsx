@@ -77,8 +77,8 @@ export function DashboardDateFilter({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-      <div className="inline-flex items-center gap-0.5 rounded-xl bg-muted/70 p-1 ring-1 ring-border/40">
+    <div className="inline-flex items-center gap-1.5 sm:gap-2 max-w-full">
+      <div className="inline-flex shrink-0 items-center gap-0.5 rounded-xl bg-muted/70 p-1 ring-1 ring-border/40">
         {visiblePresets.map((option) => (
           <button
             key={option.value}

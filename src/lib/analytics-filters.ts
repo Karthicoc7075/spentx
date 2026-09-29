@@ -161,8 +161,22 @@ export function buildTransactionOutingIndex(
   for (const transaction of transactions) {
     if (!transaction.outingId || index.has(transaction.id)) continue;
     const outing = outingById.get(transaction.outingId);
-    if (!outing) continue;
-    index.set(transaction.id, metaForOuting(outing));
+    if (outing) {
+      index.set(transaction.id, metaForOuting(outing));
+    } else {
+      const category = resolveOutingCategoryLabel(
+        transaction.category,
+        transaction.merchant,
+      );
+      index.set(transaction.id, {
+        outingId: transaction.outingId,
+        outingName: transaction.merchant || "Outing",
+        outingCategory: category,
+        outingType: outingTypeFromCategory(category),
+        withWhom: "friends",
+        outingStatus: "active",
+      });
+    }
   }
 
   return index;
@@ -250,8 +264,8 @@ export function prepareAnalyticsTransactions(
         accountName: accountLabel,
         rollupAccountNames: accountNames,
         outingExpenseTitles: expenseTitles,
-        purpose: PERSONAL_PURPOSE_ID,
-        purposeId: PERSONAL_PURPOSE_ID,
+        purpose: outing.purposeId || PERSONAL_PURPOSE_ID,
+        purposeId: outing.purposeId || PERSONAL_PURPOSE_ID,
         source: "manual",
         entrySource: "manual",
         date: dateIso,
@@ -266,27 +280,61 @@ export function prepareAnalyticsTransactions(
     }
   }
 
-  const base = transactions.filter((tx) => {
-    if (isOutingRollupTransaction(tx)) return false;
+  const seenRollupOutingIds = new Set<string>();
+  const outingIdsWithRollup = new Set(
+    transactions
+      .filter((tx) => isOutingRollupTransaction(tx) && Boolean(tx.outingId))
+      .map((tx) => tx.outingId as string),
+  );
 
-    if (!includeOutingExpenses) {
-      if (tx.outingId) return false;
-      if (linkedLedgerIds.has(tx.id)) return false;
-      if (tx.tags?.includes(OUTING_ANALYTICS_TAG)) return false;
-      return true;
+  const base: Transaction[] = [];
+
+  for (const tx of transactions) {
+    if (isOutingRollupTransaction(tx)) {
+      if (!includeOutingExpenses) continue;
+      // If synthetic row was already generated for this outing, skip rollup to avoid double counting
+      if (tx.outingId && summarizedOutingIds.has(tx.outingId)) continue;
+      // Deduplicate if multiple rollup rows exist for the same outing
+      if (tx.outingId) {
+        if (seenRollupOutingIds.has(tx.outingId)) continue;
+        seenRollupOutingIds.add(tx.outingId);
+      }
+      // When outings aren't loaded (e.g. shared view), promote the rollup row
+      // into an analytics row so it's included in spending, category breakdown and top merchants.
+      const category = resolveOutingCategoryLabel(tx.category, tx.merchant);
+      base.push({
+        ...tx,
+        merchant: tx.merchant || category,
+        category,
+        note: `Outing · ${category}`,
+        description: `Outing · ${category}`,
+        tags: [OUTING_ANALYTICS_TAG],
+      });
+      continue;
     }
 
-    if (tx.outingId && summarizedOutingIds.has(tx.outingId)) return false;
+    if (!includeOutingExpenses) {
+      if (tx.outingId) continue;
+      if (linkedLedgerIds.has(tx.id)) continue;
+      if (tx.tags?.includes(OUTING_ANALYTICS_TAG)) continue;
+      base.push(tx);
+      continue;
+    }
+
+    if (tx.outingId && summarizedOutingIds.has(tx.outingId)) continue;
+    if (tx.outingId && outingIdsWithRollup.has(tx.outingId)) continue;
+
     if (linkedLedgerIds.has(tx.id) && summarizedOutingIds.size > 0) {
       // Linked bank row already folded into its outing total above.
       const linkedExpense = expenses.find((e) => e.linkedTransactionId === tx.id);
       if (linkedExpense && summarizedOutingIds.has(linkedExpense.outingId)) {
-        return false;
+        continue;
       }
     }
-    if ((tx.tags ?? []).includes(OUTING_ANALYTICS_TAG)) return false;
-    return true;
-  });
+    if ((tx.tags ?? []).includes(OUTING_ANALYTICS_TAG)) continue;
+
+    base.push(tx);
+  }
 
   return [...base, ...synthetic];
 }

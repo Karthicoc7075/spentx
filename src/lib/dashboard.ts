@@ -3,7 +3,7 @@ import {
   filterAnalyticsTransactions,
 } from "@/lib/analytics";
 import { buildCategoryTotals } from "@/lib/category-totals";
-import { sumInvestments } from "@/lib/investments";
+import { isTransferTransaction, sumInvestments } from "@/lib/investments";
 import {
   filterUnlinkedOutingExpenses,
   sumPeriodExpense,
@@ -17,7 +17,13 @@ import {
   transactionMatchesPurpose,
 } from "@/lib/purposes";
 import { narrowTransactionsToFilter } from "@/lib/utils";
-import { computeNetWorthBreakdown } from "@/lib/wealth";
+import { isOutingRollupTransaction } from "@/lib/outings";
+import {
+  computeNetWorthBreakdown,
+  isBalanceExcludedTransaction,
+  isOpeningBalanceTransaction,
+  transactionAmount,
+} from "@/lib/wealth";
 import type {
   Account,
   Category,
@@ -429,12 +435,12 @@ export function buildDashboardData(
   // purpose/category-narrowed (but date-unrestricted) ledger so Net Worth
   // reflects the active filter — e.g. Purpose = Family only counts Family's
   // own income/expense splits, not the whole household's.
-  const netWorth = computeNetWorthBreakdown(
+  let netWorth = computeNetWorthBreakdown(
     accounts,
     narrowedAllTransactions,
     unlinkedOutingExpenses,
   ).total;
-  const previousNetWorth = computeNetWorthBreakdown(
+  let previousNetWorth = computeNetWorthBreakdown(
     accounts,
     narrowedAllTransactions.filter(
       (transaction) =>
@@ -443,6 +449,47 @@ export function buildDashboardData(
     ),
     unlinkedOutingExpenses,
   ).total;
+
+  if (accounts.length === 0 && narrowedAllTransactions.length > 0) {
+    const outingIdsWithIndividualTx = new Set<string>();
+    for (const tx of narrowedAllTransactions) {
+      if (tx.outingId && !isOutingRollupTransaction(tx)) {
+        outingIdsWithIndividualTx.add(tx.outingId);
+      }
+    }
+    const outingIdsWithUnlinked = new Set<string>(
+      unlinkedOutingExpenses.map((e) => e.outingId).filter(Boolean),
+    );
+
+    const calcCumulativeBalance = (txList: Transaction[]) => {
+      let income = 0;
+      let expense = 0;
+      for (const tx of txList) {
+        if (isOpeningBalanceTransaction(tx) || isTransferTransaction(tx)) continue;
+        if (isOutingRollupTransaction(tx)) {
+          if (
+            (tx.outingId && outingIdsWithIndividualTx.has(tx.outingId)) ||
+            (tx.outingId && outingIdsWithUnlinked.has(tx.outingId))
+          ) {
+            continue;
+          }
+        }
+        const amount = transactionAmount(tx);
+        if (tx.type === "income") income += amount;
+        else if (tx.type === "expense") expense += amount;
+      }
+      return income - expense;
+    };
+
+    netWorth = calcCumulativeBalance(narrowedAllTransactions);
+    previousNetWorth = calcCumulativeBalance(
+      narrowedAllTransactions.filter(
+        (transaction) =>
+          new Date(transaction.transactionDate ?? transaction.date ?? 0) <
+          rangeStart,
+      ),
+    );
+  }
 
   const savingsRate =
     periodIncome > 0 ? Math.round((periodSavings / periodIncome) * 100) : 0;

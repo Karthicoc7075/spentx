@@ -125,9 +125,17 @@ export function ShareAppShell({
               >
                 <Menu className="size-4" />
               </Button>
-              <h1 className="truncate text-lg font-semibold tracking-tight lg:text-xl">
-                {getPageTitle(pathname, token)}
-              </h1>
+              {(() => {
+                const currentTitle = getPageTitle(pathname, token);
+                if (currentTitle === "Overview" || currentTitle === "Transactions") {
+                  return null;
+                }
+                return (
+                  <h1 className="truncate text-lg font-semibold tracking-tight lg:text-xl">
+                    {currentTitle}
+                  </h1>
+                );
+              })()}
             </div>
           </header>
 

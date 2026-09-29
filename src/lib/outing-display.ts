@@ -49,6 +49,7 @@ export function formatOutingDates(outing: Outing) {
 }
 
 export function isOutingPlanned(outing: Outing, todayStr?: string) {
+  if (outing.isActive === false || Boolean(outing.deletedAt)) return false;
   if (outing.status !== "active") return false;
   if (!outing.startDate) return false;
   const today = todayStr || new Date().toISOString().slice(0, 10);
@@ -57,6 +58,7 @@ export function isOutingPlanned(outing: Outing, todayStr?: string) {
 }
 
 export function isOutingActive(outing: Outing, todayStr?: string) {
+  if (outing.isActive === false || Boolean(outing.deletedAt)) return false;
   if (outing.status !== "active") return false;
   if (!outing.startDate) return true;
   const today = todayStr || new Date().toISOString().slice(0, 10);

@@ -24,7 +24,7 @@ export function MonthlyComparisonTimeline({ data }: MonthlyComparisonTimelinePro
   const hasActivity = chartData.some((item) => item.income > 0 || item.expense > 0);
 
   return (
-    <div className="sx-surface p-6">
+    <div className="sx-surface p-4 sm:p-6 min-w-0 overflow-hidden">
       <div className="mb-4">
         <h3 className="text-base font-semibold text-foreground">Monthly Comparison</h3>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -37,7 +37,7 @@ export function MonthlyComparisonTimeline({ data }: MonthlyComparisonTimelinePro
           No monthly history yet. Add transactions across months to see comparisons.
         </p>
       ) : (
-        <div className="h-64 w-full">
+        <div className="h-64 w-full min-w-0 overflow-hidden">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chartData} margin={{ left: -10, right: 10, top: 10, bottom: 5 }}>
               <defs>

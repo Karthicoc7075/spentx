@@ -19,7 +19,7 @@ import {
   getPurposeDisplayName,
   resolvePurposeId,
 } from "@/lib/purposes";
-import { getTransactionDisplayTitle } from "@/lib/transaction-ui";
+import { getCategoryIcon, getTransactionDisplayTitle } from "@/lib/transaction-ui";
 import {
   cn,
   formatCurrency,
@@ -80,13 +80,6 @@ function formatLedgerDate(date: string) {
     day: "numeric",
     month: "short",
   });
-}
-
-function merchantInitials(merchant: string) {
-  const parts = merchant.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
 }
 
 export function TransactionsLedgerTable({
@@ -193,11 +186,12 @@ export function TransactionsLedgerTable({
                           "border-primary/30 bg-primary/10 text-primary",
                       )}
                     >
-                      {isOutingRollup ? (
-                        <MapPin className="size-4" />
-                      ) : (
-                        merchantInitials(transaction.merchant)
-                      )}
+                      {(() => {
+                        const CategoryIcon = isOutingRollup
+                          ? MapPin
+                          : getCategoryIcon(transaction.category);
+                        return <CategoryIcon className="size-4" />;
+                      })()}
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">

@@ -125,10 +125,29 @@ export function computeAccountBalancesMap(
     accountByName.set(acc.name.trim().toLowerCase(), acc);
   }
 
+  const outingIdsWithIndividualTx = new Set<string>();
+  for (let i = 0; i < transactions.length; i++) {
+    const tx = transactions[i];
+    if (tx.outingId && !isOutingRollupTransaction(tx)) {
+      outingIdsWithIndividualTx.add(tx.outingId);
+    }
+  }
+  const outingIdsWithUnlinked = new Set<string>(
+    unlinkedOutingExpenses.map((e) => e.outingId).filter(Boolean),
+  );
+
   const len = transactions.length;
   for (let i = 0; i < len; i++) {
     const tx = transactions[i];
-    if (isBalanceExcludedTransaction(tx)) continue;
+    if (isOpeningBalanceTransaction(tx)) continue;
+    if (isOutingRollupTransaction(tx)) {
+      if (
+        (tx.outingId && outingIdsWithIndividualTx.has(tx.outingId)) ||
+        (tx.outingId && outingIdsWithUnlinked.has(tx.outingId))
+      ) {
+        continue;
+      }
+    }
 
     let targetAcc: Account | undefined;
     const txAccountId = tx.accountId?.trim().toLowerCase();
@@ -175,12 +194,31 @@ export function getAccountBalance(
   const accountIdLower = account.id.trim().toLowerCase();
   const accountNameLower = account.name.trim().toLowerCase();
 
+  const outingIdsWithIndividualTx = new Set<string>();
+  for (let i = 0; i < transactions.length; i++) {
+    const tx = transactions[i];
+    if (tx.outingId && !isOutingRollupTransaction(tx)) {
+      outingIdsWithIndividualTx.add(tx.outingId);
+    }
+  }
+  const outingIdsWithUnlinked = new Set<string>(
+    unlinkedOutingExpenses.map((e) => e.outingId).filter(Boolean),
+  );
+
   let balance = Number(account.openingBalance) || 0;
   const len = transactions.length;
 
   for (let i = 0; i < len; i++) {
     const tx = transactions[i];
-    if (isBalanceExcludedTransaction(tx)) continue;
+    if (isOpeningBalanceTransaction(tx)) continue;
+    if (isOutingRollupTransaction(tx)) {
+      if (
+        (tx.outingId && outingIdsWithIndividualTx.has(tx.outingId)) ||
+        (tx.outingId && outingIdsWithUnlinked.has(tx.outingId))
+      ) {
+        continue;
+      }
+    }
 
     const txAccountId = (tx.accountId ?? "").trim().toLowerCase();
     const isIdMatch = account.id && txAccountId && txAccountId === accountIdLower;

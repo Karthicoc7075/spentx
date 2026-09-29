@@ -245,10 +245,10 @@ export function PlanVsActualTable({
   }, [effectiveRows, activeTab, sortBy]);
 
   return (
-    <div className="sx-surface p-6 space-y-6">
+    <div className="sx-surface p-3.5 sm:p-6 space-y-4 sm:space-y-6 overflow-hidden min-w-0">
       {/* Header with Title, Month, Purpose Badge & Link */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-base font-semibold text-foreground">Plan vs Actual</h3>
             {planMonth && (
@@ -277,7 +277,7 @@ export function PlanVsActualTable({
         </div>
 
         <Link
-          className="inline-flex h-8 items-center gap-1.5 self-start rounded-lg border border-input bg-background px-3 text-xs font-medium hover:bg-muted text-foreground transition-colors sm:self-auto"
+          className="inline-flex h-8 items-center gap-1.5 self-start rounded-lg border border-input bg-background px-3 text-xs font-medium hover:bg-muted text-foreground transition-colors sm:self-auto shrink-0"
           href={
             planMonth
               ? `/plan?month=${planMonth}${selectedPurposeId ? `&purposeId=${selectedPurposeId}` : ""}`
@@ -290,8 +290,8 @@ export function PlanVsActualTable({
       </div>
 
       {/* Purpose Type Selector Bar */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl bg-muted/40 p-2.5 border">
-        <span className="text-xs font-medium text-muted-foreground pl-1 mr-1 flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 sm:gap-2 rounded-xl bg-muted/40 p-2 sm:p-2.5 border overflow-x-auto no-scrollbar max-w-full">
+        <span className="shrink-0 text-xs font-medium text-muted-foreground pl-1 mr-1 flex items-center gap-1.5">
           <Layers className="size-3.5" />
           <span>Purpose Type:</span>
         </span>
@@ -301,7 +301,7 @@ export function PlanVsActualTable({
           type="button"
           onClick={() => handlePurposeClick("")}
           className={cn(
-            "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150",
+            "shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150 active:scale-95",
             !selectedPurposeId
               ? "border border-primary bg-primary text-primary-foreground shadow-xs"
               : "border border-transparent bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground",
@@ -319,7 +319,7 @@ export function PlanVsActualTable({
               type="button"
               onClick={() => handlePurposeClick(purpose.id)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150",
+                "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all duration-150 active:scale-95",
                 isActive
                   ? "text-white shadow-xs font-semibold"
                   : "border border-transparent bg-background/80 text-muted-foreground hover:bg-background hover:text-foreground",
@@ -486,13 +486,13 @@ export function PlanVsActualTable({
           </div>
 
           {/* Filter Chips & Sort Controls */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
-            <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 border-b pb-3 min-w-0">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full py-0.5">
               <button
                 type="button"
                 onClick={() => setActiveTab("all")}
                 className={cn(
-                  "rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                  "shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
                   activeTab === "all"
                     ? "bg-primary text-primary-foreground shadow-xs"
                     : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -505,7 +505,7 @@ export function PlanVsActualTable({
                 type="button"
                 onClick={() => setActiveTab("over")}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                  "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
                   activeTab === "over"
                     ? "bg-rose-600 text-white shadow-xs"
                     : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -530,7 +530,7 @@ export function PlanVsActualTable({
                 type="button"
                 onClick={() => setActiveTab("on-track")}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                  "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
                   activeTab === "on-track"
                     ? "bg-emerald-600 text-white shadow-xs"
                     : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -554,7 +554,7 @@ export function PlanVsActualTable({
                   type="button"
                   onClick={() => setActiveTab("unbudgeted")}
                   className={cn(
-                    "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                    "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
                     activeTab === "unbudgeted"
                       ? "bg-amber-600 text-white shadow-xs"
                       : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -576,7 +576,7 @@ export function PlanVsActualTable({
             </div>
 
             {/* Sort Dropdown */}
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0 self-end sm:self-auto">
               <span>Sort:</span>
               <select
                 value={sortBy}

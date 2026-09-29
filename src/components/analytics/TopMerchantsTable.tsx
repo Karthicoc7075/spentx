@@ -30,7 +30,7 @@ export function TopMerchantsTable({
   const scrollMaxHeight = `calc(${ROW_HEIGHT_REM}rem * ${VISIBLE_ROWS} + ${ROW_GAP_REM}rem * ${VISIBLE_ROWS - 1})`;
 
   return (
-    <div className="sx-surface flex h-full flex-col p-6">
+    <div className="sx-surface flex h-full flex-col p-4 sm:p-6 min-w-0 overflow-hidden">
       <div className="mb-4 shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-base font-semibold text-foreground">Top Merchants</h3>

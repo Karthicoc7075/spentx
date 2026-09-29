@@ -21,11 +21,16 @@ export function PurposeFilterChips({
   const activePurposes = getActivePurposes(purposes);
 
   return (
-    <div className={cn("flex flex-wrap gap-2", className)}>
+    <div
+      className={cn(
+        "flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar py-0.5 max-w-full sm:flex-wrap",
+        className,
+      )}
+    >
       {showAllOption ? (
         <button
           className={cn(
-            "rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all duration-150",
+            "shrink-0 whitespace-nowrap rounded-full border px-3 sm:px-3.5 py-1 sm:py-1.5 text-xs font-semibold transition-all duration-150 active:scale-95",
             !value
               ? "border-primary bg-primary text-primary-foreground shadow-sm shadow-primary/25"
               : "border-border/70 bg-card/80 text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground",
@@ -42,7 +47,7 @@ export function PurposeFilterChips({
           <button
             key={purpose.id}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all duration-150",
+              "shrink-0 whitespace-nowrap inline-flex items-center gap-1.5 rounded-full border px-3 sm:px-3.5 py-1 sm:py-1.5 text-xs font-semibold transition-all duration-150 active:scale-95",
               active
                 ? "text-white shadow-sm"
                 : "border-border/70 bg-card/80 text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground",

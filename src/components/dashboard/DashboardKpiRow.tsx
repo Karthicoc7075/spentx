@@ -40,6 +40,8 @@ type DashboardKpiRowProps = {
   investmentsTotal: number;
   periodLabel: string;
   isLoading?: boolean;
+  /** Personal share is still resolving opening balances for this card only. */
+  netWorthLoading?: boolean;
   configOpen?: boolean;
   showComparison?: boolean;
   onConfigOpenChange?: (open: boolean) => void;
@@ -101,6 +103,7 @@ export function DashboardKpiRow({
   investmentsTotal,
   periodLabel,
   isLoading,
+  netWorthLoading = false,
   configOpen = false,
   showComparison = true,
   onConfigOpenChange,
@@ -159,6 +162,13 @@ export function DashboardKpiRow({
     };
 
     if (key === "net-worth") {
+      if (netWorthLoading) {
+        return <Skeleton key={key} className="h-[132px] rounded-2xl" />;
+      }
+      const netWorthTitle = isReadOnlyViewer
+        ? `${purposes[0]?.name ? `${purposes[0].name} Net Worth` : "Purpose Net Worth"}`
+        : "Net Worth";
+
       return (
         <div
           key={key}
@@ -167,7 +177,7 @@ export function DashboardKpiRow({
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium text-muted-foreground">
-              Net Worth
+              {netWorthTitle}
             </span>
             {
               !isReadOnlyViewer && (<div className="inline-flex rounded-lg bg-muted p-0.5 text-[10px] ring-1 ring-inset ring-border">
@@ -346,14 +356,21 @@ export function DashboardKpiRow({
     );
   }
 
+  const effectiveActiveKeys = useMemo<DashboardKpiKey[]>(() => {
+    if (isReadOnlyViewer) {
+      return activeKeys.map((k) => (k === "net-savings" ? "month-rollover" : k));
+    }
+    return activeKeys;
+  }, [isReadOnlyViewer, activeKeys]);
+
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {isLoading || !kpis
-          ? activeKeys.map((key) => (
+          ? effectiveActiveKeys.map((key) => (
               <Skeleton key={key} className="h-[132px] rounded-2xl" />
             ))
-          : activeKeys.map((key, index) => renderCard(key, index))}
+          : effectiveActiveKeys.map((key, index) => renderCard(key, index))}
       </div>
 
       <KpiConfigModal

@@ -63,6 +63,7 @@ import { isOutingActive } from "@/lib/outing-display";
 import { saveOutingExpense } from "@/lib/supabase-data";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { queryKeys } from "@/lib/query-keys";
+import { useToast } from "@/providers/toast-provider";
 import {
   getCategoryIcon,
   getTransactionTypeMeta,
@@ -237,6 +238,7 @@ export function AddTransactionSlideOver({
   const { friends } = useFriends();
   const { user } = useAuthReady();
   const queryClient = useQueryClient();
+  const { notify } = useToast();
 
   const activeOutings = useMemo(
     () =>
@@ -409,13 +411,19 @@ export function AddTransactionSlideOver({
     return list;
   }, [activePurposes, initialValues, purposes]);
 
-  const defaultPurposeId =
-    resolvePurposeId(
-      initialValues?.purposeId ?? initialValues?.purpose,
-      purposes,
-    ) ||
-    getDefaultPersonalPurpose(purposeChoices)?.id ||
-    "";
+  const defaultPurposeId = useMemo(() => {
+    if (initialValues?.purposeId || initialValues?.purpose) {
+      return resolvePurposeId(
+        initialValues.purposeId ?? initialValues.purpose,
+        purposes,
+      );
+    }
+    const defaultPurpose =
+      purposes.find((p) => p.isDefault && p.isActive !== false) ??
+      purposes.find((p) => p.name.toLowerCase() === "personal" && p.isActive !== false) ??
+      getDefaultPersonalPurpose(purposeChoices);
+    return defaultPurpose?.id || "";
+  }, [initialValues, purposes, purposeChoices]);
 
   const defaultAccountName =
     initialValues?.accountName ||
@@ -477,6 +485,7 @@ export function AddTransactionSlideOver({
     reset,
     watch,
     setValue,
+    setFocus,
   } = useForm<TransactionFormValues, unknown, ParsedTransactionFormValues>({
     resolver: zodResolver(transactionSchema),
     defaultValues: buildFormValues(),
@@ -501,6 +510,15 @@ export function AddTransactionSlideOver({
     reset(buildFormValues());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the sheet (re)opens for a given transaction, matching the convention above
   }, [open, initialValues?.id, initialExpense?.id]);
+
+  // Ensure default purpose is always selected if the form opened before purposes loaded
+  const currentPurpose = watch("purpose");
+  useEffect(() => {
+    if (!open || initialValues) return;
+    if (!currentPurpose && defaultPurposeId) {
+      setValue("purpose", defaultPurposeId, { shouldValidate: true });
+    }
+  }, [open, initialValues, currentPurpose, defaultPurposeId, setValue]);
 
   const currentType = watch("type");
 
@@ -915,7 +933,7 @@ export function AddTransactionSlideOver({
     }
   }
 
-  async function finishSuccessfulSubmit() {
+  function finishSuccessfulSubmit() {
     setDuplicateMatch(null);
     setPendingValues(null);
     submitLockRef.current = false;
@@ -925,11 +943,29 @@ export function AddTransactionSlideOver({
     onOpenChange(false);
   }
 
+  function finishKeepOpenSubmit() {
+    setDuplicateMatch(null);
+    setPendingValues(null);
+    submitLockRef.current = false;
+    draftExpenseIdRef.current = null;
+    setIsSaving(false);
+    setValue("amount", "" as unknown as number);
+    setValue("merchant", "");
+    setValue("reference", "");
+    setValue("note", "");
+    setTimeout(() => {
+      setFocus("amount");
+    }, 50);
+  }
+
   async function commitSubmit(values: ParsedTransactionFormValues) {
     await runExclusive(() => persistTransaction(values));
   }
 
-  async function persistTransaction(values: ParsedTransactionFormValues) {
+  async function persistTransaction(
+    values: ParsedTransactionFormValues,
+    options?: { keepOpen?: boolean },
+  ) {
     const isoDate = resolveTransactionIso(values);
     const amountNumber = Number(values.amount);
     const accountName = values.account;
@@ -985,75 +1021,82 @@ export function AddTransactionSlideOver({
 
     const submittedItems: Transaction["items"] = [];
 
-    if (!onSubmit) return;
+    const submitFn = onSubmit ?? (async (tx) => {
+      await addTransactionDirect(tx);
+    });
 
-    const generation = closeGenerationRef.current;
-    const fingerprintId = initialValues
-      ? null
-      : rememberRecentCreate(values);
+    const isAddingAnother = Boolean(options?.keepOpen && !initialValues);
+    const fingerprintId = initialValues ? null : rememberRecentCreate(values);
 
     try {
-    // Friend Split -> Normal / Split Expense: the toggle is off but a
-    // friend_splits row still exists for this transaction. Remove it (and its
-    // settlements, via FK cascade) so no orphan record or stale friend
-    // balance is left behind.
-    if (initialValues && linkedFriendSplit && !friendSplitEnabled) {
-      await removeFriendSplit(linkedFriendSplit.id);
-    }
+      // Friend Split -> Normal / Split Expense: the toggle is off but a
+      // friend_splits row still exists for this transaction. Remove it (and its
+      // settlements, via FK cascade) so no orphan record or stale friend
+      // balance is left behind.
+      if (initialValues && linkedFriendSplit && !friendSplitEnabled) {
+        await removeFriendSplit(linkedFriendSplit.id);
+      }
 
-    await onSubmit({
-      type: values.type,
-      merchant: values.merchant.trim(),
-      title: values.title?.trim() || undefined,
-      category: values.category,
-      account: accountName,
-      accountName,
-      accountId: initialValues?.accountId,
-      purpose: values.purpose,
-      purposeId: values.purpose,
-      amount: amountNumber,
-      totalAmount: amountNumber,
-      date: isoDate,
-      transactionDate: isoDate,
-      paymentMethod,
-      paymentType: paymentMethod,
-      status: initialValues?.status ?? "completed",
-      reference: merchantIdentifier,
-      referenceId: merchantIdentifier,
-      // Always store identifier in upiId for cross-platform merchant matching.
-      upiId: merchantIdentifier,
-      note: values.note?.trim() || undefined,
-      tags: tags.length ? tags : undefined,
-      source: initialValues?.source ?? "manual",
-      entrySource: initialValues?.entrySource ?? "manual",
-      contributorSource:
-        values.type === "income"
-          ? showContributorSource
-            ? (values.contributorSource as ContributorSource | undefined) ||
-              defaultContributorName
-            : defaultContributorName
-          : undefined,
-      // Simple form never links outing from here
-      outingId: initialValues?.outingId ?? null,
-      hasSplits:
-        currentType === "expense" && splitExpenseSplits
-          ? splitExpenseSplits.length > 1
-          : currentType === "income"
-            ? false
-            : initialValues?.hasSplits,
-      splits:
-        currentType === "expense"
-          ? (splitExpenseSplits ?? initialValues?.splits)
-          : undefined,
-      hasItems: submittedItems ? submittedItems.length > 0 : initialValues?.hasItems,
-      items: submittedItems,
-    });
+      const submitPromise = submitFn({
+        type: values.type,
+        merchant: values.merchant.trim(),
+        title: values.title?.trim() || undefined,
+        category: values.category,
+        account: accountName,
+        accountName,
+        accountId: initialValues?.accountId,
+        purpose: values.purpose,
+        purposeId: values.purpose,
+        amount: amountNumber,
+        totalAmount: amountNumber,
+        date: isoDate,
+        transactionDate: isoDate,
+        paymentMethod,
+        paymentType: paymentMethod,
+        status: initialValues?.status ?? "completed",
+        reference: merchantIdentifier,
+        referenceId: merchantIdentifier,
+        // Always store identifier in upiId for cross-platform merchant matching.
+        upiId: merchantIdentifier,
+        note: values.note?.trim() || undefined,
+        tags: tags.length ? tags : undefined,
+        source: initialValues?.source ?? "manual",
+        entrySource: initialValues?.entrySource ?? "manual",
+        contributorSource:
+          values.type === "income"
+            ? showContributorSource
+              ? (values.contributorSource as ContributorSource | undefined) ||
+                defaultContributorName
+              : defaultContributorName
+            : undefined,
+        // Simple form never links outing from here
+        outingId: initialValues?.outingId ?? null,
+        hasSplits:
+          currentType === "expense" && splitExpenseSplits
+            ? splitExpenseSplits.length > 1
+            : currentType === "income"
+              ? false
+              : initialValues?.hasSplits,
+        splits:
+          currentType === "expense"
+            ? (splitExpenseSplits ?? initialValues?.splits)
+            : undefined,
+        hasItems: submittedItems ? submittedItems.length > 0 : initialValues?.hasItems,
+        items: submittedItems,
+      });
+
+      if (isAddingAnother) {
+        finishKeepOpenSubmit();
+        notify({ title: "Transaction added!", description: "Ready for next transaction." });
+      } else {
+        finishSuccessfulSubmit();
+      }
+
+      await submitPromise;
     } catch (error) {
       if (fingerprintId) forgetRecentCreate(fingerprintId);
       throw error;
     }
-
-    await finishSuccessfulSubmit();
   }
 
   async function submit(values: ParsedTransactionFormValues) {
@@ -1072,6 +1115,25 @@ export function AddTransactionSlideOver({
       }
 
       await persistTransaction(values);
+    });
+  }
+
+  async function submitAndAddAnother(values: ParsedTransactionFormValues) {
+    await runExclusive(async () => {
+      if (isPastTransaction && (!values.date?.trim() || !values.time?.trim())) {
+        return;
+      }
+
+      if (!initialValues) {
+        const duplicate = findCreateDuplicate(values);
+        if (duplicate) {
+          setDuplicateMatch(duplicate);
+          setPendingValues(values);
+          return;
+        }
+      }
+
+      await persistTransaction(values, { keepOpen: true });
     });
   }
 
@@ -1387,7 +1449,15 @@ export function AddTransactionSlideOver({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full gap-0 overflow-y-auto p-0 sm:max-w-xl">
+      <SheetContent
+        className={cn(
+          "w-full gap-0 overflow-y-auto p-0",
+          // Mobile view: Centered Modal Dialog
+          "max-sm:!fixed max-sm:!inset-auto max-sm:!top-1/2 max-sm:!left-1/2 max-sm:!-translate-x-1/2 max-sm:!-translate-y-1/2 max-sm:!w-[calc(100%-2rem)] max-sm:!max-w-lg max-sm:!h-auto max-sm:!max-h-[88vh] max-sm:!rounded-2xl max-sm:!border max-sm:!border-border max-sm:!shadow-2xl max-sm:data-starting-style:!opacity-0 max-sm:data-starting-style:!scale-95 max-sm:data-ending-style:!opacity-0 max-sm:data-ending-style:!scale-95",
+          // Laptop / Desktop view: Side Drawer
+          "sm:inset-y-0 sm:right-0 sm:left-auto sm:top-0 sm:bottom-auto sm:h-full sm:max-w-xl sm:border-l sm:rounded-none",
+        )}
+      >
         <div className="border-b border-border px-6 pb-5 pt-6">
           <SheetHeader className="p-0 text-left">
             <SheetTitle className="text-xl font-semibold tracking-tight">
@@ -2356,26 +2426,48 @@ export function AddTransactionSlideOver({
             ) : (
               <span />
             )}
-            <Button
-              className={cn("flex-1 sm:flex-none sm:px-8", typeMeta.accent.button)}
-              disabled={
-                isSaving ||
-                isSubmitting ||
-                tripSubmitting ||
-                friendSplitSubmitting ||
-                (ownerMode === "trip" && !tripFormValid) ||
-                !splitSectionValid
-              }
-              type="submit"
-            >
-              {isSaving || isSubmitting || tripSubmitting || friendSplitSubmitting
-                ? "Saving..."
-                : initialValues || initialExpense
-                  ? "Update"
-                  : currentType === "expense"
-                    ? "Save expense"
-                    : "Save income"}
-            </Button>
+            <div className="flex w-full sm:w-auto items-center justify-end gap-2">
+              {!initialValues && !initialExpense && ownerMode !== "trip" && !friendSplitEnabled ? (
+                <Button
+                  className="flex-1 sm:flex-none text-xs sm:text-sm px-3 sm:px-4"
+                  disabled={
+                    isSaving ||
+                    isSubmitting ||
+                    tripSubmitting ||
+                    friendSplitSubmitting ||
+                    !splitSectionValid
+                  }
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    void handleSubmit(submitAndAddAnother)();
+                  }}
+                >
+                  <Plus className="mr-1.5 size-3.5" />
+                  Save & Add Another
+                </Button>
+              ) : null}
+              <Button
+                className={cn("flex-1 sm:flex-none sm:px-8 text-xs sm:text-sm", typeMeta.accent.button)}
+                disabled={
+                  isSaving ||
+                  isSubmitting ||
+                  tripSubmitting ||
+                  friendSplitSubmitting ||
+                  (ownerMode === "trip" && !tripFormValid) ||
+                  !splitSectionValid
+                }
+                type="submit"
+              >
+                {isSaving || isSubmitting || tripSubmitting || friendSplitSubmitting
+                  ? "Saving..."
+                  : initialValues || initialExpense
+                    ? "Update"
+                    : currentType === "expense"
+                      ? "Save expense"
+                      : "Save income"}
+              </Button>
+            </div>
           </SheetFooter>
         </form>
       </SheetContent>
