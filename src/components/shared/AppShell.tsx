@@ -42,6 +42,8 @@ import { fetchAppConfig } from "@/lib/supabase-data";
 import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useViewerAccess } from "@/providers/viewer-provider";
 import { useTheme } from "@/providers/theme-provider";
+import { RoleSwitchControl } from "@/components/admin/RoleSwitchControl";
+import { useRoleMode } from "@/hooks/useRoleMode";
 
 type NavItem = {
   href: string;
@@ -68,14 +70,17 @@ const bottomNavItems: NavItem[] = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-// Rendered only for role = 'admin' users — the real gate is the server-side
-// /admin layout guard; hiding these here is just UI hygiene. One rail, one
-// list: admin mode shows these seven items and nothing else.
+// Rendered in Admin View for authorized admins
 const adminNavItems: NavItem[] = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/database", label: "Database", icon: Database },
+  { href: "/admin/categories", label: "Content & Categories", icon: Layers },
+  { href: "/admin/database", label: "Database Data", icon: Database },
+  { href: "/admin/settings", label: "Website Settings", icon: Settings },
+  { href: "/admin/sms-rules", label: "SMS Rules", icon: Smartphone },
   { href: "/admin/logs", label: "System & Logs", icon: ScrollText },
+  { href: "/admin/api-logs", label: "API Logs", icon: Activity },
+  { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
 ];
 
 const viewerNavItems: NavItem[] = [
@@ -156,7 +161,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { isConfigured, isLoading, user, authUser } = useSupabaseAuth();
   const { isReadOnlyViewer, sharedPurposeIds } = useViewerAccess();
   const [authTimedOut, setAuthTimedOut] = useState(false);
-  const { isAdmin } = useIsAdmin();
+  const { mode, isAdmin: isRoleAdmin, isUserView, isAdminView } = useRoleMode();
   const { resolvedTheme, setTheme } = useTheme();
 
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -184,7 +189,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     staleTime: 60 * 1000,
     refetchInterval: 5 * 60 * 1000,
   });
-  const maintenanceActive = Boolean(appConfig?.maintenanceMode) && !isAdmin;
+  const maintenanceActive = Boolean(appConfig?.maintenanceMode) && !isRoleAdmin;
 
   const isAuthRoute = pathname.startsWith("/auth");
   // Public no-login share links render standalone, outside the app shell.
@@ -226,15 +231,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, [authTimedOut, authUser, isAuthRoute, isShareRoute, isLoading, router, user]);
 
-  // Hard admin/user split, client side: admins never see the user-facing
-  // app, not even their own dashboard. The (app) route-group layout enforces
-  // this server-side; this effect covers soft client navigations.
-  useEffect(() => {
-    if (!isAdmin || isAuthRoute || isShareRoute) return;
-    if (!pathname.startsWith("/admin")) {
-      router.replace("/admin");
-    }
-  }, [isAdmin, isAuthRoute, isShareRoute, pathname, router]);
+  // Admins can switch between User View and Admin View seamlessly.
+  // The server-side /admin layout guard enforces 403 for unauthorized users.
 
   if (!isConfigured) {
     return <SupabaseSetupScreen />;
@@ -335,7 +333,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex shrink-0 items-center justify-between px-2">
           <Link
             className="flex items-center gap-2.5 text-[17px] font-bold tracking-tight"
-            href={isAdmin ? "/admin" : "/"}
+            href={isAdminView ? "/admin" : "/"}
           >
             <span className="flex size-8 items-center justify-center rounded-xl bg-foreground text-background shadow-sm">
               <WalletCards className="size-4" />
@@ -352,8 +350,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
         </div>
 
-        {isAdmin ? (
-          <nav className="mt-6 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+
+
+        {isAdminView ? (
+          <nav className="mt-2 flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto scrollbar-none">
             <div className="px-3 pb-1.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
               ADMINISTRATION
             </div>
@@ -405,12 +405,13 @@ export function AppShell({ children }: { children: ReactNode }) {
               {getPageTitle(pendingPath ?? pathname)}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
-              {!isReadOnlyViewer && !isAdmin ? (
+              <RoleSwitchControl />
+              {!isReadOnlyViewer && !isAdminView ? (
                 <div className="mr-1 hidden sm:block">
                   <ExportButton />
                 </div>
               ) : null}
-              {!isAdmin ? <NotificationBell /> : null}
+              {!isAdminView ? <NotificationBell /> : null}
               <button
                 type="button"
                 onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}

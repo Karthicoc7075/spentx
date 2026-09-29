@@ -5,14 +5,19 @@ import {
 import { buildCategoryTotals } from "@/lib/category-totals";
 import {
   isOutingRollupLike,
+  isReimbursementTransaction,
   isSpendingExpense,
   isTransferTransaction,
   sumInvestments,
-  sumSpendingExpenses,
 } from "@/lib/investments";
 import { computeCategorySpentActuals, getCurrentPlanMonth, sumPlanned } from "@/lib/plan";
 import { narrowTransactionsToFilter } from "@/lib/utils";
 import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
+import {
+  isPeriodIncome,
+  sumPeriodExpense,
+  sumPeriodIncome,
+} from "@/lib/period-totals";
 import type {
   AnalyticsFilters,
   AnalyticsHeroStats,
@@ -94,22 +99,9 @@ export function filterAnalyticsTransactions(
 // it here keeps every income figure derived from sumByType free of
 // double-counting.
 function sumByType(transactions: Transaction[], type: Transaction["type"]) {
-  const scoped = transactions.filter(
-    (transaction) => transaction.category !== OPENING_BALANCE_CATEGORY,
-  );
-
-  if (type === "expense") {
-    return sumSpendingExpenses(scoped);
-  }
-
-  // Settlements (internal transfers) must be excluded symmetrically with the
-  // expense side, or a transfer's income leg gets counted without its
-  // equal-and-opposite expense leg.
-  return scoped
-    .filter(
-      (transaction) => transaction.type === type && !isTransferTransaction(transaction),
-    )
-    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
+  return type === "expense"
+    ? sumPeriodExpense(transactions)
+    : sumPeriodIncome(transactions);
 }
 
 export function computeHeroStats(transactions: Transaction[]): AnalyticsHeroStats {
@@ -184,8 +176,9 @@ function buildTrendBuckets(
         ? getWeekKey(date)
         : date.toISOString().slice(0, 10);
     const bucket = buckets.get(key) ?? { income: 0, expense: 0 };
-    if (transaction.type === "income") bucket.income += amount;
-    else if (transaction.type === "expense") bucket.expense += amount;
+    if (isPeriodIncome(transaction)) bucket.income += amount;
+    else if (isReimbursementTransaction(transaction)) bucket.expense -= amount;
+    else if (isSpendingExpense(transaction)) bucket.expense += amount;
     buckets.set(key, bucket);
   }
 
@@ -194,7 +187,7 @@ function buildTrendBuckets(
     .map(([key, values]) => ({
       label: formatTrendLabel(key, granularity),
       income: values.income,
-      expense: values.expense,
+      expense: Math.max(0, values.expense),
       key,
     }));
 }
@@ -379,8 +372,9 @@ export function computeMonthlyComparisonTimeline(
       if (isTransferTransaction(transaction)) continue;
       const date = transaction.transactionDate.slice(0, 10);
       if (date < range.dateFrom || date > range.dateTo) continue;
-      if (transaction.type === "income") income += transaction.totalAmount;
-      else expense += transaction.totalAmount;
+      if (isPeriodIncome(transaction)) income += transaction.totalAmount;
+      else if (isReimbursementTransaction(transaction)) expense -= transaction.totalAmount;
+      else if (isSpendingExpense(transaction)) expense += transaction.totalAmount;
     }
 
     const [year, month] = range.dateFrom.split("-").map(Number);
@@ -388,7 +382,7 @@ export function computeMonthlyComparisonTimeline(
     return {
       month: formatMonthlyComparisonLabel(year, month - 1),
       income,
-      expense,
+      expense: Math.max(0, expense),
       savings: income - expense,
     };
   });
@@ -528,12 +522,7 @@ export function getPlanMonthFromFilters(filters: AnalyticsFilters) {
 }
 
 export function computeContributorBreakdown(transactions: Transaction[]) {
-  const income = transactions.filter(
-    (transaction) =>
-      transaction.type === "income" &&
-      transaction.category !== OPENING_BALANCE_CATEGORY &&
-      !isTransferTransaction(transaction),
-  );
+  const income = transactions.filter(isPeriodIncome);
   const total = income.reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const totalsBySource = new Map<string, number>();

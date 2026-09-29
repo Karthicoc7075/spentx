@@ -59,6 +59,7 @@ import { useTransactions } from "@/hooks/useTransactions";
 import { findLikelyDuplicate } from "@/lib/transaction-summary";
 import { buildExpenseSplits } from "@/lib/outings";
 import { syncOutingRollupLedger } from "@/lib/outing-ledger-sync";
+import { isOutingActive } from "@/lib/outing-display";
 import { saveOutingExpense } from "@/lib/supabase-data";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { queryKeys } from "@/lib/query-keys";
@@ -238,7 +239,13 @@ export function AddTransactionSlideOver({
   const queryClient = useQueryClient();
 
   const activeOutings = useMemo(
-    () => outings.filter((item) => item.status === "active" && !item.isQuickSplit),
+    () =>
+      outings.filter(
+        (item) =>
+          isOutingActive(item) &&
+          item.isActive !== false &&
+          !item.isQuickSplit,
+      ),
     [outings],
   );
 
@@ -291,13 +298,6 @@ export function AddTransactionSlideOver({
     [initialValues?.outingId, outings],
   );
   const isEditingRealOutingTransaction = Boolean(initialValues?.outingId);
-
-  /** Split Expense / Split with Friends are only offered for plain
-   * transactions — never in Trip mode, never for a transaction already
-   * linked to an outing, never for a suppressed derived row (e.g. the
-   * outing rollup transaction). */
-  const canOfferSplit =
-    !lockedOutingId && !initialExpense && !hideOwnerToggle && !isEditingRealOutingTransaction;
 
   // Load the standalone friend_splits row when editing a Friend split
   // transaction, so its friends/split-type/amounts can be pre-filled.
@@ -352,109 +352,6 @@ export function AddTransactionSlideOver({
     if (checked) setSplitExpenseEnabled(false);
   }
 
-  // Reset / pre-populate the three modes whenever the sheet opens for a
-  // (possibly different) transaction.
-  useEffect(() => {
-    if (!open) return;
-
-    if (!canOfferSplit) {
-      setSplitExpenseEnabled(false);
-      setFriendSplitEnabled(false);
-      return;
-    }
-
-    if (initialValues && linkedFriendSplit) {
-      setFriendSplitEnabled(true);
-      setSplitExpenseEnabled(false);
-      const friendIds = linkedFriendSplit.members
-        .filter((member) => !member.isCurrentUser)
-        .map((member) => member.friendId)
-        .filter((id): id is string => Boolean(id));
-      setSelectedFriendIds(friendIds);
-      setFriendSplitType(linkedFriendSplit.splitType);
-      setFriendCustomAmounts(
-        Object.fromEntries(
-          linkedFriendSplit.splits.map((split) => [
-            split.memberId,
-            String(split.amount),
-          ]),
-        ),
-      );
-      return;
-    }
-
-    if (initialValues?.hasSplits && (initialValues.splits?.length ?? 0) > 1) {
-      const splits = initialValues.splits!;
-      setSplitExpenseEnabled(true);
-      setFriendSplitEnabled(false);
-      const distinctCategories = new Set(splits.map((s) => s.categoryId));
-      const distinctPurposes = new Set(splits.map((s) => s.purposeId));
-      if (distinctPurposes.size === 1 && distinctCategories.size > 1) {
-        setSplitExpenseMode("category");
-        setCategorySplitRows(
-          splits.map((s) => ({
-            id: crypto.randomUUID(),
-            categoryId: s.categoryId,
-            amount: String(s.amount),
-          })),
-        );
-        setPurposeSplitRows([]);
-        setBothSplitRows([]);
-      } else if (distinctPurposes.size > 1 && distinctCategories.size > 1) {
-        setSplitExpenseMode("both");
-        setBothSplitRows(
-          splits.map((s) => ({
-            id: crypto.randomUUID(),
-            purposeId: s.purposeId,
-            categoryId: s.categoryId,
-            amount: String(s.amount),
-          })),
-        );
-        setPurposeSplitRows([]);
-        setCategorySplitRows([]);
-      } else {
-        setSplitExpenseMode("purpose");
-        setPurposeSplitRows(
-          splits.map((s) => ({
-            id: crypto.randomUUID(),
-            purposeId: s.purposeId,
-            amount: String(s.amount),
-          })),
-        );
-        setCategorySplitRows([]);
-        setBothSplitRows([]);
-      }
-      return;
-    }
-
-    // New transaction, or a plain existing one — Normal, both switches off,
-    // unless the caller asked to land straight in Split Expense (the
-    // "Convert to Split Transaction" unlink outcome).
-    setSplitExpenseEnabled(Boolean(forceSplitExpense));
-    setSplitExpenseMode("purpose");
-    setPurposeSplitRows(
-      forceSplitExpense
-        ? [
-            { id: crypto.randomUUID(), purposeId: "", amount: "" },
-            { id: crypto.randomUUID(), purposeId: "", amount: "" },
-          ]
-        : [],
-    );
-    setCategorySplitRows([]);
-    setBothSplitRows([]);
-    setFriendSplitEnabled(false);
-    setSelectedFriendIds([]);
-    setFriendSplitType("equally");
-    setFriendCustomAmounts({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the sheet (re)opens for a given transaction
-  }, [
-    open,
-    initialValues?.id,
-    initialOuting?.id,
-    linkedFriendSplit,
-    canOfferSplit,
-    forceSplitExpense,
-  ]);
 
   // Items (Title / Itemization) — independent seed/reset, kept out of the
   // Split Expense effect above since the two features never interact.
@@ -606,6 +503,126 @@ export function AddTransactionSlideOver({
   }, [open, initialValues?.id, initialExpense?.id]);
 
   const currentType = watch("type");
+
+  /** Split Expense / Split with Friends are only offered for plain
+   * Expense transactions — never for Income, never in Trip mode, never for a
+   * transaction already linked to an outing, never for a suppressed derived row
+   * (e.g. the outing rollup transaction). */
+  const canOfferSplit =
+    currentType === "expense" &&
+    !lockedOutingId &&
+    !initialExpense &&
+    !hideOwnerToggle &&
+    !isEditingRealOutingTransaction;
+
+  // Reset / pre-populate the split modes whenever the sheet opens for a
+  // (possibly different) transaction, or when canOfferSplit changes (e.g. toggling Expense / Income).
+  useEffect(() => {
+    if (!open) return;
+
+    if (!canOfferSplit) {
+      setSplitExpenseEnabled(false);
+      setFriendSplitEnabled(false);
+      setSelectedFriendIds([]);
+      setFriendCustomAmounts({});
+      setPurposeSplitRows([]);
+      setCategorySplitRows([]);
+      setBothSplitRows([]);
+      return;
+    }
+
+    if (initialValues && linkedFriendSplit) {
+      setFriendSplitEnabled(true);
+      setSplitExpenseEnabled(false);
+      const friendIds = linkedFriendSplit.members
+        .filter((member) => !member.isCurrentUser)
+        .map((member) => member.friendId)
+        .filter((id): id is string => Boolean(id));
+      setSelectedFriendIds(friendIds);
+      setFriendSplitType(linkedFriendSplit.splitType);
+      setFriendCustomAmounts(
+        Object.fromEntries(
+          linkedFriendSplit.splits.map((split) => [
+            split.memberId,
+            String(split.amount),
+          ]),
+        ),
+      );
+      return;
+    }
+
+    if (initialValues?.hasSplits && (initialValues.splits?.length ?? 0) > 1) {
+      const splits = initialValues.splits!;
+      setSplitExpenseEnabled(true);
+      setFriendSplitEnabled(false);
+      const distinctCategories = new Set(splits.map((s) => s.categoryId));
+      const distinctPurposes = new Set(splits.map((s) => s.purposeId));
+      if (distinctPurposes.size === 1 && distinctCategories.size > 1) {
+        setSplitExpenseMode("category");
+        setCategorySplitRows(
+          splits.map((s) => ({
+            id: crypto.randomUUID(),
+            categoryId: s.categoryId,
+            amount: String(s.amount),
+          })),
+        );
+        setPurposeSplitRows([]);
+        setBothSplitRows([]);
+      } else if (distinctPurposes.size > 1 && distinctCategories.size > 1) {
+        setSplitExpenseMode("both");
+        setBothSplitRows(
+          splits.map((s) => ({
+            id: crypto.randomUUID(),
+            purposeId: s.purposeId,
+            categoryId: s.categoryId,
+            amount: String(s.amount),
+          })),
+        );
+        setPurposeSplitRows([]);
+        setCategorySplitRows([]);
+      } else {
+        setSplitExpenseMode("purpose");
+        setPurposeSplitRows(
+          splits.map((s) => ({
+            id: crypto.randomUUID(),
+            purposeId: s.purposeId,
+            amount: String(s.amount),
+          })),
+        );
+        setCategorySplitRows([]);
+        setBothSplitRows([]);
+      }
+      return;
+    }
+
+    // New transaction, or a plain existing one — Normal, both switches off,
+    // unless the caller asked to land straight in Split Expense (the
+    // "Convert to Split Transaction" unlink outcome).
+    setSplitExpenseEnabled(Boolean(forceSplitExpense));
+    setSplitExpenseMode("purpose");
+    setPurposeSplitRows(
+      forceSplitExpense
+        ? [
+            { id: crypto.randomUUID(), purposeId: "", amount: "" },
+            { id: crypto.randomUUID(), purposeId: "", amount: "" },
+          ]
+        : [],
+    );
+    setCategorySplitRows([]);
+    setBothSplitRows([]);
+    setFriendSplitEnabled(false);
+    setSelectedFriendIds([]);
+    setFriendSplitType("equally");
+    setFriendCustomAmounts({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the sheet (re)opens for a given transaction
+  }, [
+    open,
+    initialValues?.id,
+    initialOuting?.id,
+    linkedFriendSplit,
+    canOfferSplit,
+    forceSplitExpense,
+  ]);
   const amount = watch("amount");
   const merchant = watch("merchant");
   const category = watch("category");
@@ -721,6 +738,14 @@ export function AddTransactionSlideOver({
   const categories = allCategories.filter(
     (item) =>
       item.type === currentType &&
+      // Repayments are created from the Friends/Outings settlement flow. Keep
+      // the reserved category out of normal income entry so it cannot be
+      // mistaken for earnings, while still allowing existing rows to edit.
+      !(
+        currentType === "income" &&
+        item.name.trim().toLowerCase() === "friend returns" &&
+        item.name !== initialValues?.category
+      ) &&
       (item.isActive !== false || item.name === initialValues?.category),
   );
   const selectableAccounts = accounts
@@ -737,8 +762,11 @@ export function AddTransactionSlideOver({
 
   useEffect(() => {
     if (!open) return;
-    if (!category && categories.length > 0) {
-      setValue("category", categories[0].name);
+    if (categories.length > 0) {
+      const match = categories.some((c) => c.name === category);
+      if (!match) {
+        setValue("category", categories[0].name);
+      }
     }
   }, [open, category, categories, setValue]);
 
@@ -784,9 +812,10 @@ export function AddTransactionSlideOver({
     watch,
   ]);
 
+  const selectedCategoryObj = categories.find((item) => item.name === category);
   const selectedCategoryColor =
-    categories.find((item) => item.name === category)?.color ?? "#8b7ff0";
-  const CategoryIcon = getCategoryIcon(category);
+    selectedCategoryObj?.color ?? "#8b7ff0";
+  const CategoryIcon = getCategoryIcon(selectedCategoryObj?.icon || category);
 
   const [duplicateMatch, setDuplicateMatch] = useState<Transaction | null>(
     null,
@@ -795,11 +824,20 @@ export function AddTransactionSlideOver({
     useState<ParsedTransactionFormValues | null>(null);
   /** Manual past entry: when off, save uses current date/time. */
   const [isPastTransaction, setIsPastTransaction] = useState(false);
+  // Sync lock — isSubmitting / tripSubmitting lag one render, so a second
+  // click on Save can start another write and double-count net worth.
+  const submitLockRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const draftExpenseIdRef = useRef<string | null>(null);
+  const closeGenerationRef = useRef(0);
+  const recentCreatesRef = useRef<Transaction[]>([]);
 
   useEffect(() => {
     if (!open) {
       setDuplicateMatch(null);
       setPendingValues(null);
+      draftExpenseIdRef.current = null;
+      closeGenerationRef.current += 1;
       return;
     }
     // Editing: show existing date/time. New: past switch off → now.
@@ -817,7 +855,81 @@ export function AddTransactionSlideOver({
     return new Date().toISOString();
   }
 
+  function pruneRecentCreates() {
+    const cutoff = Date.now() - 15_000;
+    recentCreatesRef.current = recentCreatesRef.current.filter((row) => {
+      const created = Date.parse(row.createdAt ?? row.date ?? "");
+      return Number.isFinite(created) && created >= cutoff;
+    });
+  }
+
+  function rememberRecentCreate(values: ParsedTransactionFormValues) {
+    pruneRecentCreates();
+    const isoDate = resolveTransactionIso(values);
+    const amountNumber = Number(values.amount);
+    const fingerprint: Transaction = {
+      id: `inflight-${Date.now()}`,
+      type: values.type,
+      merchant: values.merchant.trim(),
+      amount: amountNumber,
+      totalAmount: amountNumber,
+      account: values.account,
+      accountName: values.account,
+      date: isoDate,
+      transactionDate: isoDate,
+      createdAt: new Date().toISOString(),
+      category: values.category,
+      source: "manual",
+    };
+    recentCreatesRef.current = [fingerprint, ...recentCreatesRef.current];
+    return fingerprint.id;
+  }
+
+  function forgetRecentCreate(id: string) {
+    recentCreatesRef.current = recentCreatesRef.current.filter(
+      (row) => row.id !== id,
+    );
+  }
+
+  function findCreateDuplicate(values: ParsedTransactionFormValues) {
+    pruneRecentCreates();
+    return findLikelyDuplicate(
+      {
+        amount: Number(values.amount),
+        account: values.account,
+        date: resolveTransactionIso(values),
+      },
+      [...recentCreatesRef.current, ...transactions],
+    );
+  }
+
+  async function runExclusive(work: () => Promise<void>) {
+    if (submitLockRef.current || isSaving) return;
+    submitLockRef.current = true;
+    setIsSaving(true);
+    try {
+      await work();
+    } finally {
+      submitLockRef.current = false;
+      setIsSaving(false);
+    }
+  }
+
+  async function finishSuccessfulSubmit() {
+    setDuplicateMatch(null);
+    setPendingValues(null);
+    submitLockRef.current = false;
+    draftExpenseIdRef.current = null;
+    setIsSaving(false);
+    reset();
+    onOpenChange(false);
+  }
+
   async function commitSubmit(values: ParsedTransactionFormValues) {
+    await runExclusive(() => persistTransaction(values));
+  }
+
+  async function persistTransaction(values: ParsedTransactionFormValues) {
     const isoDate = resolveTransactionIso(values);
     const amountNumber = Number(values.amount);
     const accountName = values.account;
@@ -875,6 +987,12 @@ export function AddTransactionSlideOver({
 
     if (!onSubmit) return;
 
+    const generation = closeGenerationRef.current;
+    const fingerprintId = initialValues
+      ? null
+      : rememberRecentCreate(values);
+
+    try {
     // Friend Split -> Normal / Split Expense: the toggle is off but a
     // friend_splits row still exists for this transaction. Remove it (and its
     // settlements, via FK cascade) so no orphan record or stale friend
@@ -917,42 +1035,44 @@ export function AddTransactionSlideOver({
           : undefined,
       // Simple form never links outing from here
       outingId: initialValues?.outingId ?? null,
-      hasSplits: splitExpenseSplits
-        ? splitExpenseSplits.length > 1
-        : initialValues?.hasSplits,
-      splits: splitExpenseSplits ?? initialValues?.splits,
+      hasSplits:
+        currentType === "expense" && splitExpenseSplits
+          ? splitExpenseSplits.length > 1
+          : currentType === "income"
+            ? false
+            : initialValues?.hasSplits,
+      splits:
+        currentType === "expense"
+          ? (splitExpenseSplits ?? initialValues?.splits)
+          : undefined,
       hasItems: submittedItems ? submittedItems.length > 0 : initialValues?.hasItems,
       items: submittedItems,
     });
-    setDuplicateMatch(null);
-    setPendingValues(null);
-    reset();
-    onOpenChange(false);
+    } catch (error) {
+      if (fingerprintId) forgetRecentCreate(fingerprintId);
+      throw error;
+    }
+
+    await finishSuccessfulSubmit();
   }
 
   async function submit(values: ParsedTransactionFormValues) {
-    if (isPastTransaction && (!values.date?.trim() || !values.time?.trim())) {
-      return;
-    }
-
-    if (!initialValues) {
-      const duplicate = findLikelyDuplicate(
-        {
-          amount: Number(values.amount),
-          account: values.account,
-          date: resolveTransactionIso(values),
-        },
-        transactions,
-      );
-
-      if (duplicate) {
-        setDuplicateMatch(duplicate);
-        setPendingValues(values);
+    await runExclusive(async () => {
+      if (isPastTransaction && (!values.date?.trim() || !values.time?.trim())) {
         return;
       }
-    }
 
-    await commitSubmit(values);
+      if (!initialValues) {
+        const duplicate = findCreateDuplicate(values);
+        if (duplicate) {
+          setDuplicateMatch(duplicate);
+          setPendingValues(values);
+          return;
+        }
+      }
+
+      await persistTransaction(values);
+    });
   }
 
   /**
@@ -966,7 +1086,9 @@ export function AddTransactionSlideOver({
    */
   async function handleTripSubmit() {
     if (!user?.id || !selectedOuting || !tripFormValid) return;
+    if (submitLockRef.current) return;
 
+    await runExclusive(async () => {
     setTripSubmitting(true);
     try {
       const amountNumber = Number(watch("amount"));
@@ -1003,8 +1125,13 @@ export function AddTransactionSlideOver({
         customSplits,
       );
 
+      if (!draftExpenseIdRef.current) {
+        draftExpenseIdRef.current = crypto.randomUUID();
+      }
+      const expenseId = initialExpense?.id ?? draftExpenseIdRef.current;
+
       await saveOutingExpense(user.id, {
-        id: initialExpense?.id ?? crypto.randomUUID(),
+        id: expenseId,
         userId: user.id,
         outingId: selectedOuting.id,
         description: merchantValue,
@@ -1022,9 +1149,13 @@ export function AddTransactionSlideOver({
 
       const defaultAccount =
         accounts.find((item) => item.isDefault)?.name ?? accounts[0]?.name ?? "Cash";
-      await syncOutingRollupLedger(user.id, selectedOuting.id, {
-        defaultAccountName: defaultAccount,
-      });
+      try {
+        await syncOutingRollupLedger(user.id, selectedOuting.id, {
+          defaultAccountName: defaultAccount,
+        });
+      } catch (syncError) {
+        console.error("Outing ledger sync error, continuing:", syncError);
+      }
 
       await invalidateFinancialData(queryClient, user.id, {
         outingId: selectedOuting.id,
@@ -1033,11 +1164,11 @@ export function AddTransactionSlideOver({
         queryKey: queryKeys.allOutingExpenses(user.id),
       });
 
-      reset();
-      onOpenChange(false);
+      await finishSuccessfulSubmit();
     } finally {
       setTripSubmitting(false);
     }
+    });
   }
 
   /**
@@ -1047,10 +1178,24 @@ export function AddTransactionSlideOver({
    * no outing, outing expense, outing member or outing settlement, and the
    * transaction's `outingId` stays null.
    */
-  async function handleFriendSplitSubmit(values: ParsedTransactionFormValues) {
+  async function handleFriendSplitSubmit(
+    values: ParsedTransactionFormValues,
+    ignoreDuplicate = false,
+  ) {
     if (!user?.id || !friendSplitValid) return;
 
+    await runExclusive(async () => {
+      if (!ignoreDuplicate) {
+        const duplicate = findCreateDuplicate(values);
+        if (duplicate) {
+          setDuplicateMatch(duplicate);
+          setPendingValues(values);
+          return;
+        }
+      }
+
     setFriendSplitSubmitting(true);
+    const fingerprintId = rememberRecentCreate(values);
     try {
       const isoDate = resolveTransactionIso(values);
       const amountNumber = Number(values.amount);
@@ -1122,11 +1267,14 @@ export function AddTransactionSlideOver({
         paymentMode,
       });
 
-      reset();
-      onOpenChange(false);
+      await finishSuccessfulSubmit();
+    } catch (error) {
+      forgetRecentCreate(fingerprintId);
+      throw error;
     } finally {
       setFriendSplitSubmitting(false);
     }
+    });
   }
 
   /**
@@ -1137,6 +1285,7 @@ export function AddTransactionSlideOver({
   async function handleFriendSplitEditSubmit(values: ParsedTransactionFormValues) {
     if (!user?.id || !initialValues || !friendSplitValid) return;
 
+    await runExclusive(async () => {
     setFriendSplitSubmitting(true);
     try {
       const isoDate = resolveTransactionIso(values);
@@ -1218,11 +1367,11 @@ export function AddTransactionSlideOver({
         paymentMode,
       });
 
-      reset();
-      onOpenChange(false);
+      await finishSuccessfulSubmit();
     } finally {
       setFriendSplitSubmitting(false);
     }
+    });
   }
 
   function minutesAgoLabel(iso?: string) {
@@ -1262,13 +1411,22 @@ export function AddTransactionSlideOver({
           className="grid gap-5 px-6 py-5"
           onSubmit={(event) => {
             event.preventDefault();
+            if (
+              submitLockRef.current ||
+              isSaving ||
+              isSubmitting ||
+              tripSubmitting ||
+              friendSplitSubmitting
+            ) {
+              return;
+            }
             if (ownerMode === "trip") {
               void handleTripSubmit();
             } else if (canOfferSplit && friendSplitEnabled) {
               if (initialValues) {
                 void handleSubmit(handleFriendSplitEditSubmit)();
               } else {
-                void handleSubmit(handleFriendSplitSubmit)();
+                void handleSubmit((values) => handleFriendSplitSubmit(values))();
               }
             } else {
               void handleSubmit(submit)();
@@ -2162,8 +2320,16 @@ export function AddTransactionSlideOver({
                     <Button
                       size="sm"
                       type="button"
+                      disabled={
+                        isSubmitting || tripSubmitting || friendSplitSubmitting
+                      }
                       onClick={() => {
-                        if (pendingValues) void commitSubmit(pendingValues);
+                        if (!pendingValues) return;
+                        if (canOfferSplit && friendSplitEnabled && !initialValues) {
+                          void handleFriendSplitSubmit(pendingValues, true);
+                          return;
+                        }
+                        void commitSubmit(pendingValues);
                       }}
                     >
                       Save anyway
@@ -2193,6 +2359,7 @@ export function AddTransactionSlideOver({
             <Button
               className={cn("flex-1 sm:flex-none sm:px-8", typeMeta.accent.button)}
               disabled={
+                isSaving ||
                 isSubmitting ||
                 tripSubmitting ||
                 friendSplitSubmitting ||
@@ -2201,7 +2368,7 @@ export function AddTransactionSlideOver({
               }
               type="submit"
             >
-              {isSubmitting || tripSubmitting || friendSplitSubmitting
+              {isSaving || isSubmitting || tripSubmitting || friendSplitSubmitting
                 ? "Saving..."
                 : initialValues || initialExpense
                   ? "Update"

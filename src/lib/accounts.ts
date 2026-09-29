@@ -6,12 +6,15 @@ export function getAccountOpeningDate(
   account: Account,
   transactions: Transaction[] = [],
 ): string | null {
+  const dates: string[] = [];
+
   if (account.openingBalanceDate) {
-    return account.openingBalanceDate;
+    dates.push(account.openingBalanceDate);
   }
 
   if (account.createdAt) {
-    return toCalendarDate(account.createdAt);
+    const d = toCalendarDate(account.createdAt);
+    if (d) dates.push(d);
   }
 
   const accountTransactions = transactions
@@ -19,11 +22,16 @@ export function getAccountOpeningDate(
     .map((transaction) =>
       toCalendarDate(transaction.transactionDate ?? transaction.date ?? ""),
     )
-    .filter(Boolean)
+    .filter((d): d is string => Boolean(d))
     .sort();
 
   if (accountTransactions.length > 0) {
-    return accountTransactions[0];
+    dates.push(accountTransactions[0]);
+  }
+
+  if (dates.length > 0) {
+    dates.sort();
+    return dates[0];
   }
 
   return null;

@@ -466,7 +466,10 @@ export function SharingTab() {
               </div>
             ) : (
               <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs text-primary">
-                <p className="font-semibold">🔗 Link Only Share Rule:</p>
+                <p className="flex items-center gap-1.5 font-semibold">
+                  <Link2 className="size-3.5" />
+                  <span>Link Share Limit:</span>
+                </p>
                 <p className="mt-0.5 text-muted-foreground">
                   Generates a direct read-only view link. Maximum <strong>3 active links allowed per purpose</strong>. Delete an old link if you need a new one.
                 </p>
@@ -476,7 +479,7 @@ export function SharingTab() {
             <div className="grid gap-1.5">
               <Label htmlFor="share-purpose">Purpose</Label>
               <select
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                className="h-9 w-full rounded-xl border border-input bg-card px-3 text-sm font-medium shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 id="share-purpose"
                 value={purposeId}
                 onChange={(event) => setPurposeId(event.target.value)}
@@ -494,7 +497,7 @@ export function SharingTab() {
               <div className="grid gap-1.5">
                 <Label htmlFor="share-contributor">Contributor</Label>
                 <select
-                  className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                  className="h-9 w-full rounded-xl border border-input bg-card px-3 text-sm font-medium shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   id="share-contributor"
                   value={contributorId}
                   onChange={(event) => setContributorId(event.target.value)}
@@ -516,7 +519,7 @@ export function SharingTab() {
             <div className="grid gap-1.5">
               <Label htmlFor="share-expiry">Link expires</Label>
               <select
-                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
+                className="h-9 w-full rounded-xl border border-input bg-card px-3 text-sm font-medium shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 id="share-expiry"
                 value={expiryPreset}
                 onChange={(event) =>

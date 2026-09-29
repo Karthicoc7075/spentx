@@ -1,8 +1,10 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { fetchUserProfile } from "@/lib/supabase-data";
+import { getDateRangeForDashboardPreset } from "@/lib/date-filters";
 import { AddTransactionSlideOver } from "@/components/shared/AddTransactionSlideOver";
 import { TransactionSummaryStrip } from "@/components/shared/TransactionSummaryStrip";
 import { TransactionDetailPanel } from "@/components/shared/TransactionDetailPanel";
@@ -13,6 +15,7 @@ import {
   TransactionsPagination,
   type TransactionPageSize,
 } from "@/components/transactions/TransactionsPagination";
+import { Download, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
@@ -28,6 +31,7 @@ import {
 } from "@/lib/outings";
 import { getCurrentPlanMonth } from "@/lib/plan";
 import { getPurposeDisplayName } from "@/lib/purposes";
+import { sumPeriodExpense, sumPeriodIncome } from "@/lib/period-totals";
 import {
   withOutingUnlinkedTag,
   withoutOutingUnlinkedTag,
@@ -69,13 +73,30 @@ function sortTransactionsNewest(transactions: Transaction[]) {
 export function TransactionsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { user } = useAuthReady();
+  const { user, authUser } = useAuthReady();
   const { purposes } = usePurposes();
   const { accounts } = useAccounts();
   const { categories } = useCategories();
   const { isReadOnlyViewer } = useViewerAccess();
   const share = useShareSession();
   const [filters, setFilters] = useState(initialPageFilters);
+
+  const { data: userProfile } = useQuery({
+    queryKey: ["user-profile-joined", user?.id],
+    queryFn: () => fetchUserProfile(user?.id),
+    enabled: Boolean(user?.id),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const currentMonth = getCurrentPlanMonth();
+
+  const accountCreatedMonth = useMemo(() => {
+    const rawDate = userProfile?.joinedAt ?? user?.createdAt ?? authUser?.created_at;
+    if (!rawDate) return currentMonth;
+    const match = rawDate.match(/^(\d{4})-(\d{2})/);
+    const parsed = match ? `${match[1]}-${match[2]}` : currentMonth;
+    return parsed > currentMonth ? currentMonth : parsed;
+  }, [userProfile?.joinedAt, user?.createdAt, authUser?.created_at, currentMonth]);
   const {
     transactions: ledgerTransactions,
     addTransaction,
@@ -143,9 +164,7 @@ export function TransactionsPage() {
   // not the whole transaction — same rule the Dashboard now follows.
   const filteredLedgerForTotals = useMemo(() => {
     const visible = ledgerTransactions.filter(
-      (transaction) =>
-        !(transaction.category === "Settlements" && transaction.type === "income") &&
-        !pendingDeleteIds.has(transaction.id),
+      (transaction) => !pendingDeleteIds.has(transaction.id),
     );
     return narrowTransactionsToFilter(
       filterTransactions(visible, filters, purposes),
@@ -155,42 +174,58 @@ export function TransactionsPage() {
   }, [filters, ledgerTransactions, pendingDeleteIds, purposes]);
 
   const carryForward = useMemo(() => {
-    if (!filters.dateFrom) return 0;
-    // Always cut off at the start of the calendar month the range begins
-    // in — not the exact dateFrom — so a custom range that doesn't start on
-    // the 1st (e.g. Mar 15–Apr 10) still carries forward "everything before
-    // March," matching This Month/Last Month's whole-month behavior instead
-    // of accidentally folding Mar 1–14 into the "prior" bucket.
-    const monthStart = `${filters.dateFrom.slice(0, 7)}-01`;
+    const activeMonth = filters.dateFrom
+      ? filters.dateFrom.slice(0, 7)
+      : currentMonth;
+
+    const [yearStr, monthStr] = activeMonth.split("-");
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    const prevDate = new Date(year, month - 2, 1);
+    const prevYear = prevDate.getFullYear();
+    const prevMonthStr = String(prevDate.getMonth() + 1).padStart(2, "0");
+    const prevMonthKey = `${prevYear}-${prevMonthStr}`;
+
+    const prevMonthRange = getMonthDateRange(prevMonthKey);
+
     const priorVisible = ledgerTransactions.filter((t) => {
-      if (t.category === "Settlements" && t.type === "income") return false;
       if (pendingDeleteIds.has(t.id)) return false;
       const dateStr = t.transactionDate ?? t.date;
       if (!dateStr) return false;
-      return dateStr < monthStart;
+      const day = dateStr.slice(0, 10);
+      return day >= prevMonthRange.dateFrom && day <= prevMonthRange.dateTo;
     });
 
-    const priorFilters = { ...filters, dateFrom: "", dateTo: "", dashboardDatePreset: "custom" as const };
+    const priorFilters = {
+      ...filters,
+      dateFrom: prevMonthRange.dateFrom,
+      dateTo: prevMonthRange.dateTo,
+      dashboardDatePreset: "custom" as const,
+      transactionType: "" as const,
+    };
     const filteredPrior = narrowTransactionsToFilter(
       filterTransactions(priorVisible, priorFilters, purposes),
       { categories: filters.categories, purposeId: filters.purposeId },
       purposes,
     );
 
-    let income = 0;
-    let expense = 0;
-    for (const t of filteredPrior) {
-      const cat = (t.category ?? "").toLowerCase();
-      if (cat === "transfer" || cat === "settlements" || cat === "opening balance") continue;
-      const amt = Number(t.totalAmount ?? t.amount ?? 0);
-      if (t.type === "income") {
-        income += amt;
-      } else if (t.type === "expense") {
-        expense += amt;
-      }
-    }
+    const income = sumPeriodIncome(filteredPrior, prevMonthRange);
+    const expense = sumPeriodExpense(filteredPrior, {
+      range: prevMonthRange,
+      unlinkedOutingExpenses: allOutingExpenses,
+      categories,
+      includeOutingExpenses: true,
+    });
     return income - expense;
-  }, [filters, ledgerTransactions, pendingDeleteIds, purposes]);
+  }, [
+    filters,
+    ledgerTransactions,
+    pendingDeleteIds,
+    purposes,
+    allOutingExpenses,
+    categories,
+    currentMonth,
+  ]);
 
   // Only built when a Purpose/Category filter is active — a split
   // transaction's row should show the sum of just its matching splits
@@ -223,16 +258,18 @@ export function TransactionsPage() {
     Math.ceil(filteredTransactions.length / pageSize) || 1,
   );
 
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+
   useEffect(() => {
     if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
+      setCurrentPage(Math.max(1, totalPages));
     }
   }, [currentPage, totalPages]);
 
   const pageTransactions = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
+    const start = (safeCurrentPage - 1) * pageSize;
     return filteredTransactions.slice(start, start + pageSize);
-  }, [currentPage, filteredTransactions, pageSize]);
+  }, [safeCurrentPage, filteredTransactions, pageSize]);
 
   const pageLoading = Boolean(
     user?.id && transactionsLoading && allTransactions.length === 0,
@@ -243,6 +280,11 @@ export function TransactionsPage() {
     value: GlobalFilters[K],
   ) {
     setFilters((current) => ({ ...current, [key]: value }));
+    setCurrentPage(1);
+  }
+
+  function updateFilters(updates: Partial<GlobalFilters>) {
+    setFilters((current) => ({ ...current, ...updates }));
     setCurrentPage(1);
   }
 
@@ -360,21 +402,6 @@ export function TransactionsPage() {
         const payload = { ...values, tags };
         await updateTransaction({ id: previous.id, transaction: payload });
 
-        // Outing removed or changed → drop old linked outing expense rows + refresh totals.
-        if (previousOutingId && previousOutingId !== nextOutingId) {
-          await afterTransactionRemovedFromOuting(
-            user?.id,
-            { id: previous.id, outingId: nextOutingId },
-            { previousOutingId },
-          );
-        } else if (nextOutingId) {
-          await syncOutingRollupLedger(user?.id, nextOutingId);
-        }
-
-        await invalidateFinancialData(queryClient, user?.id, {
-          outingId: nextOutingId ?? previousOutingId ?? undefined,
-        });
-
         notify({
           title: "Transaction updated",
           description:
@@ -395,6 +422,27 @@ export function TransactionsPage() {
             },
           },
         });
+
+        // Don't block the form close on outing/cache refresh — a failure
+        // here used to look like save failed and the next click duplicated.
+        void (async () => {
+          try {
+            if (previousOutingId && previousOutingId !== nextOutingId) {
+              await afterTransactionRemovedFromOuting(
+                user?.id,
+                { id: previous.id, outingId: nextOutingId },
+                { previousOutingId },
+              );
+            } else if (nextOutingId) {
+              await syncOutingRollupLedger(user?.id, nextOutingId);
+            }
+            await invalidateFinancialData(queryClient, user?.id, {
+              outingId: nextOutingId ?? previousOutingId ?? undefined,
+            });
+          } catch (refreshError) {
+            console.error("Post-update financial refresh failed", refreshError);
+          }
+        })();
       } else {
         const tags = values.outingId
           ? withoutOutingUnlinkedTag(values.tags)
@@ -404,22 +452,28 @@ export function TransactionsPage() {
         // user stays on page N and thinks the save didn't work. Filters are
         // reapplied automatically by the filteredTransactions memo.
         setCurrentPage(1);
-        if (values.outingId) {
-          await syncOutingRollupLedger(user?.id, values.outingId);
-        }
-        // Always refresh — summary cards, Dashboard, Wealth, Analysis and
-        // friend balances all read from these keys.
-        await invalidateFinancialData(queryClient, user?.id, {
-          outingId: values.outingId ?? undefined,
-        });
         notify({
           title: "Transaction saved.",
           description: values.outingId
             ? "Linked to outing — trip total updated."
             : undefined,
         });
+        const outingId = values.outingId;
+        void (async () => {
+          try {
+            if (outingId) {
+              await syncOutingRollupLedger(user?.id, outingId);
+            }
+            await invalidateFinancialData(queryClient, user?.id, {
+              outingId: outingId ?? undefined,
+            });
+          } catch (refreshError) {
+            console.error("Post-save financial refresh failed", refreshError);
+          }
+        })();
       }
       setEditingTransaction(null);
+      setSlideOverOpen(false);
     } catch (submitError) {
       notify({
         title: editingTransaction ? "Couldn't update transaction" : "Couldn't save transaction",
@@ -427,6 +481,7 @@ export function TransactionsPage() {
           submitError instanceof Error ? submitError.message : "Try again.",
         variant: "destructive",
       });
+      throw submitError;
     }
   }
 
@@ -519,33 +574,35 @@ export function TransactionsPage() {
               );
             }}
           >
+            <Download className="size-4" />
             Export CSV
           </Button>
           {!isReadOnlyViewer ? (
             <>
               <Button
-                className="border-0 bg-red-500/15 text-red-400 shadow-none hover:bg-red-500/25 dark:bg-red-500/15 dark:text-red-400 dark:hover:bg-red-500/25"
+                variant="outline"
                 disabled={isMutating}
-                variant="secondary"
+                className="gap-1.5 border-rose-500/20 text-rose-600 hover:bg-rose-500/10 hover:text-rose-700 dark:border-rose-500/30 dark:text-rose-400 dark:hover:bg-rose-500/15"
                 onClick={() => {
                   setEditingTransaction(null);
                   setSlideOverMode("expense");
                   setSlideOverOpen(true);
                 }}
               >
-                Add expense
+                <Minus className="size-4 text-rose-500" />
+                Add Expense
               </Button>
               <Button
-                className="border-0 bg-emerald-500/15 text-emerald-400 shadow-none hover:bg-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-400 dark:hover:bg-emerald-500/25"
                 disabled={isMutating}
-                variant="secondary"
+                className="gap-1.5"
                 onClick={() => {
                   setEditingTransaction(null);
                   setSlideOverMode("income");
                   setSlideOverOpen(true);
                 }}
               >
-                Add income
+                <Plus className="size-4" />
+                Add Income
               </Button>
             </>
           ) : null}
@@ -558,6 +615,7 @@ export function TransactionsPage() {
         resetFilters={handleResetFilters}
         transactions={allTransactions}
         updateFilter={updateFilter}
+        updateFilters={updateFilters}
       />
 
       <TransactionSummaryStrip
@@ -586,7 +644,7 @@ export function TransactionsPage() {
           onSelect={handleSelectTransaction}
         />
         <TransactionsPagination
-          currentPage={currentPage}
+          currentPage={safeCurrentPage}
           pageSize={pageSize}
           totalCount={filteredTransactions.length}
           onPageChange={setCurrentPage}
@@ -614,7 +672,16 @@ export function TransactionsPage() {
         open={detailOpen}
         transaction={selectedTransaction}
         onDelete={isReadOnlyViewer ? undefined : requestDelete}
-        onEdit={isReadOnlyViewer ? undefined : handleSelectTransaction}
+        onEdit={
+          isReadOnlyViewer
+            ? undefined
+            : (tx) => {
+                setDetailOpen(false);
+                setEditingTransaction(tx);
+                setSlideOverMode(tx.type);
+                setSlideOverOpen(true);
+              }
+        }
         onOpenChange={setDetailOpen}
         onUnlinkOuting={isReadOnlyViewer ? undefined : handleUnlinkOuting}
         outingExpenses={allOutingExpenses}

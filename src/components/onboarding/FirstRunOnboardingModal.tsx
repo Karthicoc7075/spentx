@@ -1,6 +1,6 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Landmark, Plus, Target, Wallet, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
-import { completeOnboarding, type OnboardingAccountDraft } from "@/lib/supabase-data";
+import { completeOnboarding, fetchAppConfig, type OnboardingAccountDraft } from "@/lib/supabase-data";
 import type { Account } from "@/types";
 
 /**
@@ -27,17 +27,20 @@ const ACCOUNT_TYPES: { value: Account["type"]; label: string }[] = [
   { value: "credit", label: "Credit" },
 ];
 
-const MAX_ACCOUNTS = 6;
-
 type Draft = OnboardingAccountDraft & { key: string };
 
-function newDraft(index: number): Draft {
+function safeUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "d-" + Math.random().toString(36).substring(2, 11);
+}
+
+function newDraft(): Draft {
   return {
-    key: crypto.randomUUID(),
-    // Seed the first row as Cash so the common single-account case lines up
-    // with the server seed and gets merged rather than duplicated.
-    name: index === 0 ? "Cash" : "",
-    type: index === 0 ? "cash" : "bank",
+    key: safeUUID(),
+    name: "",
+    type: "bank",
     last4: "",
     openingBalance: 0,
   };
@@ -49,7 +52,7 @@ export function FirstRunOnboardingModal({ open }: { open: boolean }) {
 
   const [step, setStep] = useState(1);
   const [accountCount, setAccountCount] = useState(1);
-  const [drafts, setDrafts] = useState<Draft[]>([newDraft(0)]);
+  const [drafts, setDrafts] = useState<Draft[]>([newDraft()]);
   const [familyEnabled, setFamilyEnabled] = useState(true);
   const [customPurposes, setCustomPurposes] = useState<string[]>([]);
   const [purposeInput, setPurposeInput] = useState("");
@@ -57,15 +60,23 @@ export function FirstRunOnboardingModal({ open }: { open: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [completed, setCompleted] = useState(false);
 
+  const { data: appConfig } = useQuery({
+    queryKey: ["app-config"],
+    queryFn: fetchAppConfig,
+    staleTime: 60 * 1000,
+  });
+
+  const maxBankAccounts = Math.max(1, Math.min(20, appConfig?.maxAccountsLimit ?? 8));
+
   if (!open || completed || !user?.id) return null;
 
   function applyAccountCount(next: number) {
-    const count = Math.max(1, Math.min(MAX_ACCOUNTS, next));
+    const count = Math.max(1, Math.min(maxBankAccounts, next));
     setAccountCount(count);
     setDrafts((current) => {
       if (count <= current.length) return current.slice(0, count);
-      const added = Array.from({ length: count - current.length }, (_, i) =>
-        newDraft(current.length + i),
+      const added = Array.from({ length: count - current.length }, () =>
+        newDraft(),
       );
       return [...current, ...added];
     });
@@ -138,13 +149,17 @@ export function FirstRunOnboardingModal({ open }: { open: boolean }) {
   }
 
   function handleFinish() {
+    // Cash is already auto-created by bootstrap — only submit bank accounts
+    const bankAccounts = drafts.map(({ name, type, last4, openingBalance }) => ({
+      name: name.trim(),
+      type,
+      last4: (last4 ?? "").trim() || undefined,
+      openingBalance,
+    }));
     void submit({
-      accounts: drafts.map(({ name, type, last4, openingBalance }) => ({
-        name: name.trim(),
-        type,
-        last4: (last4 ?? "").trim() || undefined,
-        openingBalance,
-      })),
+      accounts: bankAccounts.length > 0
+        ? [{ name: "Cash", type: "cash" as const, openingBalance: 0 }, ...bankAccounts]
+        : [{ name: "Cash", type: "cash" as const, openingBalance: 0 }],
       purposes: [...(familyEnabled ? ["Family"] : []), ...customPurposes],
     });
   }
@@ -172,11 +187,15 @@ export function FirstRunOnboardingModal({ open }: { open: boolean }) {
         <div className="space-y-4 py-4 text-xs">
           {step === 1 ? (
             <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-200">
+                <Wallet className="size-3.5 shrink-0" />
+                <span><strong>Cash account</strong> is already set up for you.</span>
+              </div>
               <p className="text-muted-foreground">
-                How many accounts do you want to track? You can always add more later.
+                How many <strong>bank accounts</strong> do you want to add? You can always add more later.
               </p>
               <div className="flex flex-wrap gap-2">
-                {Array.from({ length: MAX_ACCOUNTS }, (_, i) => i + 1).map((n) => (
+                {Array.from({ length: maxBankAccounts }, (_, i) => i + 1).map((n) => (
                   <button
                     key={n}
                     type="button"
@@ -340,6 +359,18 @@ export function FirstRunOnboardingModal({ open }: { open: boolean }) {
                 <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-muted-foreground">
                   <Landmark className="size-3.5" /> Accounts
                 </p>
+              {/* Cash account (always present) */}
+                <div
+                  className="flex items-center justify-between rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
+                >
+                  <span className="font-semibold text-foreground">
+                    Cash
+                    <span className="ml-1.5 text-[10px] uppercase text-muted-foreground">
+                      cash
+                    </span>
+                  </span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">Auto-created</span>
+                </div>
                 {drafts.map((d) => (
                   <div
                     key={d.key}

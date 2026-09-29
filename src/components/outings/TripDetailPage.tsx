@@ -23,6 +23,7 @@ import type { UnlinkOutingChoice } from "@/components/outings/UnlinkOutingDialog
 import { OutingExpenseList } from "@/components/outings/OutingExpenseList";
 import { OutingMembersPanel } from "@/components/outings/OutingMembersPanel";
 import { RecordSettlementDialog } from "@/components/outings/RecordSettlementDialog";
+import { SettlementHistoryPanel } from "@/components/outings/SettlementHistoryPanel";
 import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 import { memberDisplayName } from "@/lib/settlements";
 import { useDeletedFriends } from "@/hooks/useDeletedFriends";
@@ -46,6 +47,8 @@ import { useFriends } from "@/hooks/useFriends";
 import { useOutingExpenses } from "@/hooks/useOutingExpenses";
 import { useOutingSettlements } from "@/hooks/useOutingSettlements";
 import { useOutings } from "@/hooks/useOutings";
+import { usePurposes } from "@/hooks/usePurposes";
+import { getDefaultPersonalPurpose } from "@/lib/purposes";
 import { useTransactions } from "@/hooks/useTransactions";
 import {
   formatOutingDates,
@@ -135,6 +138,20 @@ export function TripDetailPage({
     removeExpense,
   } = useOutingExpenses(outing.id);
   const { settlements } = useOutingSettlements(outing.id);
+  const { purposes } = usePurposes();
+
+  const outingPurpose = useMemo(() => {
+    if (!outing.purposeId) {
+      return getDefaultPersonalPurpose(purposes);
+    }
+    return (
+      purposes.find((p) => p.id === outing.purposeId) ??
+      purposes.find(
+        (p) => p.name.toLowerCase() === outing.purposeId?.toLowerCase(),
+      ) ??
+      getDefaultPersonalPurpose(purposes)
+    );
+  }, [purposes, outing.purposeId]);
 
   const defaultAccountName =
     accounts.find((account) => account.isDefault)?.name ??
@@ -634,6 +651,23 @@ export function TripDetailPage({
                 >
                   {outing.category ?? "Trip"}
                 </Badge>
+                {outingPurpose ? (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 text-[10px] font-medium"
+                    style={{
+                      borderColor: outingPurpose.color
+                        ? `${outingPurpose.color}40`
+                        : undefined,
+                      color: outingPurpose.color,
+                      backgroundColor: outingPurpose.color
+                        ? `${outingPurpose.color}15`
+                        : undefined,
+                    }}
+                  >
+                    {outingPurpose.name}
+                  </Badge>
+                ) : null}
               </div>
               <p className="mb-1 text-xs font-medium text-muted-foreground">
                 {getOutingStatusLabel(outing)}
@@ -762,11 +796,30 @@ export function TripDetailPage({
                     else if (isFromYou) label = `You owe ${edge.toName}`;
 
                     return (
-                      <div key={idx} className="flex items-center justify-between rounded-xl border bg-background p-3 text-sm">
+                      <div key={idx} className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3 text-sm">
                         <span className="font-medium">{label}</span>
-                        <span className={cn("tabular-nums font-semibold", isToYou ? "text-success" : isFromYou ? "text-destructive" : "")}>
-                          {formatCurrency(edge.amount)}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={cn("tabular-nums font-semibold", isToYou ? "text-success" : isFromYou ? "text-destructive" : "")}>
+                            {formatCurrency(edge.amount)}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2.5 text-xs font-semibold"
+                            onClick={() => {
+                              setPendingSettle({
+                                fromMemberId: edge.fromId,
+                                toMemberId: edge.toId,
+                                fromName: edge.fromName,
+                                toName: edge.toName,
+                                amount: edge.amount,
+                                youAreOwed: edge.toId === currentMember?.id,
+                              });
+                            }}
+                          >
+                            Settle
+                          </Button>
+                        </div>
                       </div>
                     );
                   })
@@ -777,10 +830,10 @@ export function TripDetailPage({
 
           {/* Settlement Actions Bar (Web Right-side / Footer actions) */}
           <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-primary/10">
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (debtEdges.length > 0) {
+            {debtEdges.length > 0 ? (
+              <Button
+                variant="outline"
+                onClick={() => {
                   const first = debtEdges[0];
                   setPendingSettle({
                     fromMemberId: first.fromId,
@@ -790,23 +843,11 @@ export function TripDetailPage({
                     amount: first.amount,
                     youAreOwed: first.toId === currentMember?.id,
                   });
-                } else if (outing.members.length > 1) {
-                  const firstFriend = outing.members.find((m) => m.id !== currentMember?.id);
-                  if (firstFriend) {
-                    setPendingSettle({
-                      fromMemberId: firstFriend.id,
-                      toMemberId: currentMember?.id ?? "you",
-                      fromName: firstFriend.name,
-                      toName: "You",
-                      amount: 0,
-                      youAreOwed: true,
-                    });
-                  }
-                }
-              }}
-            >
-              Record Settlement
-            </Button>
+                }}
+              >
+                Record Settlement
+              </Button>
+            ) : null}
 
             <Button
               className="bg-success text-success-foreground hover:bg-success/90"
@@ -1114,6 +1155,22 @@ export function TripDetailPage({
           )}
         </div>
       </section>
+
+      {settlements.length > 0 ? (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
+              Settlement history
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              {settlements.length} settlement{settlements.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <SettlementHistoryPanel outing={outing} records={settlements} />
+          </div>
+        </section>
+      ) : null}
 
       <section className="space-y-3">
         <h2 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">

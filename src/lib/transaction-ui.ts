@@ -24,6 +24,7 @@ import {
   MoreHorizontal,
   TrendingUp,
   Award,
+  Compass,
   Percent,
   Plus,
 } from "lucide-react";
@@ -90,6 +91,9 @@ const categoryIconMap: Record<string, LucideIcon> = {
   "Shopping": Store,
   "Education": Book,
   "Travel": Plane,
+  "Outings": Compass,
+  "Outing": Compass,
+  "Trip": Compass,
   "Bills & EMI": FileText,
   "Personal Care": User,
   "Gifts & Donations": Gift,
@@ -114,8 +118,36 @@ const categoryIconMap: Record<string, LucideIcon> = {
   "Investment": LineChart,
 };
 
-export function getCategoryIcon(name: string): LucideIcon {
-  return categoryIconMap[name] ?? Receipt;
+import { ICON_MAP } from "@/components/shared/IconPicker";
+
+export function getCategoryIcon(nameOrIcon?: string, fallbackName?: string): LucideIcon {
+  if (!nameOrIcon && !fallbackName) return Receipt;
+  if (nameOrIcon && ICON_MAP[nameOrIcon]) return ICON_MAP[nameOrIcon];
+  if (nameOrIcon && categoryIconMap[nameOrIcon]) return categoryIconMap[nameOrIcon];
+  if (nameOrIcon) {
+    const lower = nameOrIcon.toLowerCase();
+    for (const [key, icon] of Object.entries(ICON_MAP)) {
+      if (key.toLowerCase() === lower) return icon;
+    }
+  }
+  if (fallbackName && ICON_MAP[fallbackName]) return ICON_MAP[fallbackName];
+  if (fallbackName && categoryIconMap[fallbackName]) return categoryIconMap[fallbackName];
+  return Receipt;
+}
+
+export function getPurposeIcon(nameOrIcon?: string, fallbackName?: string): LucideIcon {
+  if (!nameOrIcon && !fallbackName) return Compass;
+  if (nameOrIcon && ICON_MAP[nameOrIcon]) return ICON_MAP[nameOrIcon];
+  if (nameOrIcon && categoryIconMap[nameOrIcon]) return categoryIconMap[nameOrIcon];
+  if (nameOrIcon) {
+    const lower = nameOrIcon.toLowerCase();
+    for (const [key, icon] of Object.entries(ICON_MAP)) {
+      if (key.toLowerCase() === lower) return icon;
+    }
+  }
+  if (fallbackName && ICON_MAP[fallbackName]) return ICON_MAP[fallbackName];
+  if (fallbackName && categoryIconMap[fallbackName]) return categoryIconMap[fallbackName];
+  return Compass;
 }
 
 export function getTransactionAmountClass(type: TransactionType) {

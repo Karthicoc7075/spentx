@@ -373,3 +373,21 @@ export async function adminDeleteUser(userId: string): Promise<void> {
     throw new Error(body?.error ?? `Delete failed (${response.status})`);
   }
 }
+
+export async function adminInsertRow(
+  table: string,
+  record: Record<string, unknown>,
+): Promise<AdminRow> {
+  const response = await fetch("/api/admin/database/insert", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ table, record }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.error ?? `Insert failed (${response.status})`);
+  }
+  const result = await response.json();
+  return result.data as AdminRow;
+}
+

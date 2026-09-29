@@ -1,6 +1,6 @@
 "use client";
 
-import { X } from "lucide-react";
+import { Download, FileText, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -168,15 +168,19 @@ export function AnalysisPage() {
           <Button
             disabled={isLoading || filtered.length === 0}
             variant="outline"
+            className="h-9 gap-2 rounded-[0.5rem] text-xs font-semibold shadow-xs"
             onClick={() => downloadCsv("spentx-analysis.csv", toCsv(filtered, { purposes }))}
           >
+            <Download className="size-3.5" />
             Export CSV
           </Button>
           <Button
             disabled={isLoading || filtered.length === 0}
             variant="outline"
+            className="h-9 gap-2 rounded-[0.5rem] text-xs font-semibold shadow-xs"
             onClick={handleExportPdf}
           >
+            <FileText className="size-3.5" />
             Export PDF
           </Button>
         </div>
@@ -321,7 +325,13 @@ export function AnalysisPage() {
           ) : null}
 
           {isReadOnlyViewer ? null : (
-            <PlanVsActualTable planMonth={planMonth} rows={planVsActual} />
+            <PlanVsActualTable
+              planMonth={planMonth}
+              rows={planVsActual}
+              outings={outings}
+              purposeId={appliedFiltersForData.purposeId}
+              onPurposeChange={handlePurposeChange}
+            />
           )}
         </>
       )}

@@ -97,7 +97,7 @@ export function mergeNetBalances(
       else totals.set(item.key, { ...item });
     }
   }
-  return [...totals.values()].filter((item) => Math.abs(item.balance) >= 1);
+  return [...totals.values()].filter((item) => Math.abs(item.balance) >= 0.01);
 }
 
 /** The current user's own share of a split — what the expense actually cost you. */

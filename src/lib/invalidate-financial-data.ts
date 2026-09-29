@@ -32,6 +32,9 @@ export async function invalidateFinancialData(
   const keys: (readonly unknown[])[] = [
     queryKeys.transactions(userId),
     queryKeys.allOutingExpenses(userId),
+    queryKeys.allOutingSettlements(userId),
+    ["outingSettlements", userId],
+    ["outingExpenses", userId],
     queryKeys.accounts(userId),
     queryKeys.outings(userId),
     queryKeys.categories(userId),

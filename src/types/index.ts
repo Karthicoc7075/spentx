@@ -170,6 +170,7 @@ export type Purpose = {
   userId?: string;
   name: string;
   color?: string;
+  icon?: string;
   isDefault?: boolean;
   canDelete?: boolean;
   /** Soft-delete flag — archived purposes are never hard-deleted. */
@@ -239,6 +240,7 @@ export type User = {
   name: string;
   email: string;
   photoUrl?: string;
+  createdAt?: string;
 };
 
 export type UserRole = "user" | "admin";
@@ -269,7 +271,8 @@ export type DashboardKpiKey =
   | "cash-in-hand"
   | "bank-balance"
   | "investment-value"
-  | "monthly-balance";
+  | "outing-spend"
+  | "month-rollover";
 
 export type NotificationPreferences = {
   dailySummary?: boolean;
@@ -281,6 +284,7 @@ export type NotificationPreferences = {
   burnRateAlerts?: boolean;
   settlementReminders?: boolean;
   snapshotReminders?: boolean;
+  outingAlerts?: boolean;
 };
 
 export type UserSettings = {
@@ -387,6 +391,8 @@ export type KpiData = {
   incomeSparkline: number[];
   expenseSparkline: number[];
   savingsSparkline: number[];
+  outingExpense?: number;
+  previousMonthRollover?: number;
 };
 
 export type DashboardInsights = {
@@ -544,6 +550,7 @@ export type PlanAllocation = {
   category: string;
   plannedAmount: number;
   color: string;
+  icon?: string;
   notes?: string;
   /** Spec A3 — carry unused budget from this category into next month. */
   rollover?: boolean;
@@ -660,7 +667,8 @@ export type AlertType =
   | "weekly-summary"
   | "monthly-summary"
   | "snapshot-reminder"
-  | "settlement-reminder";
+  | "settlement-reminder"
+  | "outing-completed";
 
 export type SmartAlert = {
   id: string;
@@ -705,6 +713,7 @@ export type SavingsGoal = {
 export type NetWorthBreakdown = {
   total: number;
   bankAccounts: number;
+  wallets: number;
   cash: number;
   investmentValue: number;
   monthlyChange: number;
@@ -712,7 +721,7 @@ export type NetWorthBreakdown = {
 
 export type WealthFilter =
   | { type: "all" }
-  | { type: "segment"; segment: "bank" | "cash" | "investment" }
+  | { type: "segment"; segment: "bank" | "wallet" | "cash" | "investment" }
   | { type: "account"; accountName: string };
 
 export type NetWorthHistoryPoint = {

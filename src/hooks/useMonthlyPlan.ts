@@ -39,6 +39,35 @@ import type { MonthlyPlan, PlanAllocation } from "@/types";
 
 const categoryPalette = ["#38bdf8", "#f97316", "#a855f7", "#ec4899", "#6366f1"];
 
+function cleanAllocations(raw: PlanAllocation[]): PlanAllocation[] {
+  const map = new Map<string, PlanAllocation>();
+  for (const item of raw) {
+    const isOuting =
+      item.category === "cat-exp-outings" ||
+      item.category?.toLowerCase() === "outing" ||
+      item.category?.toLowerCase() === "outings" ||
+      item.id?.toLowerCase().includes("outing");
+
+    const norm = isOuting ? "outings" : (item.category || "").toLowerCase();
+    const cleanName = isOuting ? "Outings" : item.category;
+
+    const existing = map.get(norm);
+    if (!existing) {
+      map.set(norm, {
+        ...item,
+        category: cleanName,
+        color: isOuting ? "#0ea5e9" : item.color,
+      });
+    } else {
+      map.set(norm, {
+        ...existing,
+        plannedAmount: Math.max(existing.plannedAmount, item.plannedAmount),
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
 export function useMonthlyPlan(
   initialMonth = getCurrentPlanMonth(),
   initialPurposeId = PERSONAL_PURPOSE_ID,
@@ -49,15 +78,28 @@ export function useMonthlyPlan(
   const { purposes } = usePurposes();
   const { transactions: allTransactions } = useTransactions();
   const [month, setMonth] = useState(initialMonth);
-  const [purposeId, setPurposeId] = useState(initialPurposeId);
+  const [purposeId, setPurposeId] = useState(() => {
+    if (initialPurposeId === PERSONAL_PURPOSE_ID && purposes.length > 0) {
+      return getDefaultPersonalPurpose(purposes)?.id ?? initialPurposeId;
+    }
+    return initialPurposeId;
+  });
   const [expectedIncome, setExpectedIncome] = useState(0);
   const [allocations, setAllocations] = useState<PlanAllocation[]>([]);
+  const allocationsRef = useRef<PlanAllocation[]>(allocations);
+  allocationsRef.current = allocations;
+  const expectedIncomeRef = useRef(expectedIncome);
+  expectedIncomeRef.current = expectedIncome;
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showIncomeIdeas, setShowIncomeIdeas] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hydratedMonthRef = useRef<string | null>(null);
+  const prevMonthRef = useRef(month);
+  const prevPurposeIdRef = useRef(purposeId);
+  const isEditingRef = useRef(isEditing);
+  isEditingRef.current = isEditing;
 
   const planQuery = useMonthlyPlanQuery(month, purposeId);
   const previousMonth = useMemo(() => shiftPlanMonth(month, -1), [month]);
@@ -77,17 +119,38 @@ export function useMonthlyPlan(
   );
 
   useEffect(() => {
-    hydratedMonthRef.current = null;
-    setIsEditing(false);
-    setExpectedIncome(0);
-    setAllocations([]);
-    setActiveCategory(null);
-  }, [month, purposeId]);
+    const isMonthChange = prevMonthRef.current !== month;
+    const isPurposeChange = prevPurposeIdRef.current !== purposeId;
+
+    const defaultPersonal = getDefaultPersonalPurpose(purposes);
+    const isInitialPersonalResolution =
+      prevPurposeIdRef.current === PERSONAL_PURPOSE_ID &&
+      Boolean(defaultPersonal?.id && defaultPersonal.id === purposeId);
+
+    prevMonthRef.current = month;
+    prevPurposeIdRef.current = purposeId;
+
+    // Do not reset user input or close editing if this is just the silent initial resolution of personal purpose ID
+    if (isInitialPersonalResolution && !isMonthChange) {
+      return;
+    }
+
+    if (isMonthChange || isPurposeChange) {
+      if (isEditingRef.current && hydratedMonthRef.current === `${month}:${purposeId}`) {
+        return;
+      }
+      hydratedMonthRef.current = null;
+      setIsEditing(false);
+      setExpectedIncome(0);
+      setAllocations([]);
+      setActiveCategory(null);
+    }
+  }, [month, purposeId, purposes]);
 
   useEffect(() => {
     if (purposeId !== PERSONAL_PURPOSE_ID || purposes.length === 0) return;
     const defaultPersonal = getDefaultPersonalPurpose(purposes);
-    if (defaultPersonal?.id) {
+    if (defaultPersonal?.id && defaultPersonal.id !== purposeId) {
       setPurposeId(defaultPersonal.id);
     }
   }, [purposes, purposeId]);
@@ -102,6 +165,23 @@ export function useMonthlyPlan(
   useEffect(() => {
     const resolvedCategories =
       categories.length > 0 ? categories : defaultCategories;
+
+    const hasOutings = resolvedCategories.some(
+      (c) => c.name.toLowerCase() === "outings" || c.name.toLowerCase() === "outing",
+    );
+    const finalCategories = hasOutings
+      ? resolvedCategories
+      : [
+          ...resolvedCategories,
+          {
+            id: "cat-exp-11",
+            name: "Outings",
+            type: "expense" as const,
+            color: "#0ea5e9",
+            icon: "compass",
+            isDefault: true,
+          },
+        ];
 
     function mergeAllocations(current: PlanAllocation[], next: PlanAllocation[]) {
       const amounts = new Map(
@@ -118,20 +198,42 @@ export function useMonthlyPlan(
     const hydrationKey = `${month}:${purposeId}`;
     if (hydratedMonthRef.current === hydrationKey && planQuery.data) return;
 
+    // Do not clobber user's active edits with background refetches
+    if (isEditingRef.current && hydratedMonthRef.current) {
+      return;
+    }
+
     const plan = planQuery.data;
     if (plan) {
       setExpectedIncome(plan.expectedIncome);
-      setAllocations(plan.allocations);
+      const cleaned = cleanAllocations(plan.allocations);
+      const hasPlanOutings = cleaned.some(
+        (a) => a.category.toLowerCase() === "outings" || a.category.toLowerCase() === "outing",
+      );
+      if (!hasPlanOutings) {
+        setAllocations([
+          ...cleaned,
+          {
+            id: crypto.randomUUID(),
+            category: "Outings",
+            plannedAmount: 0,
+            color: "#0ea5e9",
+          },
+        ]);
+      } else {
+        setAllocations(cleaned);
+      }
       hydratedMonthRef.current = hydrationKey;
       return;
     }
 
-    const empty = createEmptyPlan(month, resolvedCategories);
+    const empty = createEmptyPlan(month, finalCategories);
+    const cleanedEmpty = cleanAllocations(empty.allocations);
     setExpectedIncome(incomeSuggestion);
     setAllocations((current) =>
       hydratedMonthRef.current === hydrationKey
-        ? mergeAllocations(current, empty.allocations)
-        : empty.allocations,
+        ? mergeAllocations(current, cleanedEmpty)
+        : cleanedEmpty,
     );
     hydratedMonthRef.current = hydrationKey;
   }, [
@@ -237,12 +339,84 @@ export function useMonthlyPlan(
     return map;
   }, [allocations, previousAllocations, previousCategorySpentActuals]);
 
-  function updateAllocation(id: string, plannedAmount: number) {
-    setAllocations((current) =>
-      current.map((item) =>
-        item.id === id ? { ...item, plannedAmount: Math.max(0, plannedAmount) } : item,
-      ),
-    );
+  function updateAllocation(id: string, plannedAmount: number, categoryName?: string): PlanAllocation[] {
+    let targetName =
+      categoryName ||
+      (id.startsWith("unbudgeted-") ? id.replace("unbudgeted-", "") : null);
+
+    const isOuting =
+      id === "cat-exp-outings" ||
+      targetName === "cat-exp-outings" ||
+      id.toLowerCase().includes("outing") ||
+      (targetName && targetName.toLowerCase().includes("outing"));
+
+    const current = allocationsRef.current;
+    let next: PlanAllocation[];
+
+    if (isOuting) {
+      targetName = "Outings";
+      // Remove ANY other duplicate Outings allocations
+      const nonOutings = current.filter(
+        (item) =>
+          item.category !== "cat-exp-outings" &&
+          item.category.toLowerCase() !== "outing" &&
+          item.category.toLowerCase() !== "outings" &&
+          !item.id.toLowerCase().includes("outing"),
+      );
+      const existingOuting = current.find(
+        (item) =>
+          item.id === id ||
+          item.category === "cat-exp-outings" ||
+          item.category.toLowerCase() === "outing" ||
+          item.category.toLowerCase() === "outings" ||
+          item.id.toLowerCase().includes("outing"),
+      );
+
+      next = [
+        ...nonOutings,
+        {
+          id: existingOuting ? existingOuting.id : "cat-exp-11",
+          category: "Outings",
+          plannedAmount: Math.max(0, plannedAmount),
+          color: "#0ea5e9",
+        },
+      ];
+    } else {
+      const existingIndex = current.findIndex(
+        (item) =>
+          item.id === id ||
+          (targetName && item.category.toLowerCase() === targetName.toLowerCase()) ||
+          item.category.toLowerCase() === id.toLowerCase(),
+      );
+
+      if (existingIndex !== -1) {
+        next = current.map((item, index) =>
+          index === existingIndex
+            ? {
+                ...item,
+                category: targetName || item.category,
+                plannedAmount: Math.max(0, plannedAmount),
+              }
+            : item,
+        );
+      } else {
+        const finalName = targetName || id;
+        const color = categoryPalette[current.length % categoryPalette.length];
+        next = [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            category: finalName,
+            plannedAmount: Math.max(0, plannedAmount),
+            color,
+          },
+        ];
+      }
+    }
+
+    allocationsRef.current = next;
+    setAllocations(next);
+    return next;
   }
 
   function toggleRollover(id: string) {
@@ -257,8 +431,8 @@ export function useMonthlyPlan(
     setAllocations((current) => current.filter((item) => item.id !== id));
   }
 
-  function addCategory(name: string) {
-    const color = categoryPalette[allocations.length % categoryPalette.length];
+  function addCategory(name: string, customColor?: string, customIcon?: string) {
+    const color = customColor || categoryPalette[allocations.length % categoryPalette.length];
     setAllocations((current) => [
       ...current,
       {
@@ -266,6 +440,7 @@ export function useMonthlyPlan(
         category: name,
         plannedAmount: 0,
         color,
+        icon: customIcon,
       },
     ]);
   }
@@ -301,11 +476,47 @@ export function useMonthlyPlan(
     setAllocations(nextAllocations);
   }
 
-  async function persistPlan(options?: { title?: string }) {
+  function loadAndEditPlan(targetPlan: MonthlyPlan) {
+    const targetPurposeId = targetPlan.purposeId || PERSONAL_PURPOSE_ID;
+    hydratedMonthRef.current = `${targetPlan.month}:${targetPurposeId}`;
+    prevMonthRef.current = targetPlan.month;
+    prevPurposeIdRef.current = targetPurposeId;
+
+    setMonth(targetPlan.month);
+    setPurposeId(targetPurposeId);
+    setExpectedIncome(targetPlan.expectedIncome);
+    expectedIncomeRef.current = targetPlan.expectedIncome;
+
+    const cleaned = cleanAllocations(targetPlan.allocations);
+    setAllocations(cleaned);
+    allocationsRef.current = cleaned;
+
+    setIsEditing(true);
+  }
+
+  function adoptPlanAsTemplate(sourcePlan: MonthlyPlan) {
+    setExpectedIncome(sourcePlan.expectedIncome);
+    expectedIncomeRef.current = sourcePlan.expectedIncome;
+
+    const cleaned = cleanAllocations(sourcePlan.allocations);
+    setAllocations(cleaned);
+    allocationsRef.current = cleaned;
+
+    setIsEditing(true);
+  }
+
+  async function persistPlan(options?: {
+    title?: string;
+    allocations?: PlanAllocation[];
+    expectedIncome?: number;
+  }) {
     setIsSaving(true);
     setError(null);
 
     try {
+      const planAllocations = options?.allocations ?? allocationsRef.current;
+      const planExpectedIncome = options?.expectedIncome ?? expectedIncomeRef.current;
+
       const plan: MonthlyPlan = {
         id: savedPlan?.id ?? month,
         userId: user?.id,
@@ -315,8 +526,8 @@ export function useMonthlyPlan(
           savedPlan?.title ||
           formatDefaultPlanTitle(month),
         purposeId,
-        expectedIncome,
-        allocations,
+        expectedIncome: planExpectedIncome,
+        allocations: planAllocations,
         budgetSetAt: savedPlan?.budgetSetAt ?? new Date().toISOString(),
         isBudgetLocked: true,
         createdAt: savedPlan?.createdAt,
@@ -328,14 +539,19 @@ export function useMonthlyPlan(
         queryKeys.monthlyPlan(user?.id, month, purposeId),
         saved,
       );
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.allMonthlyPlans(user?.id),
-      });
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.allMonthlyPlanActuals(user?.id),
-      });
+      setAllocations(saved.allocations);
+      setExpectedIncome(saved.expectedIncome);
+      allocationsRef.current = saved.allocations;
+      expectedIncomeRef.current = saved.expectedIncome;
       setIsEditing(false);
       hydratedMonthRef.current = `${month}:${purposeId}`;
+
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.allMonthlyPlans(user?.id),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.allMonthlyPlanActuals(user?.id),
+      });
 
       return saved;
     } catch (saveError) {
@@ -364,11 +580,31 @@ export function useMonthlyPlan(
     });
   }
 
+  const previousSavedPlan = previousPlanQuery.data ?? null;
+  const hasPreviousSavedPlan = Boolean(previousSavedPlan);
+
+  function copyFromPreviousPlan() {
+    if (!previousSavedPlan) return false;
+    setExpectedIncome(previousSavedPlan.expectedIncome);
+    setAllocations(
+      previousSavedPlan.allocations.map((a) => ({
+        ...a,
+        id: a.id,
+        plannedAmount: a.plannedAmount,
+      })),
+    );
+    return true;
+  }
+
   return {
     month,
     setMonth,
     purposeId,
     setPurposeId,
+    previousMonth,
+    previousSavedPlan,
+    hasPreviousSavedPlan,
+    copyFromPreviousPlan,
     expectedIncome,
     setExpectedIncome,
     allocations,
@@ -402,6 +638,8 @@ export function useMonthlyPlan(
     isViewMode,
     startEditing,
     cancelEditing,
+    loadAndEditPlan,
+    adoptPlanAsTemplate,
     applySuggestions,
     persistPlan,
     deletePlan,

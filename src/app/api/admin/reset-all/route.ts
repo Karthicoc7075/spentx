@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
 import { userStatusChannelName } from "@/lib/supabase-data";
+import { isAdminUser } from "@/lib/admin";
 
 // "Reset All Database Data" — the admin portal's nuclear option. It does three
 // things, in this order:
@@ -71,12 +72,15 @@ async function handleReset(request: Request) {
 
     const { data: callerProfile } = await supabase
       .from("users")
-      .select("role")
+      .select("role, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (callerProfile?.role !== "admin") {
-      return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+    if (!isAdminUser(user, callerProfile)) {
+      return NextResponse.json(
+        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
+        { status: 403 },
+      );
     }
 
     if (!resetPasswordMatches(password)) {

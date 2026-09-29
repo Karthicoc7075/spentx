@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteFriend, fetchFriends, saveFriend } from "@/lib/supabase-data";
 import { queryKeys } from "@/lib/query-keys";
+import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import type { Friend } from "@/types";
 
@@ -13,7 +14,7 @@ export function useFriends() {
   const query = useQuery({
     queryKey: queryKeys.friends(user?.id),
     queryFn: () => fetchFriends(user?.id),
-    enabled: isReady || !isConfigured,
+    enabled: (isReady || !isConfigured) && Boolean(user?.id),
   });
 
   /**
@@ -27,6 +28,9 @@ export function useFriends() {
     await queryClient.invalidateQueries({
       queryKey: queryKeys.allFriends(user?.id),
     });
+    if (user?.id) {
+      await invalidateFinancialData(queryClient, user.id);
+    }
   }
 
   async function addFriend(

@@ -1,35 +1,78 @@
 import { getMonthDateRange } from "@/lib/dashboard";
+import { getCurrentPlanMonth } from "@/lib/plan";
 import type { DashboardDatePreset } from "@/types";
 
 export function getDateRangeForDashboardPreset(
   preset: DashboardDatePreset,
   specificMonth = "",
 ) {
+  const currentMonth = getCurrentPlanMonth();
+
+  if (preset === "this-month") {
+    return getMonthDateRange(currentMonth);
+  }
+
+  if (preset === "last-month") {
+    const [yearStr, monthStr] = currentMonth.split("-");
+    const year = parseInt(yearStr, 10);
+    const m = parseInt(monthStr, 10);
+    const prevDate = new Date(year, m - 2, 1);
+    const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
+    return getMonthDateRange(prevMonth);
+  }
+
+  if (preset === "specific-month" && specificMonth) {
+    return getMonthDateRange(specificMonth);
+  }
+
+  const [curYearStr, curMonthStr] = currentMonth.split("-");
+  const curYear = parseInt(curYearStr, 10);
+  const curMonth = parseInt(curMonthStr, 10);
+  const currentMonthRange = getMonthDateRange(currentMonth);
+
+  if (preset === "last-3-months") {
+    const startDate = new Date(curYear, curMonth - 3, 1);
+    const startMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-01`;
+    return {
+      dateFrom: startMonth,
+      dateTo: currentMonthRange.dateTo,
+    };
+  }
+
+  if (preset === "last-6-months") {
+    const startDate = new Date(curYear, curMonth - 6, 1);
+    const startMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-01`;
+    return {
+      dateFrom: startMonth,
+      dateTo: currentMonthRange.dateTo,
+    };
+  }
+
+  if (preset === "last-12-months") {
+    const startDate = new Date(curYear, curMonth - 12, 1);
+    const startMonth = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, "0")}-01`;
+    return {
+      dateFrom: startMonth,
+      dateTo: currentMonthRange.dateTo,
+    };
+  }
+
   const now = new Date();
+  const todayStr = toCalendarDate(now);
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   let start = new Date(end);
 
   if (preset === "last-7-days") {
     start.setDate(end.getDate() - 6);
-  } else if (preset === "this-month") {
-    start = new Date(now.getFullYear(), now.getMonth(), 1);
-  } else if (preset === "last-month") {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    end.setDate(0);
-  } else if (preset === "specific-month" && specificMonth) {
-    const range = getMonthDateRange(specificMonth);
-    return range;
-  } else if (preset === "last-3-months") {
-    start.setDate(end.getDate() - 89);
-  } else if (preset === "last-6-months") {
-    start.setDate(end.getDate() - 179);
-  } else if (preset === "last-12-months") {
-    start.setDate(end.getDate() - 364);
+    return {
+      dateFrom: toCalendarDate(start),
+      dateTo: todayStr,
+    };
   }
 
   return {
-    dateFrom: start.toISOString().slice(0, 10),
-    dateTo: end.toISOString().slice(0, 10),
+    dateFrom: toCalendarDate(start),
+    dateTo: currentMonthRange.dateTo,
   };
 }
 

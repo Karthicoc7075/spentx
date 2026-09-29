@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Area,
   AreaChart,
@@ -12,11 +13,13 @@ import {
   YAxis,
 } from "recharts";
 import type { TrendSeries } from "@/lib/dashboard";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 type TrendChartProps = {
   data: Array<Record<string, string | number>>;
   series?: TrendSeries[];
+  selectedKey?: string | null;
+  onSelectKey?: (key: string | null) => void;
 };
 
 const chartTick = { fill: "var(--muted-foreground)", fontSize: 11 };
@@ -48,21 +51,69 @@ const tooltipStyle = {
   padding: "10px 12px",
 };
 
-function SeriesLegend({ series }: { series: TrendSeries[] }) {
+function SeriesLegend({
+  series,
+  selectedKey,
+  onSelect,
+}: {
+  series: TrendSeries[];
+  selectedKey: string | null;
+  onSelect: (key: string | null) => void;
+}) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {series.map((item) => (
-        <span
-          key={item.key}
-          className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-[11px] font-semibold text-muted-foreground"
-        >
-          <span
-            className="size-2 rounded-full"
-            style={{ backgroundColor: item.color }}
-          />
-          {item.label}
-        </span>
-      ))}
+    <div className="flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => onSelect(null)}
+        className={cn(
+          "inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-all",
+          selectedKey === null
+            ? "bg-primary font-semibold text-primary-foreground shadow-sm"
+            : "bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
+      >
+        All
+      </button>
+      {series.map((item) => {
+        const isSelected = selectedKey === item.key;
+        const isMuted = selectedKey !== null && !isSelected;
+
+        return (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => onSelect(isSelected ? null : item.key)}
+            className={cn(
+              "inline-flex cursor-pointer select-none items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] transition-all",
+              isSelected
+                ? "font-bold shadow-sm ring-1 ring-inset"
+                : isMuted
+                  ? "bg-muted/40 text-muted-foreground/50 opacity-60 hover:opacity-100 hover:text-muted-foreground"
+                  : "bg-muted/70 text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+            style={
+              isSelected
+                ? {
+                    backgroundColor: `${item.color}20`,
+                    borderColor: item.color,
+                    color: item.color,
+                    boxShadow: `0 0 0 1px ${item.color}60`,
+                  }
+                : undefined
+            }
+            title={isSelected ? `Click to show all` : `Click to show only ${item.label}`}
+          >
+            <span
+              className={cn(
+                "size-2 rounded-full transition-transform",
+                isSelected && "scale-125",
+              )}
+              style={{ backgroundColor: item.color }}
+            />
+            {item.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -79,14 +130,27 @@ function formatYAxisTick(value: unknown) {
   return `₹${num}`;
 }
 
-export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
-  const useAreaChart = series.length <= 2;
+export function TrendChart({
+  data,
+  series = defaultSeries,
+  selectedKey: controlledKey,
+  onSelectKey: controlledOnSelect,
+}: TrendChartProps) {
+  const [internalKey, setInternalKey] = useState<string | null>(null);
+  const selectedKey = controlledKey !== undefined ? controlledKey : internalKey;
+  const onSelect = controlledOnSelect !== undefined ? controlledOnSelect : setInternalKey;
+
+  const activeSeries = selectedKey
+    ? series.filter((item) => item.key === selectedKey)
+    : series;
+
+  const useAreaChart = activeSeries.length <= 2;
   const xAxisKey = data && data.length > 0 && data[0]?.label !== undefined ? "label" : "day";
 
   if (useAreaChart) {
     return (
       <div className="space-y-3">
-        <SeriesLegend series={series} />
+        <SeriesLegend series={series} selectedKey={selectedKey} onSelect={onSelect} />
         <div className="h-60">
           <ResponsiveContainer height="100%" width="100%">
             <AreaChart
@@ -94,7 +158,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
               margin={{ left: 0, right: 8, top: 8, bottom: 0 }}
             >
               <defs>
-                {series.map((item) => (
+                {activeSeries.map((item) => (
                   <linearGradient
                     key={item.key}
                     id={gradientId(item.key)}
@@ -140,7 +204,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
                   String(name),
                 ]}
               />
-              {series.map((item, index) => (
+              {activeSeries.map((item, index) => (
                 <Area
                   key={item.key}
                   activeDot={{
@@ -171,7 +235,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
 
   return (
     <div className="space-y-3">
-      <SeriesLegend series={series} />
+      <SeriesLegend series={series} selectedKey={selectedKey} onSelect={onSelect} />
       <div className="h-60">
         <ResponsiveContainer height="100%" width="100%">
           <LineChart
@@ -206,7 +270,7 @@ export function TrendChart({ data, series = defaultSeries }: TrendChartProps) {
                 String(name),
               ]}
             />
-            {series.map((item, index) => (
+            {activeSeries.map((item, index) => (
               <Line
                 key={item.key}
                 dataKey={item.key}

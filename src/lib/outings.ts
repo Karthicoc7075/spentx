@@ -270,7 +270,7 @@ export function computeNetBalancesByMember(
     }
   }
 
-  return [...totals.values()].filter((item) => Math.abs(item.balance) >= 1);
+  return [...totals.values()].filter((item) => Math.abs(item.balance) >= 0.01);
 }
 
 export function getPendingSettlements(
@@ -279,7 +279,7 @@ export function getPendingSettlements(
   settlements: OutingSettlement[],
 ) {
   return computeMemberBalances(members, expenses, settlements).filter(
-    (item) => Math.abs(item.balance) >= 1,
+    (item) => Math.abs(item.balance) >= 0.01,
   );
 }
 
@@ -507,7 +507,7 @@ export function buildOutingRollupDraft(
     merchant: outing.name,
     // The rollup represents the whole trip, so it carries the outing's own
     // category (not whichever category the first expense happened to use).
-    category: outing.category || defaultCategory || "Travel",
+    category: outing.category || defaultCategory || "Outings",
     account: defaultAccount,
     purpose: outing.purposeId || PERSONAL_PURPOSE_ID,
     purposeId: outing.purposeId || PERSONAL_PURPOSE_ID,

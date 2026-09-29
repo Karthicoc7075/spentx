@@ -78,10 +78,10 @@ function DeltaPill({
     <>
       <span
         className={cn(
-          "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold",
+          "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
           good
-            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
-            : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+            : "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20",
         )}
       >
         {shortDelta(delta)}
@@ -278,10 +278,18 @@ export function DashboardKpiRow({
         value: investmentsTotal,
         meta: "Not included in net worth",
       },
-      "monthly-balance": {
-        label: "Monthly Balance",
-        value: kpis.savings,
-        meta: "Income minus expense this month",
+      "outing-spend": {
+        label: "Outings Spend",
+        value: kpis.outingExpense ?? 0,
+        meta: "Vacations & group trips",
+      },
+      "month-rollover": {
+        label: "Last Month Rollover",
+        value: kpis.previousMonthRollover ?? 0,
+        meta:
+          (kpis.previousMonthRollover ?? 0) >= 0
+            ? "Surplus carried forward"
+            : "Deficit carried forward",
       },
     };
 
@@ -306,6 +314,23 @@ export function DashboardKpiRow({
           </p>
 
           <div className="flex min-h-[22px] flex-wrap items-center gap-2">
+            {key === "month-rollover" ? (
+              <span
+                className={cn(
+                  "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                  (kpis.previousMonthRollover ?? 0) >= 0
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                    : "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20",
+                )}
+              >
+                {(kpis.previousMonthRollover ?? 0) >= 0 ? "Surplus" : "Deficit"}
+              </span>
+            ) : null}
+            {key === "outing-spend" && kpis.expense > 0 && (kpis.outingExpense ?? 0) > 0 ? (
+              <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                {Math.round(((kpis.outingExpense ?? 0) / kpis.expense) * 100)}% of spend
+              </span>
+            ) : null}
             {showComparison && config.delta ? (
               <DeltaPill
                 delta={config.delta}

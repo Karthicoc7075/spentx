@@ -38,19 +38,67 @@ export function PlanOverviewPanel({
   totalPlanned = 0,
   month,
 }: PlanOverviewPanelProps) {
-  const rows = allocations
-    .filter((allocation) => allocation.plannedAmount > 0)
-    .map((allocation) => {
-      const actual = categorySpentActuals[allocation.category] || 0;
-      return {
-        category: allocation.category,
-        planned: allocation.plannedAmount,
-        actual,
-        color: allocation.color,
-        isOver: actual > allocation.plannedAmount,
-        notStarted: actual === 0,
-      };
-    });
+  const rows = useMemo(() => {
+    const rowMap = new Map<string, any>();
+    const normCategory = (name: string) => {
+      const trimmed = (name || "").trim().toLowerCase();
+      if (trimmed === "cat-exp-outings" || trimmed === "outings" || trimmed === "outing" || trimmed.includes("outing")) {
+        return "outings";
+      }
+      return trimmed;
+    };
+
+    for (const allocation of allocations) {
+      const norm = normCategory(allocation.category);
+      const cleanCategory = norm === "outings" ? "Outings" : allocation.category;
+      const actual =
+        norm === "outings"
+          ? categorySpentActuals["Outings"] || categorySpentActuals["Outing"] || 0
+          : categorySpentActuals[cleanCategory] || 0;
+
+      const existing = rowMap.get(norm);
+      if (!existing) {
+        if (allocation.plannedAmount > 0 || actual > 0) {
+          rowMap.set(norm, {
+            category: cleanCategory,
+            planned: allocation.plannedAmount,
+            actual,
+            color: norm === "outings" ? "#0ea5e9" : allocation.color,
+            isOver: allocation.plannedAmount > 0 ? actual > allocation.plannedAmount : actual > 0,
+            notStarted: actual === 0,
+            isUnbudgeted: allocation.plannedAmount === 0 && actual > 0,
+          });
+        }
+      } else {
+        const planned = Math.max(existing.planned, allocation.plannedAmount);
+        rowMap.set(norm, {
+          ...existing,
+          planned,
+          isOver: planned > 0 ? actual > planned : actual > 0,
+          isUnbudgeted: planned === 0 && actual > 0,
+        });
+      }
+    }
+
+    for (const [cat, actual] of Object.entries(categorySpentActuals)) {
+      if (actual <= 0) continue;
+      const norm = normCategory(cat);
+      if (!rowMap.has(norm)) {
+        const cleanCategory = norm === "outings" ? "Outings" : cat;
+        rowMap.set(norm, {
+          category: cleanCategory,
+          planned: 0,
+          actual,
+          color: norm === "outings" ? "#0ea5e9" : "#94a3b8",
+          isOver: true,
+          notStarted: false,
+          isUnbudgeted: true,
+        });
+      }
+    }
+
+    return Array.from(rowMap.values());
+  }, [allocations, categorySpentActuals]);
 
   const velocityChartData = useMemo(() => {
     if (!totalPlanned || !month) return [];
@@ -182,21 +230,31 @@ export function PlanOverviewPanel({
                           {row.category}
                         </span>
                       </td>
-                      <td className="py-2.5 pr-2 text-right font-mono">
-                        {formatCurrency(row.planned)}
+                      <td className="py-2.5 pr-2 text-right font-sans tabular-nums font-medium">
+                        {row.isUnbudgeted ? (
+                          <span className="text-[11px] font-sans font-medium text-amber-600 dark:text-amber-400">
+                            No limit
+                          </span>
+                        ) : (
+                          formatCurrency(row.planned)
+                        )}
                       </td>
-                      <td className="py-2.5 pr-2 text-right font-mono">
+                      <td className="py-2.5 pr-2 text-right font-sans tabular-nums font-semibold">
                         {formatCurrency(row.actual)}
                       </td>
                       <td
                         className={cn(
-                          "py-2.5 text-right font-mono",
-                          row.isOver
+                          "py-2.5 text-right font-sans tabular-nums font-semibold",
+                          row.isUnbudgeted
+                            ? "text-amber-600 dark:text-amber-400"
+                            : row.isOver
                             ? "text-rose-600 dark:text-rose-400"
                             : "text-emerald-600 dark:text-emerald-400",
                         )}
                       >
-                        {formatVariance(row.planned, row.actual)}
+                        {row.isUnbudgeted
+                          ? `-₹${row.actual.toLocaleString("en-IN")}`
+                          : formatVariance(row.planned, row.actual)}
                       </td>
                     </tr>
                   ))}

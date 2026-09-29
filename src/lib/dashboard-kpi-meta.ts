@@ -3,10 +3,11 @@ import {
   ArrowUpRight,
   Banknote,
   CircleDollarSign,
+  History,
   Landmark,
   LineChart,
   PiggyBank,
-  Wallet,
+  Tent,
 } from "lucide-react";
 import type { DashboardKpiKey } from "@/hooks/useDashboardKpiConfig";
 
@@ -18,7 +19,8 @@ export const kpiIcons = {
   "cash-in-hand": Banknote,
   "bank-balance": Landmark,
   "investment-value": LineChart,
-  "monthly-balance": Wallet,
+  "outing-spend": Tent,
+  "month-rollover": History,
 } as const;
 
 /**
@@ -62,8 +64,12 @@ export const kpiAccent: Record<
     tone: "neutral",
     icon: "bg-muted text-muted-foreground ring-border/60",
   },
-  "monthly-balance": {
-    tone: "brand",
-    icon: "bg-primary/10 text-primary ring-primary/15",
+  "outing-spend": {
+    tone: "negative",
+    icon: "bg-amber-500/10 text-amber-600 ring-amber-500/15 dark:text-amber-400",
+  },
+  "month-rollover": {
+    tone: "positive",
+    icon: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/15 dark:text-emerald-400",
   },
 };

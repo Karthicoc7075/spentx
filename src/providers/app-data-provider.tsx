@@ -37,6 +37,7 @@ import {
 } from "@/lib/supabase-data";
 import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
 import { getCurrentPlanMonth } from "@/lib/plan";
+import { isOutingActive } from "@/lib/outing-display";
 import { useAutoBackup } from "@/hooks/useAutoBackup";
 import { useApplyUserPreferences } from "@/hooks/useApplyUserPreferences";
 import {
@@ -533,7 +534,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         // Only one active outing at a time (matches mobile).
         if (outing.status === "active") {
           const hasActive = outings.some(
-            (o) => o.status === "active" && o.isActive !== false,
+            (o) => isOutingActive(o) && o.isActive !== false && !o.isQuickSplit,
           );
           if (hasActive) {
             throw new Error(
@@ -572,6 +573,23 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           (current = []) =>
             current.map((item) => (item.id === saved.id ? saved : item)),
         );
+        if (saved.id && saved.purposeId) {
+          setTransactions((current) =>
+            current.map((tx) =>
+              tx.outingId === saved.id
+                ? {
+                    ...tx,
+                    purpose: saved.purposeId!,
+                    purposeId: saved.purposeId,
+                    splits: tx.splits?.map((s) => ({
+                      ...s,
+                      purposeId: saved.purposeId!,
+                    })),
+                  }
+                : tx,
+            ),
+          );
+        }
         return saved;
       },
       removeOuting: async (outingId) => {

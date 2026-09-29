@@ -39,6 +39,9 @@ export function isInvestmentTransaction(
 export function isTransferTransaction(transaction: Transaction) {
   const cat = (transaction.category ?? "").trim().toLowerCase();
   const tags = transaction.tags ?? [];
+  if (tags.some((tag) => tag === "settlement" || tag.startsWith("settlement:"))) {
+    return true;
+  }
   // Unified detection — either client may write category and/or tags:
   //  - Web: category Settlements + tags transfer / transfer_to:*
   //  - Flutter: category Transfer + tags transfer / transfer_to:*
@@ -51,6 +54,41 @@ export function isTransferTransaction(transaction: Transaction) {
   }
   if (merchant.startsWith("tr ") && merchant.includes(" to ")) return true;
   return false;
+}
+
+const REIMBURSEMENT_CATEGORIES = new Set([
+  "friend returns",
+  "friend repayment",
+  "repayment",
+]);
+
+/**
+ * A repayment remains an income-typed ledger row so account balances reflect
+ * money arriving, but it is not earned income. Period totals apply it as an
+ * expense reversal instead.
+ */
+export function isReimbursementTransaction(transaction: Transaction) {
+  if (transaction.type !== "income") return false;
+  const category = (transaction.category ?? "").trim().toLowerCase();
+  const tags = transaction.tags ?? [];
+  return (
+    REIMBURSEMENT_CATEGORIES.has(category) ||
+    tags.includes("reimbursement") ||
+    tags.includes("friend_return") ||
+    tags.includes("friend-return") ||
+    tags.includes("settlement:receive")
+  );
+}
+
+/** True for either side of a friend or outing settlement. */
+export function isSettlementTransaction(transaction: Transaction) {
+  const category = (transaction.category ?? "").trim().toLowerCase();
+  const tags = transaction.tags ?? [];
+  return (
+    category === "settlement" ||
+    category === "settlements" ||
+    tags.some((tag) => tag === "settlement" || tag.startsWith("settlement:"))
+  );
 }
 
 /**

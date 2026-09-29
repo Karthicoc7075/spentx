@@ -29,58 +29,65 @@ export function NotificationBell() {
   const notificationsOn = settings.notifications !== false;
   const badgeCount = notificationsOn ? unreadCount : 0;
 
-  // Seen alert ids are persisted to localStorage (not just a ref) so a page
-  // reload/app relaunch doesn't re-arm alerts the user already saw — an
-  // in-memory-only baseline re-toasted every already-seen alert on reload.
-  const storageKey = user?.id ? `spentx:seenAlertIds:${user.id}` : null;
-  const seenAlertIds = useRef<Set<string> | null>(null);
-  const hydratedKeyRef = useRef<string | null>(null);
+  // Track seen toast notification IDs in localStorage so a toast is only displayed ONCE
+  // and never repeatedly shown on page refresh or app reopening.
+  // The alert remains in the bell menu as unread until the user reads it.
+  const storageKey = user?.id ? `spentx:seenToastAlertIds:${user.id}` : null;
+  const seenToastIdsRef = useRef<Set<string>>(new Set());
+  const initializedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (hydratedKeyRef.current !== storageKey) {
-      hydratedKeyRef.current = storageKey;
-      let stored: Set<string> | null = null;
-      if (storageKey) {
-        try {
-          const raw = window.localStorage.getItem(storageKey);
-          if (raw) stored = new Set(JSON.parse(raw));
-        } catch {
-          stored = null;
+    if (!storageKey) return;
+
+    if (initializedKeyRef.current !== storageKey) {
+      initializedKeyRef.current = storageKey;
+      let stored: Set<string> = new Set();
+      let existsInStorage = false;
+      try {
+        const raw = window.localStorage.getItem(storageKey);
+        if (raw) {
+          stored = new Set(JSON.parse(raw));
+          existsInStorage = true;
         }
+      } catch {
+        stored = new Set();
       }
-      // No stored baseline (new user/browser): treat current alerts as
-      // already-seen so we don't toast a backlog on first load.
-      seenAlertIds.current = stored ?? new Set(alerts.map((a) => a.id));
+
+      // If first time loading on this device/user, baseline existing alerts to avoid backlog spam
+      if (!existsInStorage && alerts.length > 0) {
+        alerts.forEach((a) => stored.add(a.id));
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(Array.from(stored)));
+        } catch {}
+      }
+
+      seenToastIdsRef.current = stored;
       return;
     }
 
-    const ids = new Set(alerts.map((a) => a.id));
-    if (notificationsOn) {
-      const fresh = alerts.filter(
-        (a) => !seenAlertIds.current!.has(a.id) && !a.read,
-      );
-      if (fresh.length > 0) {
-        notify({ title: fresh[0].title, description: fresh[0].message });
-      }
-    }
-    seenAlertIds.current = ids;
-    if (storageKey) {
+    if (!notificationsOn || alerts.length === 0) return;
+
+    // Only notify alerts that have not yet had a toast popup shown and are unread
+    const unnotified = alerts.filter(
+      (a) => !seenToastIdsRef.current.has(a.id) && !a.read,
+    );
+
+    if (unnotified.length > 0) {
+      const topAlert = unnotified[0];
+      notify({ title: topAlert.title, description: topAlert.message });
+
+      unnotified.forEach((a) => seenToastIdsRef.current.add(a.id));
       try {
-        window.localStorage.setItem(storageKey, JSON.stringify(Array.from(ids)));
-      } catch {
-        // localStorage unavailable (private mode, quota) — degrade to in-memory only.
-      }
+        window.localStorage.setItem(
+          storageKey,
+          JSON.stringify(Array.from(seenToastIdsRef.current)),
+        );
+      } catch {}
     }
   }, [alerts, notificationsOn, notify, storageKey]);
 
   return (
-    <DropdownMenu
-      onOpenChange={(open) => {
-        if (open && unreadCount > 0) {
-          void readAllAlerts();
-        }
-      }}
-    >
+    <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <Button

@@ -13,11 +13,12 @@ import { useUserSettings } from "@/hooks/useUserSettings";
 import { useOutings } from "@/hooks/useOutings";
 import { buildTransactionsListRows } from "@/lib/outings";
 import { narrowTransactionsToFilter } from "@/lib/utils";
+import { sumPeriodOutingSpend } from "@/lib/period-totals";
 import type { AnalyticsFilters } from "@/types";
 
 export function useDashboardData() {
   const { settings } = useUserSettings();
-  const includeOutingExpenses = settings.includeOutingExpenses ?? true;
+  const includeOutingExpenses = true;
   const { transactions: rawTransactions, isLoading: transactionsLoading, error } = useTransactions();
   const { expenses: outingExpenses } = useAllOutingExpenses();
   const { outings } = useOutings();
@@ -85,6 +86,13 @@ export function useDashboardData() {
     [transactions, purposeFilter, purposes],
   );
 
+  const periodOutingSpend = useMemo(() => {
+    return sumPeriodOutingSpend(rawTransactions, outingExpenses, {
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+    });
+  }, [rawTransactions, outingExpenses, filters.dateFrom, filters.dateTo]);
+
   const data = useMemo(
     () =>
       buildDashboardData(
@@ -95,7 +103,7 @@ export function useDashboardData() {
         { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
         filters.dashboardMonth,
         unlinkedOutingExpenses,
-        { includeOutingExpenses },
+        { includeOutingExpenses, periodOutingSpend },
         purposeFilter,
         purposes,
       ),
@@ -109,6 +117,7 @@ export function useDashboardData() {
       transactions,
       unlinkedOutingExpenses,
       includeOutingExpenses,
+      periodOutingSpend,
       purposeFilter,
       purposes,
     ],

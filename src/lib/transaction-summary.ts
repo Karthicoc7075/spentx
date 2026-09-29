@@ -7,7 +7,9 @@ import {
   computePeriodTotals,
   filterUnlinkedOutingExpenses,
   sumPeriodExpense,
+  sumPeriodGrossExpense,
   sumPeriodIncome,
+  sumPeriodReturns,
 } from "@/lib/period-totals";
 import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import type {
@@ -20,7 +22,9 @@ import type {
 
 export type TransactionSummary = {
   totalIncome: number;
+  grossExpense: number;
   totalExpense: number;
+  totalReimbursements: number;
   net: number;
   transactionCount: number;
   averageDailySpend: number;
@@ -28,31 +32,60 @@ export type TransactionSummary = {
   openingBalanceIncome: number;
 };
 
+type DuplicateAccountFields = Pick<
+  Transaction,
+  "accountId" | "account" | "accountName"
+>;
+
+function accountTokens(item: DuplicateAccountFields) {
+  return [item.accountId, item.account, item.accountName]
+    .map((value) => (value ?? "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function sameAccount(left: DuplicateAccountFields, right: DuplicateAccountFields) {
+  const rightTokens = new Set(accountTokens(right));
+  return accountTokens(left).some((token) => rightTokens.has(token));
+}
+
+function dayKey(value?: string) {
+  return (value ?? "").slice(0, 10);
+}
+
 /**
  * Spec A1.1 — Soft Duplicate Warning.
  * Flags a possible duplicate when amount, account, and date all match exactly.
  * Only meant to run on create (not edit — editing a transaction shouldn't warn about itself).
+ *
+ * Account matching is by id OR name: a just-saved row often has `accountId`
+ * while the open form still has the account display name, and treating those
+ * as different would miss a double-submit.
  */
 export function findLikelyDuplicate(
   candidate: Pick<
     Transaction,
-    "totalAmount" | "accountId" | "transactionDate" | "amount" | "account" | "date"
+    | "totalAmount"
+    | "accountId"
+    | "transactionDate"
+    | "amount"
+    | "account"
+    | "accountName"
+    | "date"
   >,
   existing: Transaction[],
   excludeId?: string,
 ): Transaction | null {
-  const candidateAmount = candidate.totalAmount ?? candidate.amount;
-  const candidateAccount = candidate.accountId ?? candidate.account;
-  const candidateDate = candidate.transactionDate ?? candidate.date;
-  const candidateDay = candidateDate.slice(0, 10);
+  const candidateAmount = Number(candidate.totalAmount ?? candidate.amount ?? 0);
+  const candidateDay = dayKey(candidate.transactionDate ?? candidate.date);
+  if (!candidateDay || !Number.isFinite(candidateAmount)) return null;
   return (
-    existing.find(
-      (transaction) =>
-        transaction.id !== excludeId &&
-        (transaction.totalAmount ?? transaction.amount) === candidateAmount &&
-        (transaction.accountId ?? transaction.account) === candidateAccount &&
-        (transaction.transactionDate ?? transaction.date).slice(0, 10) === candidateDay,
-    ) ?? null
+    existing.find((transaction) => {
+      if (transaction.id === excludeId) return false;
+      const amount = Number(transaction.totalAmount ?? transaction.amount ?? 0);
+      if (amount !== candidateAmount) return false;
+      if (!sameAccount(candidate, transaction)) return false;
+      return dayKey(transaction.transactionDate ?? transaction.date) === candidateDay;
+    }) ?? null
   );
 }
 
@@ -169,7 +202,9 @@ export function summarizeTransactions(
 
   return {
     totalIncome: income,
+    grossExpense: period.grossExpense,
     totalExpense: expense,
+    totalReimbursements: period.reimbursements,
     net: income - expense,
     transactionCount,
     averageDailySpend: Math.round(expense / Math.max(1, days)),
@@ -178,4 +213,9 @@ export function summarizeTransactions(
 }
 
 // Re-export helpers used by tests / other modules.
-export { sumPeriodExpense, sumPeriodIncome };
+export {
+  sumPeriodExpense,
+  sumPeriodGrossExpense,
+  sumPeriodIncome,
+  sumPeriodReturns,
+};

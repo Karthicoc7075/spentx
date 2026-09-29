@@ -38,8 +38,27 @@ export function useOutings() {
       (current = []) =>
         current.map((item) => (item.id === saved.id ? saved : item)),
     );
-    // Rename / date change → refresh rollup merchant + total on Transactions.
+    // Rename / date / purpose change → refresh rollup merchant + total on Transactions.
     await afterOutingUpdated(user?.id, saved);
+    if (user?.id && saved.id && saved.purposeId) {
+      queryClient.setQueryData<any[]>(
+        queryKeys.transactions(user.id),
+        (current = []) =>
+          current.map((tx) =>
+            tx.outingId === saved.id
+              ? {
+                  ...tx,
+                  purpose: saved.purposeId!,
+                  purposeId: saved.purposeId,
+                  splits: tx.splits?.map((s: any) => ({
+                    ...s,
+                    purposeId: saved.purposeId!,
+                  })),
+                }
+              : tx,
+          ),
+      );
+    }
     await invalidateFinancialData(queryClient, user?.id, { outingId: saved.id });
     return saved;
   }

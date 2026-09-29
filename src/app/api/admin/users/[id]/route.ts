@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
 import { userStatusChannelName } from "@/lib/supabase-data";
+import { isAdminUser } from "@/lib/admin";
 
 // Deleting a user is the one admin operation that cannot go through the RPC
 // layer: removing the auth.users row requires the Supabase Admin API and the
@@ -32,12 +33,15 @@ async function handleDelete(
 
     const { data: callerProfile } = await supabase
       .from("users")
-      .select("role")
+      .select("role, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (callerProfile?.role !== "admin") {
-      return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+    if (!isAdminUser(user, callerProfile)) {
+      return NextResponse.json(
+        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
+        { status: 403 },
+      );
     }
 
     if (targetUserId === user.id) {

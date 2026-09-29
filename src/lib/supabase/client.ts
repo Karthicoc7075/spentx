@@ -57,7 +57,20 @@ function proxiedFetch(
   return fetch(proxiedUrl, init);
 }
 
-/** Session cookies last 1 year; only explicit logout clears them. */
+// Session lifetime: only an explicit logout ends a session.
+//
+// Note what this value does and does not control. @supabase/ssr always
+// writes its auth cookies with maxAge = 400 days (the browser cap on cookie
+// lifetime, DEFAULT_COOKIE_OPTIONS in the package) and overrides whatever
+// maxAge is passed here, so the cookies already outlive a year — raising or
+// lowering this number changes nothing about how long a login lasts.
+//
+// What actually ends a session is the refresh token: it is rotated on every
+// refresh and lives until it is revoked (explicit logout) or until a
+// Supabase dashboard policy retires it — Authentication → Sessions →
+// "Time-box user sessions" / "Inactivity timeout". Both must be unset (or
+// set to >= 1 year) for a 1-year login; no client-side setting can override
+// them.
 const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 365;
 
 export function createClient() {

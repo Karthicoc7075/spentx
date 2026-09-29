@@ -48,19 +48,40 @@ export function formatOutingDates(outing: Outing) {
   return "";
 }
 
-export function isOutingPlanned(outing: Outing) {
+export function isOutingPlanned(outing: Outing, todayStr?: string) {
   if (outing.status !== "active") return false;
-  const start = new Date(outing.startDate);
-  if (Number.isNaN(start.getTime())) return false;
-  return start > new Date();
+  if (!outing.startDate) return false;
+  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const start = outing.startDate.slice(0, 10);
+  return today < start;
 }
 
-export function getOutingStatusLabel(outing: Outing) {
-  if (isOutingPlanned(outing)) return "Planned";
-  if (outing.status === "active") return "Active";
-  if (outing.status === "completed") return "Completed";
+export function isOutingActive(outing: Outing, todayStr?: string) {
+  if (outing.status !== "active") return false;
+  if (!outing.startDate) return true;
+  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const start = outing.startDate.slice(0, 10);
+  const end = outing.endDate ? outing.endDate.slice(0, 10) : start;
+  return today >= start && today <= end;
+}
+
+export function isOutingCompleted(outing: Outing, todayStr?: string) {
+  if (outing.status === "completed") return true;
+  if (outing.status !== "active") return false;
+  if (!outing.startDate) return false;
+  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const start = outing.startDate.slice(0, 10);
+  const end = outing.endDate ? outing.endDate.slice(0, 10) : start;
+  return today > end;
+}
+
+export function getOutingStatusLabel(outing: Outing, todayStr?: string) {
+  const today = todayStr || new Date().toISOString().slice(0, 10);
   if (outing.status === "archived") return "Archived";
   if (outing.status === "cancelled") return "Cancelled";
+  if (isOutingPlanned(outing, today)) return "Planned";
+  if (isOutingCompleted(outing, today)) return "Completed";
+  if (isOutingActive(outing, today)) return "Active";
   return "Active";
 }
 
@@ -69,18 +90,21 @@ export function filterOutings(
   filter: OutingListFilter,
   searchQuery: string,
 ) {
+  const today = new Date().toISOString().slice(0, 10);
   const query = searchQuery.trim().toLowerCase();
 
   return outings.filter((outing) => {
     // Hidden trips auto-created for a "Friend split" on a normal transaction
     // — never shown in the regular Outings list.
     if (outing.isQuickSplit) return false;
-    if (filter === "active" && (outing.status !== "active" || isOutingPlanned(outing))) {
-      return false;
-    }
-    if (filter === "completed" && outing.status !== "completed") return false;
+    const isPlanned = isOutingPlanned(outing, today);
+    const isCompleted = isOutingCompleted(outing, today);
+    const isActive = isOutingActive(outing, today);
+
+    if (filter === "active" && !isActive) return false;
+    if (filter === "completed" && !isCompleted) return false;
     if (filter === "archived" && outing.status !== "archived") return false;
-    if (filter === "planned" && !isOutingPlanned(outing)) return false;
+    if (filter === "planned" && !isPlanned) return false;
     if (!query) return true;
 
     return (

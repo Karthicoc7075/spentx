@@ -8,6 +8,7 @@ import {
   Save,
   Sun,
   Trash2,
+  Pencil,
   User,
   Wallet,
   Layers,
@@ -29,6 +30,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Bell,
+  Compass,
 } from "lucide-react";
 import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 import {
@@ -41,7 +43,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,6 +73,7 @@ import {
 import { buildOpeningBalanceTransaction, OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import { useViewerAccess } from "@/providers/viewer-provider";
 import { isAdminUser } from "@/lib/admin";
+import { useRoleMode } from "@/hooks/useRoleMode";
 import { runAccountBackup } from "@/lib/backup-actions";
 import { syncSettingsCache, mergeCategories } from "@/lib/settings-data";
 import { cacheKeys, readQueryCache } from "@/lib/query-cache";
@@ -120,7 +123,8 @@ import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useTheme } from "@/providers/theme-provider";
 import { useToast } from "@/providers/toast-provider";
 import { cn } from "@/lib/utils";
-import { getCategoryIcon } from "@/lib/transaction-ui";
+import { getCategoryIcon, getPurposeIcon } from "@/lib/transaction-ui";
+import { IconPicker, ColorPicker, InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
 import { updateDefaultCategories } from "@/lib/data-rebuild";
 import type {
   Account,
@@ -195,6 +199,8 @@ export function SettingsPage() {
   const [appConfig, setAppConfig] = useState<AppConfig>(defaultAppConfig);
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profilePhone, setProfilePhone] = useState("");
+  const [profilePhoto, setProfilePhoto] = useState<string>("");
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
   const [notifModalOpen, setNotifModalOpen] = useState(false);
   const [isSendingReset, setIsSendingReset] = useState(false);
@@ -213,9 +219,9 @@ export function SettingsPage() {
   );
   const restoreFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isAdmin = isAdminUser(user, profile);
+  const { isAdminView } = useRoleMode();
   const visibleSidebarItems = sidebarItems.filter(
-    (item) => !item.adminOnly || isAdmin,
+    (item) => !item.adminOnly || isAdminView,
   );
 
   // Allow deep-linking a settings section (e.g. /settings?section=Global+Settings
@@ -238,16 +244,41 @@ export function SettingsPage() {
     openingBalanceDate: getTodayCalendarDate(),
   });
 
-  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({
+  const [categoryModal, setCategoryModal] = useState<{
+    open: boolean;
+    mode: "create" | "edit";
+    id?: string;
+    name: string;
+    type: Category["type"];
+    color: string;
+    icon: string;
+    isInvestment: boolean;
+  }>({
+    open: false,
+    mode: "create",
     name: "",
-    type: "expense" as Category["type"],
+    type: "expense",
     color: "#10b981",
+    icon: "ShoppingBag",
     isInvestment: false,
   });
 
-  const [purposeModalOpen, setPurposeModalOpen] = useState(false);
-  const [purposeForm, setPurposeForm] = useState({ name: "", color: "#10b981" });
+  const [purposeModal, setPurposeModal] = useState<{
+    open: boolean;
+    mode: "create" | "edit";
+    id?: string;
+    name: string;
+    color: string;
+    icon: string;
+    isCore?: boolean;
+  }>({
+    open: false,
+    mode: "create",
+    name: "",
+    color: "#10b981",
+    icon: "Target",
+    isCore: false,
+  });
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: "account" | "category" | "purpose" } | null>(null);
@@ -362,6 +393,9 @@ export function SettingsPage() {
         if (resolvedProfile) {
           setProfileName(resolvedProfile.name);
           setProfilePhone(resolvedProfile.phone ?? "");
+          if (resolvedProfile.photoURL) {
+            setProfilePhoto(resolvedProfile.photoURL);
+          }
         }
         syncSettingsCache(queryClient, user?.id, {
           accounts: finalAccounts,
@@ -385,6 +419,85 @@ export function SettingsPage() {
   useEffect(() => {
     setProfileName(user?.name ?? "");
   }, [user?.name]);
+
+  useEffect(() => {
+    if (user?.photoUrl && !profilePhoto) {
+      setProfilePhoto(user.photoUrl);
+    }
+  }, [user?.photoUrl, profilePhoto]);
+
+  const profileInitials = useMemo(() => {
+    const raw = (profileName || user?.name || "SX").trim();
+    return (
+      raw
+        .split(/\s+/)
+        .map((p) => p[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase() || "SX"
+    );
+  }, [profileName, user?.name]);
+
+  const handleAvatarChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      notify({
+        title: "Invalid file type",
+        description: "Please choose an image file (PNG, JPG, WebP).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      notify({
+        title: "File too large",
+        description: "Image size must be 5MB or smaller.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const maxDim = 320;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const resizedDataUrl = canvas.toDataURL("image/jpeg", 0.88);
+          setProfilePhoto(resizedDataUrl);
+          notify({
+            title: "Avatar selected",
+            description: "Click 'Save profile' to persist your changes.",
+          });
+        } else {
+          setProfilePhoto(loadEvent.target?.result as string);
+        }
+      };
+      img.src = loadEvent.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   // One-time backfill: accounts created before opening balances were tracked
   // as ledger transactions get their missing "Opening Balance" entry created
@@ -508,54 +621,100 @@ export function SettingsPage() {
     }
   }
 
-  async function handleAddCategory() {
-    if (!categoryForm.name.trim()) {
+  async function handleSaveCategory() {
+    if (!categoryModal.name.trim()) {
       notify({ title: "Name required", description: "Category name cannot be empty." });
       return;
     }
-    setCategoryModalOpen(false);
-    const category: Category = {
-      id: crypto.randomUUID(),
-      name: categoryForm.name.trim(),
-      type: categoryForm.type,
-      color: categoryForm.color,
-      isInvestment: categoryForm.isInvestment,
-    };
-    const nextCustom = [...customCategories, category];
-    setCustomCategories(nextCustom);
-    await saveCustomCategory(user?.id, category);
-    syncSettingsCache(queryClient, user?.id, {
-      categories: mergeCategories(defaultCategoryList, nextCustom),
-    });
-    notify({ title: "Category added" });
+    const name = categoryModal.name.trim();
+
+    if (categoryModal.mode === "create") {
+      const newCat: Category = {
+        id: crypto.randomUUID(),
+        name,
+        type: categoryModal.type,
+        color: categoryModal.color,
+        icon: categoryModal.icon,
+        isInvestment: categoryModal.isInvestment,
+      };
+      const nextCustom = [...customCategories, newCat];
+      setCustomCategories(nextCustom);
+      setCategoryModal((c) => ({ ...c, open: false }));
+      saveCustomPaletteColor(newCat.color);
+      await saveCustomCategory(user?.id, newCat);
+      syncSettingsCache(queryClient, user?.id, {
+        categories: mergeCategories(defaultCategoryList, nextCustom),
+      });
+      notify({ title: "Category added", description: `Added "${name}"` });
+    } else {
+      const updatedCat: Category = {
+        id: categoryModal.id!,
+        name,
+        type: categoryModal.type,
+        color: categoryModal.color,
+        icon: categoryModal.icon,
+        isInvestment: categoryModal.isInvestment,
+      };
+      const nextCustom = customCategories.map((c) => (c.id === updatedCat.id ? updatedCat : c));
+      setCustomCategories(nextCustom);
+      setCategoryModal((c) => ({ ...c, open: false }));
+      saveCustomPaletteColor(updatedCat.color);
+      await saveCustomCategory(user?.id, updatedCat);
+      syncSettingsCache(queryClient, user?.id, {
+        categories: mergeCategories(defaultCategoryList, nextCustom),
+      });
+      notify({ title: "Category updated", description: `Updated "${name}"` });
+    }
   }
 
-  async function handleAddPurpose() {
-    if (!purposeForm.name.trim()) {
+  async function handleSavePurpose() {
+    if (!purposeModal.name.trim()) {
       notify({ title: "Name required", description: "Purpose name cannot be empty." });
       return;
     }
-    if (purposes.length >= (appConfig.maxPurposesLimit ?? 5)) {
-      notify({
-        title: "Limit reached",
-        description: `Maximum of ${appConfig.maxPurposesLimit ?? 5} purposes allowed.`,
-      });
-      return;
-    }
+    const name = purposeModal.name.trim();
 
-    setPurposeModalOpen(false);
-    const purpose: Purpose = {
-      id: crypto.randomUUID(),
-      name: purposeForm.name.trim(),
-      color: purposeForm.color,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    };
-    const nextPurposes = [...purposes, purpose];
-    setPurposes(nextPurposes);
-    await savePurpose(user?.id, purpose);
-    syncSettingsCache(queryClient, user?.id, { purposes: nextPurposes });
-    notify({ title: "Purpose added" });
+    if (purposeModal.mode === "create") {
+      if (purposes.filter((p) => p.isActive !== false).length >= (appConfig.maxPurposesLimit ?? 5)) {
+        notify({
+          title: "Limit reached",
+          description: `Maximum of ${appConfig.maxPurposesLimit ?? 5} purposes allowed.`,
+        });
+        return;
+      }
+
+      const newPurpose: Purpose = {
+        id: crypto.randomUUID(),
+        name,
+        color: purposeModal.color,
+        icon: purposeModal.icon,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      };
+      const nextPurposes = [...purposes, newPurpose];
+      setPurposes(nextPurposes);
+      setPurposeModal((p) => ({ ...p, open: false }));
+      saveCustomPaletteColor(newPurpose.color);
+      await savePurpose(user?.id, newPurpose);
+      syncSettingsCache(queryClient, user?.id, { purposes: nextPurposes });
+      notify({ title: "Purpose added", description: `Added "${name}"` });
+    } else {
+      const existing = purposes.find((p) => p.id === purposeModal.id);
+      if (!existing) return;
+      const updated: Purpose = {
+        ...existing,
+        name: purposeModal.isCore ? existing.name : name,
+        color: purposeModal.color,
+        icon: purposeModal.icon,
+      };
+      const nextPurposes = purposes.map((p) => (p.id === updated.id ? updated : p));
+      setPurposes(nextPurposes);
+      setPurposeModal((p) => ({ ...p, open: false }));
+      saveCustomPaletteColor(updated.color);
+      await savePurpose(user?.id, updated);
+      syncSettingsCache(queryClient, user?.id, { purposes: nextPurposes });
+      notify({ title: "Purpose updated", description: `Updated "${updated.name}"` });
+    }
   }
 
   function triggerDeletePrompt(id: string, name: string, type: "account" | "category" | "purpose") {
@@ -828,7 +987,7 @@ export function SettingsPage() {
       uid: user.id,
       name: profileName.trim() || "SpentX User",
       email: user.email,
-      photoURL: profile?.photoURL ?? user.photoUrl,
+      photoURL: profilePhoto || undefined,
       phone: profilePhone.trim(),
       joinedAt: profile?.joinedAt ?? new Date().toISOString(),
       role: profile?.role ?? "user",
@@ -922,18 +1081,74 @@ export function SettingsPage() {
                 <CardDescription className="text-xs">Adjust your personal identity configurations.</CardDescription>
               </CardHeader>
               <CardContent className="grid gap-6 p-6">
-                <div className="flex items-center gap-5">
-                  <div className="relative group">
-                    <Avatar className="size-16 border-2 border-emerald-500/20 bg-muted">
-                      <AvatarFallback className="font-bold text-foreground">SX</AvatarFallback>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+                  <div
+                    className="relative group size-20 shrink-0 cursor-pointer rounded-full"
+                    onClick={() => avatarInputRef.current?.click()}
+                    title="Click to change avatar photograph"
+                  >
+                    <Avatar className="size-20 border-2 border-emerald-500/20 bg-muted shadow-sm">
+                      {profilePhoto || profile?.photoURL || user?.photoUrl ? (
+                        <AvatarImage
+                          src={profilePhoto || profile?.photoURL || user?.photoUrl}
+                          alt={profileName || "User avatar"}
+                          className="object-cover"
+                        />
+                      ) : null}
+                      <AvatarFallback className="font-bold text-base text-foreground bg-primary/10">
+                        {profileInitials}
+                      </AvatarFallback>
                     </Avatar>
-                    <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                      <Camera className="size-4 text-white" />
+                    <div className="absolute inset-0 bg-black/45 rounded-full flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Camera className="size-5 text-white" />
+                      <span className="text-[9px] font-semibold text-white/90 mt-0.5">Change</span>
                     </div>
                   </div>
-                  <div className="space-y-1">
+
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="hidden"
+                    onChange={handleAvatarChange}
+                  />
+
+                  <div className="space-y-1.5">
                     <p className="text-xs font-bold text-foreground">Avatar Photograph</p>
-                    <p className="text-[10px] text-muted-foreground">PNG or JPG formats up to 5MB.</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      PNG, JPG or WebP up to 5MB. Automatically optimized for fast loading.
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs font-medium cursor-pointer"
+                        onClick={() => avatarInputRef.current?.click()}
+                      >
+                        <Upload className="size-3.5 mr-1.5" />
+                        Upload photograph
+                      </Button>
+                      {profilePhoto || profile?.photoURL || user?.photoUrl ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                          onClick={() => {
+                            setProfilePhoto("");
+                            if (avatarInputRef.current) avatarInputRef.current.value = "";
+                            notify({
+                              title: "Avatar removed",
+                              description: "Click 'Save profile' to persist your changes.",
+                            });
+                          }}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
                 
@@ -980,38 +1195,6 @@ export function SettingsPage() {
                   <Save className="size-4 mr-2" />
                   Save profile
                 </Button>
-
-                <Separator className="my-2" />
-
-                {/* 1-Year Session Token Card */}
-                <div className="rounded-2xl border border-border/80 bg-muted/20 p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Shield className="size-4 text-emerald-500" />
-                      <h3 className="text-sm font-bold text-foreground">Session Token & 1-Year Validity</h3>
-                    </div>
-                    <Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[10px] uppercase border border-emerald-500/20">
-                      1-Year Persistent Session
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    Your login session is securely stored in local storage and HTTP cookies with a <strong>1-year (365 days) expiration window</strong>. You remain signed in across restarts until explicit logout.
-                  </p>
-                  <div className="grid gap-2 sm:grid-cols-2 text-xs font-mono">
-                    <div className="rounded-xl border border-border/60 bg-background p-3">
-                      <span className="text-[10px] font-bold uppercase text-muted-foreground block mb-1">
-                        Token Persistence Horizon
-                      </span>
-                      <span className="font-bold text-foreground">365 Days (Auto-Refreshed)</span>
-                    </div>
-                    <div className="rounded-xl border border-border/60 bg-background p-3">
-                      <span className="text-[10px] font-bold uppercase text-muted-foreground block mb-1">
-                        Local Storage Mechanism
-                      </span>
-                      <span className="font-bold text-foreground">Browser LocalStorage + Max-Age Cookie</span>
-                    </div>
-                  </div>
-                </div>
               </CardContent>
             </Card>
           ) : null}
@@ -1193,17 +1376,28 @@ export function SettingsPage() {
               </CardHeader>
               <CardContent className="space-y-4 p-6">
                 <div className="flex items-center justify-between border-b border-border/60 pb-2 dark:border-border">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                    Purpose types
-                  </h2>
+                  <div>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Purpose types
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Target budgets for tracking and sharing ({purposes.length})
+                    </p>
+                  </div>
                   <Button
                     disabled={
                       purposes.filter((p) => p.isActive !== false).length >=
                       (appConfig.maxPurposesLimit ?? 5)
                     }
                     onClick={() => {
-                      setPurposeForm({ name: "", color: "#10b981" });
-                      setPurposeModalOpen(true);
+                      setPurposeModal({
+                        open: true,
+                        mode: "create",
+                        name: "",
+                        color: "#10b981",
+                        icon: "Target",
+                        isCore: false,
+                      });
                     }}
                     className="h-8 cursor-pointer text-xs font-bold"
                   >
@@ -1219,72 +1413,56 @@ export function SettingsPage() {
                     const isFamily = isFamilyPurposeName(purpose.name);
                     const isCore = isPersonal || isFamily;
                     const isOn = purpose.isActive !== false;
+                    const PurposeIcon = getPurposeIcon(
+                      purpose.icon || (isPersonal ? "User" : isFamily ? "Users" : "Target"),
+                    );
 
                     return (
                       <div
                         key={purpose.id}
                         className={cn(
-                          "grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl border px-3 py-2.5",
+                          "flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3.5 py-2.5 transition-all hover:bg-muted/40",
                           !isOn && "opacity-60",
                         )}
                       >
-                        <input
-                          className="size-8 cursor-pointer rounded-lg border-0 bg-transparent"
-                          type="color"
-                          value={purpose.color ?? "#64748b"}
-                          onChange={(event) => {
-                            const color = event.target.value;
-                            setPurposes((current) =>
-                              current.map((item) =>
-                                item.id === purpose.id
-                                  ? { ...item, color }
-                                  : item,
-                              ),
-                            );
-                          }}
-                          onBlur={async () => {
-                            const latest = purposes.find((p) => p.id === purpose.id) ?? purpose;
-                            await savePurpose(user?.id, latest);
-                            syncSettingsCache(queryClient, user?.id, { purposes });
-                          }}
-                        />
-                        <div className="min-w-0">
-                          {isCore ? (
-                            <p className="text-sm font-semibold">{purpose.name}</p>
-                          ) : (
-                            <Input
-                              className="h-9 text-xs"
-                              value={purpose.name}
-                              onChange={(event) =>
-                                setPurposes((current) =>
-                                  current.map((item) =>
-                                    item.id === purpose.id
-                                      ? { ...item, name: event.target.value }
-                                      : item,
-                                  ),
-                                )
-                              }
-                              onBlur={async () => {
-                                if (purpose.name.trim()) {
-                                  await savePurpose(user?.id, purpose);
-                                  syncSettingsCache(queryClient, user?.id, {
-                                    purposes,
-                                  });
-                                }
-                              }}
-                            />
-                          )}
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {isPersonal
-                              ? "Always on · default"
-                              : isFamily
-                                ? "Default · turn on/off"
-                                : isOn
-                                  ? "Custom · active"
-                                  : "Custom · off"}
-                          </p>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span
+                            className="flex size-9 items-center justify-center rounded-xl font-bold shadow-2xs shrink-0"
+                            style={{
+                              backgroundColor: `${purpose.color || "#64748b"}20`,
+                              color: purpose.color || "#64748b",
+                            }}
+                          >
+                            <PurposeIcon className="size-4.5" />
+                          </span>
+
+                          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                            <span className="truncate text-sm font-semibold text-foreground">
+                              {purpose.name}
+                            </span>
+                            <Badge
+                              variant="secondary"
+                              className={cn(
+                                "text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0 border-transparent shrink-0",
+                                isPersonal || isFamily
+                                  ? "bg-primary/10 text-primary"
+                                  : isOn
+                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                    : "bg-muted text-muted-foreground",
+                              )}
+                            >
+                              {isPersonal
+                                ? "Permanent"
+                                : isFamily
+                                  ? "Family"
+                                  : isOn
+                                    ? "Active"
+                                    : "Off"}
+                            </Badge>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2">
+
+                        <div className="flex items-center gap-2 shrink-0">
                           {isFamily ? (
                             <Switch
                               checked={isOn}
@@ -1293,9 +1471,7 @@ export function SettingsPage() {
                                   ...purpose,
                                   isActive: checked,
                                   canDelete: false,
-                                  deletedAt: checked
-                                    ? undefined
-                                    : new Date().toISOString(),
+                                  deletedAt: checked ? undefined : new Date().toISOString(),
                                   deletedBy: checked ? undefined : user?.id,
                                 };
                                 const nextPurposes = purposes.map((item) =>
@@ -1307,53 +1483,69 @@ export function SettingsPage() {
                                   purposes: nextPurposes,
                                 });
                                 notify({
-                                  title: checked
-                                    ? "Family purpose on"
-                                    : "Family purpose off",
+                                  title: checked ? "Family purpose on" : "Family purpose off",
                                 });
                               }}
                             />
                           ) : isPersonal ? (
-                            <Badge variant="secondary">On</Badge>
+                            <Badge variant="secondary" className="text-[10px]">On</Badge>
                           ) : (
-                            <>
-                              <Switch
-                                checked={isOn}
-                                onCheckedChange={async (checked) => {
-                                  const next = {
-                                    ...purpose,
-                                    isActive: checked,
-                                    deletedAt: checked
-                                      ? undefined
-                                      : new Date().toISOString(),
-                                    deletedBy: checked ? undefined : user?.id,
-                                  };
-                                  const nextPurposes = purposes.map((item) =>
-                                    item.id === purpose.id ? next : item,
-                                  );
-                                  setPurposes(nextPurposes);
-                                  await savePurpose(user?.id, next);
-                                  syncSettingsCache(queryClient, user?.id, {
-                                    purposes: nextPurposes,
-                                  });
-                                }}
-                              />
-                              <Button
-                                size="icon-sm"
-                                variant="ghost"
-                                className="cursor-pointer text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500"
-                                onClick={() =>
-                                  triggerDeletePrompt(
-                                    purpose.id,
-                                    purpose.name,
-                                    "purpose",
-                                  )
-                                }
-                              >
-                                <Trash2 className="size-4" />
-                              </Button>
-                            </>
+                            <Switch
+                              checked={isOn}
+                              onCheckedChange={async (checked) => {
+                                const next = {
+                                  ...purpose,
+                                  isActive: checked,
+                                  deletedAt: checked ? undefined : new Date().toISOString(),
+                                  deletedBy: checked ? undefined : user?.id,
+                                };
+                                const nextPurposes = purposes.map((item) =>
+                                  item.id === purpose.id ? next : item,
+                                );
+                                setPurposes(nextPurposes);
+                                await savePurpose(user?.id, next);
+                                syncSettingsCache(queryClient, user?.id, {
+                                  purposes: nextPurposes,
+                                });
+                              }}
+                            />
                           )}
+
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            className="rounded-lg hover:bg-muted cursor-pointer"
+                            title="Edit Purpose"
+                            onClick={() => {
+                              setPurposeModal({
+                                open: true,
+                                mode: "edit",
+                                id: purpose.id,
+                                name: purpose.name,
+                                color: purpose.color || "#10b981",
+                                icon:
+                                  purpose.icon ||
+                                  (isPersonal ? "User" : isFamily ? "Users" : "Target"),
+                                isCore,
+                              });
+                            }}
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+
+                          {!isCore && purpose.canDelete !== false ? (
+                            <Button
+                              size="icon-sm"
+                              variant="ghost"
+                              className="rounded-lg text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+                              title="Delete Purpose"
+                              onClick={() =>
+                                triggerDeletePrompt(purpose.id, purpose.name, "purpose")
+                              }
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -1564,33 +1756,41 @@ export function SettingsPage() {
                       Read only
                     </Badge>
                   </div>
-                  <div className="grid gap-2 max-h-[280px] overflow-y-auto pr-1">
+                  <div className="grid gap-2 max-h-[300px] overflow-y-auto pr-1">
                     {defaultCategoryList.map((category) => {
-                      const CategoryIcon = getCategoryIcon(category.name);
+                      const CategoryIcon = getCategoryIcon(category.icon || category.name);
                       return (
                         <div
                           key={category.id}
-                          className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/50/50 px-3 py-2 dark:border-border dark:bg-muted/40"
+                          className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3.5 py-2.5 transition-all hover:bg-muted/40"
                         >
-                          <span
-                            className="size-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: category.color || "#10b981" }}
-                          />
-                          <CategoryIcon className="size-3.5 text-muted-foreground shrink-0" />
-                          <span className="flex-1 text-xs font-medium text-foreground">
-                            {category.name}
-                          </span>
-                          <Badge
-                            variant="secondary"
-                            className={cn(
-                              "text-[9px] uppercase tracking-wider font-extrabold border-transparent",
-                              category.type === "income"
-                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-                            )}
-                          >
-                            {category.type}
-                          </Badge>
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span
+                              className="flex size-9 items-center justify-center rounded-xl font-bold shadow-2xs shrink-0"
+                              style={{
+                                backgroundColor: `${category.color || "#10b981"}20`,
+                                color: category.color || "#10b981",
+                              }}
+                            >
+                              <CategoryIcon className="size-4.5" />
+                            </span>
+                            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                              <span className="truncate text-sm font-semibold text-foreground">
+                                {category.name}
+                              </span>
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  "text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0 border-transparent shrink-0",
+                                  category.type === "income"
+                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                    : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+                                )}
+                              >
+                                {category.type}
+                              </Badge>
+                            </div>
+                          </div>
                         </div>
                       );
                     })}
@@ -1601,9 +1801,14 @@ export function SettingsPage() {
 
                 <div className="space-y-3.5">
                   <div className="flex items-center justify-between border-b border-border/60 pb-2">
-                    <h2 className="font-bold text-xs uppercase tracking-wider text-muted-foreground">
-                      My Custom Categories
-                    </h2>
+                    <div>
+                      <h2 className="font-bold text-xs uppercase tracking-wider text-muted-foreground">
+                        My Custom Categories
+                      </h2>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Categories created by you ({customCategories.length})
+                      </p>
+                    </div>
                     <Button
                       onClick={() => {
                         if (customCategories.length >= appConfig.maxCategoryLimit) {
@@ -1613,113 +1818,105 @@ export function SettingsPage() {
                           });
                           return;
                         }
-                        setCategoryForm({
+                        setCategoryModal({
+                          open: true,
+                          mode: "create",
                           name: "",
                           type: "expense",
                           color: "#10b981",
+                          icon: "ShoppingBag",
                           isInvestment: false,
                         });
-                        setCategoryModalOpen(true);
                       }}
                       className="h-8 text-xs font-bold cursor-pointer"
                     >
-                      <Plus className="size-3.5 mr-1" /> Add
+                      <Plus className="size-3.5 mr-1" /> Add Category
                     </Button>
                   </div>
+
                   {customCategories.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-4 text-center">
-                      No custom categories yet. Tap Add to create one.
-                    </p>
+                    <div className="text-center py-8 rounded-xl border border-dashed border-border/70 bg-muted/20">
+                      <p className="text-xs font-medium text-foreground">No custom categories yet</p>
+                      <p className="text-[11px] text-muted-foreground mt-1">Tap Add Category to create one.</p>
+                    </div>
                   ) : (
-                    <div className="grid gap-2 max-h-[280px] overflow-y-auto pr-1">
+                    <div className="grid gap-2 max-h-[380px] overflow-y-auto pr-1">
                       {customCategories.map((category) => {
-                        const CategoryIcon = getCategoryIcon(category.name);
+                        const CategoryIcon = getCategoryIcon(category.icon || category.name);
                         return (
                           <div
                             key={category.id}
-                            className="grid grid-cols-[1fr_auto_auto_auto] gap-1.5 items-center"
+                            className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3.5 py-2.5 transition-all hover:bg-muted/40 hover:border-border"
                           >
-                            <div className="relative">
+                            <div className="flex items-center gap-3 min-w-0">
                               <span
-                                className="absolute left-3 top-1/2 size-2 -translate-y-1/2 rounded-full"
-                                style={{ backgroundColor: category.color || "#10b981" }}
-                              />
-                              <CategoryIcon className="absolute left-6.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground shrink-0" />
-                              <Input
-                                className="h-9 pl-12 text-xs"
-                                value={category.name}
-                                onChange={(event) =>
-                                  setCustomCategories((current) =>
-                                    current.map((item) =>
-                                      item.id === category.id
-                                        ? { ...item, name: event.target.value }
-                                        : item,
-                                    ),
-                                  )
-                                }
-                                onBlur={async () => {
-                                  if (category.name.trim()) {
-                                    await saveCustomCategory(user?.id, category);
-                                    syncSettingsCache(queryClient, user?.id, {
-                                      categories: mergeCategories(defaultCategoryList, customCategories),
-                                    });
-                                  }
+                                className="flex size-9 items-center justify-center rounded-xl font-bold shadow-2xs shrink-0"
+                                style={{
+                                  backgroundColor: `${category.color || "#10b981"}20`,
+                                  color: category.color || "#10b981",
                                 }}
-                              />
-                            </div>
-                            <Badge
-                              variant="secondary"
-                              className={cn(
-                                "h-9 px-2 text-[9px] uppercase tracking-wider font-extrabold flex items-center justify-center w-16 border-transparent",
-                                category.type === "income"
-                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                  : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-                              )}
-                            >
-                              {category.type}
-                            </Badge>
-                            {category.type === "expense" ? (
-                              <label
-                                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-                                title="Mark as Investment (counts toward Wealth's Total Investment)"
                               >
-                                <input
-                                  type="checkbox"
-                                  className="size-4 cursor-pointer accent-primary"
-                                  checked={category.isInvestment ?? false}
-                                  onChange={async (event) => {
-                                    const checked = event.target.checked;
-                                    const updated = {
-                                      ...category,
-                                      isInvestment: checked,
-                                    };
-                                    const nextCustom = customCategories.map((item) =>
-                                      item.id === category.id ? updated : item,
-                                    );
-                                    setCustomCategories(nextCustom);
-                                    await saveCustomCategory(user?.id, updated);
-                                    syncSettingsCache(queryClient, user?.id, {
-                                      categories: mergeCategories(
-                                        defaultCategoryList,
-                                        nextCustom,
-                                      ),
-                                    });
-                                  }}
-                                />
-                              </label>
-                            ) : (
-                              <span className="h-9 w-9" />
-                            )}
-                            <Button
-                              size="icon-sm"
-                              variant="ghost"
-                              className="text-muted-foreground hover:text-rose-500 hover:bg-rose-500/10 cursor-pointer"
-                              onClick={() =>
-                                triggerDeletePrompt(category.id, category.name, "category")
-                              }
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
+                                <CategoryIcon className="size-4.5" />
+                              </span>
+                              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                <span className="truncate text-sm font-semibold text-foreground">
+                                  {category.name}
+                                </span>
+                                <Badge
+                                  variant="secondary"
+                                  className={cn(
+                                    "text-[9px] uppercase tracking-wider font-extrabold px-1.5 py-0 border-transparent shrink-0",
+                                    category.type === "income"
+                                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                                      : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+                                  )}
+                                >
+                                  {category.type}
+                                </Badge>
+                                {category.isInvestment ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[9px] px-1.5 py-0 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 font-medium shrink-0"
+                                  >
+                                    Investment
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="rounded-lg hover:bg-muted cursor-pointer"
+                                title="Edit Category"
+                                onClick={() => {
+                                  setCategoryModal({
+                                    open: true,
+                                    mode: "edit",
+                                    id: category.id,
+                                    name: category.name,
+                                    type: category.type,
+                                    color: category.color || "#10b981",
+                                    icon: category.icon || "ShoppingBag",
+                                    isInvestment: category.isInvestment ?? false,
+                                  });
+                                }}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                className="rounded-lg text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 cursor-pointer"
+                                title="Delete Category"
+                                onClick={() =>
+                                  triggerDeletePrompt(category.id, category.name, "category")
+                                }
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           </div>
                         );
                       })}
@@ -1818,6 +2015,38 @@ export function SettingsPage() {
                       ))}
                     </select>
                   </Field>
+
+                  <Field label="Default purpose">
+                    <select
+                      className="h-10 w-full rounded-lg border border-border bg-white px-3 text-xs text-foreground outline-none dark:border-border dark:bg-background dark:text-foreground"
+                      value={
+                        purposes.find((p) => p.isDefault)?.id ??
+                        purposes.find((p) => p.name.toLowerCase() === "personal")?.id ??
+                        ""
+                      }
+                      onChange={async (event) => {
+                        const selectedId = event.target.value;
+                        const nextPurposes = purposes.map((p) => ({
+                          ...p,
+                          isDefault: p.id === selectedId,
+                        }));
+                        setPurposes(nextPurposes);
+                        const savePromises = nextPurposes.map((p) => savePurpose(user?.id, p));
+                        await Promise.allSettled(savePromises);
+                        syncSettingsCache(queryClient, user?.id, { purposes: nextPurposes });
+                        notify({ title: "Default purpose updated" });
+                      }}
+                    >
+                      <option value="">Select purpose</option>
+                      {purposes
+                        .filter((p) => p.isActive !== false)
+                        .map((purpose) => (
+                          <option key={purpose.id} value={purpose.id}>
+                            {purpose.name}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
                 </div>
 
                 <Separator className="border-border/60" />
@@ -1877,85 +2106,71 @@ export function SettingsPage() {
                     </DialogHeader>
 
                     <div className="mt-4 grid gap-6">
-                      {/* 📊 Periodic Summaries */}
+                      {/* Smart Budget & Expense Alerts */}
                       <div className="grid gap-3">
-                        <p className="text-xs font-bold text-primary uppercase tracking-wider">📊 Periodic Summaries</p>
+                        <p className="text-xs font-semibold text-primary uppercase tracking-wider">Smart Budget & Limits</p>
                         <PreferenceRow
-                          icon={Sparkles}
-                          checked={settings.notificationPreferences?.dailySummary !== false}
-                          title="Daily Spending Summary"
-                          description="Daily overview of expenses, top category, or no-spend milestone."
-                          onCheckedChange={(checked) => updateNotificationPref("dailySummary", checked)}
-                        />
-                        <PreferenceRow
-                          icon={Sparkles}
-                          checked={settings.notificationPreferences?.weeklySummary !== false}
-                          title="Weekly Spending Summary"
-                          description="Sunday evening overview of weekly income, expenses & top category."
-                          onCheckedChange={(checked) => updateNotificationPref("weeklySummary", checked)}
-                        />
-                        <PreferenceRow
-                          icon={Sparkles}
-                          checked={settings.notificationPreferences?.monthlySummary !== false}
-                          title="Monthly Spending Summary"
-                          description="End-of-month financial summary including income, savings & top spending."
-                          onCheckedChange={(checked) => updateNotificationPref("monthlySummary", checked)}
-                        />
-                      </div>
-
-                      <Separator className="border-border/60" />
-
-                      {/* 🚨 Smart Budget & Expense Alerts */}
-                      <div className="grid gap-3">
-                        <p className="text-xs font-bold text-primary uppercase tracking-wider">🚨 Smart Budget & Expense Alerts</p>
-                        <PreferenceRow
-                          icon={PiggyBank}
-                          checked={settings.notificationPreferences?.salaryAlerts !== false}
-                          title="Salary & Income Credited"
-                          description="Notify when salary or monthly income is received."
-                          onCheckedChange={(checked) => updateNotificationPref("salaryAlerts", checked)}
+                          icon={Shield}
+                          checked={settings.notificationPreferences?.dailyLimitAlerts !== false}
+                          title="Daily Safe Spending Limit Exceeded"
+                          description="Alert when today's safe spending limit is breached so you can adjust."
+                          onCheckedChange={(checked) => updateNotificationPref("dailyLimitAlerts", checked)}
                         />
                         <PreferenceRow
                           icon={AlertTriangle}
                           checked={settings.notificationPreferences?.budgetAlerts !== false}
                           title="Budget Limit Thresholds (80% / 100%)"
-                          description="Alert when category spending crosses 80% or 100% of planned budget."
+                          description="Alert when category spending crosses 80% or 100% of planned monthly budget."
                           onCheckedChange={(checked) => updateNotificationPref("budgetAlerts", checked)}
-                        />
-                        <PreferenceRow
-                          icon={Shield}
-                          checked={settings.notificationPreferences?.dailyLimitAlerts !== false}
-                          title="Daily Safe Spending Limit Exceeded"
-                          description="Alert when today's safe spending limit is breached."
-                          onCheckedChange={(checked) => updateNotificationPref("dailyLimitAlerts", checked)}
                         />
                         <PreferenceRow
                           icon={Sparkles}
                           checked={settings.notificationPreferences?.burnRateAlerts !== false}
                           title="High Burn Rate Warnings"
-                          description="Warn when spending velocity projects an early monthly overspend."
+                          description="Warn early in the month if spending velocity projects a monthly overspend."
                           onCheckedChange={(checked) => updateNotificationPref("burnRateAlerts", checked)}
                         />
                       </div>
 
                       <Separator className="border-border/60" />
 
-                      {/* 🔔 Activity Reminders */}
+                      {/* Activity & Settlement Reminders */}
                       <div className="grid gap-3">
-                        <p className="text-xs font-bold text-primary uppercase tracking-wider">🔔 Activity Reminders</p>
+                        <p className="text-xs font-semibold text-primary uppercase tracking-wider">Activity & Settlements</p>
                         <PreferenceRow
                           icon={Users}
                           checked={settings.notificationPreferences?.settlementReminders !== false}
                           title="Friend Settlement Reminders"
-                          description="Remind when friend splits or shared expenses remain unsettled."
+                          description="Remind when friend splits or shared balances remain unsettled."
                           onCheckedChange={(checked) => updateNotificationPref("settlementReminders", checked)}
                         />
                         <PreferenceRow
-                          icon={Wallet}
-                          checked={settings.notificationPreferences?.snapshotReminders !== false}
-                          title="Daily Snapshot Reminders"
-                          description="Remind to record daily account balance snapshot for net worth tracking."
-                          onCheckedChange={(checked) => updateNotificationPref("snapshotReminders", checked)}
+                          icon={Compass}
+                          checked={settings.notificationPreferences?.outingAlerts !== false}
+                          title="Outing Completion & Settle Splits"
+                          description="Notify when a trip or outing finishes so you can review final expenses and settle balances."
+                          onCheckedChange={(checked) => updateNotificationPref("outingAlerts", checked)}
+                        />
+                        <PreferenceRow
+                          icon={PiggyBank}
+                          checked={settings.notificationPreferences?.salaryAlerts !== false}
+                          title="Salary & Major Income Credited"
+                          description="Notify when salary or monthly income is received to begin your plan."
+                          onCheckedChange={(checked) => updateNotificationPref("salaryAlerts", checked)}
+                        />
+                      </div>
+
+                      <Separator className="border-border/60" />
+
+                      {/* Periodic Digest */}
+                      <div className="grid gap-3">
+                        <p className="text-xs font-semibold text-primary uppercase tracking-wider">Periodic Digest</p>
+                        <PreferenceRow
+                          icon={Sparkles}
+                          checked={settings.notificationPreferences?.weeklySummary !== false}
+                          title="Weekly Spending Digest"
+                          description="Sunday evening overview of your weekly expenses, income, and top spending."
+                          onCheckedChange={(checked) => updateNotificationPref("weeklySummary", checked)}
                         />
                       </div>
                     </div>
@@ -2002,14 +2217,14 @@ export function SettingsPage() {
           ) : null}
 
           {/* GLOBAL SETTINGS (ADMIN) */}
-          {activeSection === "SMS Rules" && isAdmin ? (
+          {activeSection === "SMS Rules" && isAdminView ? (
             <SmsRulesAdminPanel
               adminId={user?.id}
               onNotify={notify}
             />
           ) : null}
 
-          {activeSection === "Global Settings" && isAdmin ? (
+          {activeSection === "Global Settings" && isAdminView ? (
             <Card>
               <CardHeader className="border-b border-border/60 p-5">
                 <CardTitle className="text-sm font-semibold">Global App Settings</CardTitle>
@@ -2168,15 +2383,22 @@ export function SettingsPage() {
 
       {/* POPUP MODAL 1: ADD ACCOUNT */}
       {accountModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setAccountModalOpen(false)}
+        >
+          <div
+            className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200 shadow-2xl border border-border/80"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Wallet className="size-4 text-emerald-500" /> Add New Bank Account
               </h3>
               <button 
+                type="button"
                 onClick={() => setAccountModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground dark:hover:text-foreground cursor-pointer"
+                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 rounded-md hover:bg-muted"
               >
                 <X className="size-4" />
               </button>
@@ -2243,7 +2465,7 @@ export function SettingsPage() {
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex gap-2 pt-2 border-t border-border/60">
               <Button
                 variant="outline"
                 className="flex-1 h-10 text-xs font-bold cursor-pointer"
@@ -2262,153 +2484,241 @@ export function SettingsPage() {
         </div>
       )}
 
-      {/* POPUP MODAL 2: ADD CATEGORY */}
-      {categoryModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
+      {/* POPUP MODAL 2: CATEGORY (CREATE / EDIT) */}
+      {categoryModal.open && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setCategoryModal((c) => ({ ...c, open: false }))}
+        >
+          <div
+            className="sx-surface w-full max-w-md space-y-4 p-5 sm:p-6 scale-in duration-200 shadow-2xl border border-border/80 rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Layers className="size-4 text-emerald-500" /> Add New Category
+              <h3 className="text-sm font-bold text-foreground">
+                {categoryModal.mode === "create" ? "Create Category" : "Edit Category"}
               </h3>
-              <button 
-                onClick={() => setCategoryModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground dark:hover:text-foreground cursor-pointer"
+              <button
+                type="button"
+                onClick={() => setCategoryModal((c) => ({ ...c, open: false }))}
+                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 rounded-lg hover:bg-muted transition-colors"
               >
                 <X className="size-4" />
               </button>
             </div>
 
-            <div className="space-y-3.5 text-xs">
-              <div className="space-y-1">
-                <Label htmlFor="modal-cat-name" className="text-[10px] font-bold text-muted-foreground uppercase">Category Name</Label>
+            {/* Hero Input Section */}
+            <div className="flex items-start gap-3">
+              {/* Live Preview Avatar */}
+              <div
+                className="flex size-12 shrink-0 items-center justify-center rounded-2xl shadow-xs transition-colors"
+                style={{
+                  backgroundColor: `${categoryModal.color}20`,
+                  color: categoryModal.color,
+                }}
+              >
+                {(() => {
+                  const CatIcon = getCategoryIcon(categoryModal.icon || categoryModal.name);
+                  return <CatIcon className="size-6" />;
+                })()}
+              </div>
+
+              {/* Name & Type switch */}
+              <div className="flex-1 space-y-2">
                 <Input
                   id="modal-cat-name"
-                  placeholder="e.g. Rent, Grocery"
-                  value={categoryForm.name}
-                  onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
+                  placeholder="Category name"
+                  value={categoryModal.name}
+                  onChange={(e) => setCategoryModal({ ...categoryModal, name: e.target.value })}
+                  className="h-10 text-sm font-semibold rounded-xl bg-muted/20 border-border/70"
+                  autoFocus
                 />
-              </div>
 
-              <div className="space-y-1">
-                <Label htmlFor="modal-cat-type" className="text-[10px] font-bold text-muted-foreground uppercase">Taxonomy Type</Label>
-                <select
-                  id="modal-cat-type"
-                  className="h-10 w-full rounded-lg border border-border bg-white px-2.5 text-xs text-foreground outline-none dark:border-border dark:bg-background dark:text-foreground"
-                  value={categoryForm.type}
-                  onChange={(e) => setCategoryForm({ ...categoryForm, type: e.target.value as Category["type"] })}
-                >
-                  <option value="expense">Expense Allocation</option>
-                  <option value="income">Income Source</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="modal-cat-color" className="text-[10px] font-bold text-muted-foreground uppercase">Category Visual Color</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="modal-cat-color"
-                    type="color"
-                    className="h-10 w-16 p-1 cursor-pointer shrink-0"
-                    value={categoryForm.color}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, color: e.target.value })}
-                  />
-                  <Input
-                    type="text"
-                    className="h-10 text-xs font-mono"
-                    value={categoryForm.color}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, color: e.target.value })}
-                  />
+                {/* Segmented Type Toggle */}
+                <div className="grid grid-cols-2 rounded-xl bg-muted/50 p-1 border border-border/50 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryModal((c) => ({ ...c, type: "expense" }))}
+                    className={cn(
+                      "py-1 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                      categoryModal.type === "expense"
+                        ? "bg-background text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Expense
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCategoryModal((c) => ({ ...c, type: "income" }))}
+                    className={cn(
+                      "py-1 text-xs font-bold rounded-lg transition-all cursor-pointer",
+                      categoryModal.type === "income"
+                        ? "bg-background text-foreground shadow-xs"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    Income
+                  </button>
                 </div>
               </div>
-
-              {categoryForm.type === "expense" ? (
-                <label className="flex items-center gap-2 text-xs font-medium text-foreground">
-                  <input
-                    type="checkbox"
-                    className="size-4 cursor-pointer accent-primary"
-                    checked={categoryForm.isInvestment}
-                    onChange={(e) =>
-                      setCategoryForm({ ...categoryForm, isInvestment: e.target.checked })
-                    }
-                  />
-                  Mark as Investment
-                  <span className="font-normal text-muted-foreground">
-                    (counts toward Wealth&apos;s Total Investment)
-                  </span>
-                </label>
-              ) : null}
             </div>
 
-            <div className="flex gap-2 pt-2">
+            {/* Color Swatches */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Color
+              </span>
+              <InlineColorPicker
+                value={categoryModal.color}
+                onChange={(color) => setCategoryModal({ ...categoryModal, color })}
+              />
+            </div>
+
+            {/* Icon Picker */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Icon
+              </span>
+              <InlineIconPicker
+                value={categoryModal.icon}
+                onChange={(icon) => setCategoryModal({ ...categoryModal, icon })}
+                color={categoryModal.color}
+              />
+            </div>
+
+            {/* Investment Option (for expenses) */}
+            {categoryModal.type === "expense" ? (
+              <label className="flex items-center gap-2 text-xs font-medium text-foreground cursor-pointer pt-0.5">
+                <input
+                  type="checkbox"
+                  className="size-4 cursor-pointer accent-primary rounded"
+                  checked={categoryModal.isInvestment}
+                  onChange={(e) =>
+                    setCategoryModal({ ...categoryModal, isInvestment: e.target.checked })
+                  }
+                />
+                <span>Mark as Investment</span>
+              </label>
+            ) : null}
+
+            {/* Modal Actions */}
+            <div className="flex gap-2 pt-2 border-t border-border/60">
               <Button
                 variant="outline"
-                className="flex-1 h-10 text-xs font-bold cursor-pointer"
-                onClick={() => setCategoryModalOpen(false)}
+                className="flex-1 h-10 text-xs font-bold rounded-xl cursor-pointer"
+                onClick={() => setCategoryModal((c) => ({ ...c, open: false }))}
               >
                 Cancel
               </Button>
               <Button
-                className="flex-1 h-10 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground cursor-pointer"
-                onClick={handleAddCategory}
+                className="flex-1 h-10 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl cursor-pointer"
+                onClick={handleSaveCategory}
               >
-                Create Category
+                {categoryModal.mode === "create" ? "Create Category" : "Save Changes"}
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* POPUP MODAL 3: ADD PURPOSE */}
-      {purposeModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="sx-surface w-full max-w-md space-y-4 p-6 scale-in duration-200">
+      {/* POPUP MODAL 3: PURPOSE (CREATE / EDIT) */}
+      {purposeModal.open && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setPurposeModal((p) => ({ ...p, open: false }))}
+        >
+          <div
+            className="sx-surface w-full max-w-md space-y-4 p-5 sm:p-6 scale-in duration-200 shadow-2xl border border-border/80 rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border/60 pb-3">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Plus className="size-4 text-emerald-500" /> Add New Purpose Target
+              <h3 className="text-sm font-bold text-foreground">
+                {purposeModal.mode === "create" ? "Add Purpose Target" : "Edit Purpose Target"}
               </h3>
-              <button 
-                onClick={() => setPurposeModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground dark:hover:text-foreground cursor-pointer"
+              <button
+                type="button"
+                onClick={() => setPurposeModal((p) => ({ ...p, open: false }))}
+                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 rounded-lg hover:bg-muted transition-colors"
               >
                 <X className="size-4" />
               </button>
             </div>
 
-            <div className="space-y-3.5 text-xs">
-              <div className="space-y-1">
-                <Label htmlFor="modal-purp-name" className="text-[10px] font-bold text-muted-foreground uppercase">Purpose Name</Label>
+            {/* Hero Input Section */}
+            <div className="flex items-center gap-3">
+              {/* Live Preview Avatar */}
+              <div
+                className="flex size-12 shrink-0 items-center justify-center rounded-2xl shadow-xs transition-colors"
+                style={{
+                  backgroundColor: `${purposeModal.color}20`,
+                  color: purposeModal.color,
+                }}
+              >
+                {(() => {
+                  const PurpIcon = getPurposeIcon(purposeModal.icon || purposeModal.name);
+                  return <PurpIcon className="size-6" />;
+                })()}
+              </div>
+
+              {/* Name input */}
+              <div className="flex-1 space-y-1">
                 <Input
                   id="modal-purp-name"
-                  placeholder="e.g. Travel, Family Medicals"
-                  value={purposeForm.name}
-                  onChange={(e) => setPurposeForm({ ...purposeForm, name: e.target.value })}
+                  placeholder="Purpose name"
+                  value={purposeModal.name}
+                  disabled={purposeModal.isCore}
+                  onChange={(e) => setPurposeModal({ ...purposeModal, name: e.target.value })}
+                  className="h-10 text-sm font-semibold rounded-xl bg-muted/20 border-border/70"
+                  autoFocus={!purposeModal.isCore}
                 />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="modal-purp-color" className="text-[10px] font-bold text-muted-foreground uppercase">Color</Label>
-                <Input
-                  id="modal-purp-color"
-                  type="color"
-                  className="h-10 w-full"
-                  value={purposeForm.color}
-                  onChange={(e) => setPurposeForm({ ...purposeForm, color: e.target.value })}
-                />
+                {purposeModal.isCore ? (
+                  <p className="text-[10px] text-muted-foreground">
+                    Core system purpose
+                  </p>
+                ) : null}
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            {/* Color Swatches */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Color
+              </span>
+              <InlineColorPicker
+                value={purposeModal.color}
+                onChange={(color) => setPurposeModal({ ...purposeModal, color })}
+              />
+            </div>
+
+            {/* Icon Picker */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Icon
+              </span>
+              <InlineIconPicker
+                value={purposeModal.icon}
+                onChange={(icon) => setPurposeModal({ ...purposeModal, icon })}
+                color={purposeModal.color}
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-2 pt-2 border-t border-border/60">
               <Button
                 variant="outline"
-                className="flex-1 h-10 text-xs font-bold cursor-pointer"
-                onClick={() => setPurposeModalOpen(false)}
+                className="flex-1 h-10 text-xs font-bold rounded-xl cursor-pointer"
+                onClick={() => setPurposeModal((p) => ({ ...p, open: false }))}
               >
                 Cancel
               </Button>
               <Button
-                className="flex-1 h-10 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground cursor-pointer"
-                onClick={handleAddPurpose}
+                className="flex-1 h-10 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl cursor-pointer"
+                onClick={handleSavePurpose}
               >
-                Create Purpose
+                {purposeModal.mode === "create" ? "Create Purpose" : "Save Changes"}
               </Button>
             </div>
           </div>

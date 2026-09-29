@@ -55,7 +55,7 @@ export function CategoryFilterDropdown({
       <DropdownMenuGroup>
         <DropdownMenuLabel>{groupLabel}</DropdownMenuLabel>
         {items.map((category) => {
-          const CategoryIcon = getCategoryIcon(category.name);
+          const CategoryIcon = getCategoryIcon(category.icon || category.name);
           return (
             <DropdownMenuCheckboxItem
               key={category.id}

@@ -1,4 +1,4 @@
-import { isSpendingExpense } from "@/lib/investments";
+import { isTransferTransaction, isOutingRollupLike } from "@/lib/investments";
 import type { Category, Transaction } from "@/types";
 
 /** Colors for outing-type categories on Analysis (Trip / Temple / …). */
@@ -27,8 +27,34 @@ export function buildCategoryTotals(
   );
   const totals = new Map<string, number>();
 
+  const outingIdsWithRollup = new Set(
+    transactions
+      .filter((transaction) => isOutingRollupLike(transaction))
+      .map((transaction) => transaction.outingId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const countedRollupOutings = new Set<string>();
+
   for (const transaction of transactions) {
-    if (!isSpendingExpense(transaction, categories)) continue;
+    if (transaction.type !== "expense") continue;
+    if (isTransferTransaction(transaction)) continue;
+
+    if (isOutingRollupLike(transaction)) {
+      const outingId = transaction.outingId;
+      if (outingId) {
+        if (countedRollupOutings.has(outingId)) continue;
+        countedRollupOutings.add(outingId);
+      }
+      const amount = transactionAmount(transaction);
+      if (amount <= 0) continue;
+      const name = (transaction.category || "Trip").trim() || "Trip";
+      totals.set(name, (totals.get(name) ?? 0) + amount);
+      continue;
+    }
+
+    if (transaction.outingId && outingIdsWithRollup.has(transaction.outingId)) {
+      continue;
+    }
 
     // Split Expense — attribute each split's own amount to its own
     // category, instead of the whole transaction to just its first split.

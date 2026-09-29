@@ -11,6 +11,7 @@
  */
 
 import {
+  isReimbursementTransaction,
   isOutingRollupLike,
   isTransferTransaction,
   sumSpendingExpenses,
@@ -45,6 +46,7 @@ export function isInPeriodRange(rawDate: string | undefined | null, range?: Peri
 
 export function isPeriodIncome(transaction: Transaction) {
   if (transaction.type !== "income") return false;
+  if (isReimbursementTransaction(transaction)) return false;
   const cat = (transaction.category ?? "").trim().toLowerCase();
   if (cat === OPENING_BALANCE_CATEGORY.toLowerCase()) return false;
   if (
@@ -97,6 +99,31 @@ export function sumUnlinkedOutingSpend(
 }
 
 /**
+ * Total outing spending in the period — combines outing-linked transactions
+ * and unlinked cash expenses logged under outings.
+ */
+export function sumPeriodOutingSpend(
+  transactions: Transaction[],
+  outingExpenses: OutingExpense[] = [],
+  range?: PeriodRange,
+) {
+  const txSpend = transactions.reduce((sum, tx) => {
+    if (tx.type !== "expense") return sum;
+    const isOuting =
+      Boolean(tx.outingId) ||
+      tx.tags?.includes("outing-analytics") ||
+      isOutingRollupLike(tx);
+    if (!isOuting) return sum;
+    const date = tx.transactionDate ?? tx.date;
+    if (!isInPeriodRange(date, range)) return sum;
+    return sum + money(tx);
+  }, 0);
+
+  const unlinkedSpend = sumUnlinkedOutingSpend(outingExpenses, range);
+  return txSpend + unlinkedSpend;
+}
+
+/**
  * Period inflow — same number on Dashboard "Period Inflow" and
  * Transactions "Total Income" (period activity, not opening balance).
  */
@@ -114,28 +141,15 @@ export function sumPeriodIncome(
 
 export function sumPeriodReturns(transactions: Transaction[], range?: PeriodRange) {
   return transactions.reduce((sum, tx) => {
-    if (tx.type === "expense") return sum;
-    const cat = (tx.category ?? "").trim().toLowerCase();
-    if (
-      cat === "repayment" ||
-      cat === "friend repayment" ||
-      cat === "settlement" ||
-      cat === "settlements"
-    ) {
-      const date = tx.transactionDate ?? tx.date;
-      if (!isInPeriodRange(date, range)) return sum;
-      return sum + money(tx);
-    }
-    return sum;
+    if (!isReimbursementTransaction(tx)) return sum;
+    const date = tx.transactionDate ?? tx.date;
+    if (!isInPeriodRange(date, range)) return sum;
+    return sum + money(tx);
   }, 0);
 }
 
-/**
- * Period outflow — net spending expenses minus returns/settlements.
- * Use the FULL ledger, not the Transactions display list (display list
- * hides individuals and shows a rollup that must not double-count).
- */
-export function sumPeriodExpense(
+/** Gross cash spending before friend reimbursements are applied. */
+export function sumPeriodGrossExpense(
   transactions: Transaction[],
   options: {
     range?: PeriodRange;
@@ -159,14 +173,69 @@ export function sumPeriodExpense(
     );
   }
 
-  const hasOutingRollup = scoped.some((tx) => isOutingRollupLike(tx) || tx.tags?.includes("outing-analytics"));
-  const ledgerSpend = sumSpendingExpenses(scoped, categories);
-  // Unlinked manual cash is only added if outing rollups are not already present in scoped
+  const outingIdsWithRollup = new Set(
+    scoped
+      .filter((transaction) => isOutingRollupLike(transaction))
+      .map((transaction) => transaction.outingId)
+      .filter((id): id is string => Boolean(id)),
+  );
+  const rollupAmountByOuting = new Map<string, number>();
+  for (const transaction of scoped) {
+    if (!isOutingRollupLike(transaction) || !transaction.outingId) continue;
+    const amount = money(transaction);
+    const prev = rollupAmountByOuting.get(transaction.outingId) ?? 0;
+    if (amount > prev) rollupAmountByOuting.set(transaction.outingId, amount);
+  }
+  const countedRollupOutings = new Set<string>();
+
+  const ledgerSpend = scoped.reduce((sum, tx) => {
+    if (tx.type !== "expense") return sum;
+    if (isTransferTransaction(tx)) return sum;
+
+    if (isOutingRollupLike(tx)) {
+      if (!includeOutingExpenses) return sum;
+      const outingId = tx.outingId;
+      if (!outingId) return sum + money(tx);
+      if (countedRollupOutings.has(outingId)) return sum;
+      countedRollupOutings.add(outingId);
+      return sum + (rollupAmountByOuting.get(outingId) ?? money(tx));
+    }
+
+    if (tx.outingId && outingIdsWithRollup.has(tx.outingId)) {
+      return sum;
+    }
+
+    return sum + money(tx);
+  }, 0);
+
+  const hasOutingRollup = scoped.some((tx) => isOutingRollupLike(tx));
   const unlinked = (includeOutingExpenses && !hasOutingRollup)
     ? sumUnlinkedOutingSpend(options.unlinkedOutingExpenses ?? [], range)
     : 0;
 
   return ledgerSpend + unlinked;
+}
+
+/**
+ * Period outflow — net spending expenses minus returns/settlements.
+ * Use the FULL ledger, not the Transactions display list (display list
+ * hides individuals and shows a rollup that must not double-count).
+ */
+export function sumPeriodExpense(
+  transactions: Transaction[],
+  options: {
+    range?: PeriodRange;
+    unlinkedOutingExpenses?: OutingExpense[];
+    categories?: Category[];
+    includeOutingExpenses?: boolean;
+  } = {},
+) {
+  const grossExpense = sumPeriodGrossExpense(transactions, options);
+  const reimbursements = sumPeriodReturns(transactions, options.range);
+  // A repayment can be recorded in a period with no new spending. Expense is
+  // never shown as negative; the reimbursement card still exposes the full
+  // cash movement and the ledger keeps the original transaction visible.
+  return Math.max(0, grossExpense - reimbursements);
 }
 
 export function computePeriodTotals(
@@ -179,9 +248,13 @@ export function computePeriodTotals(
   } = {},
 ) {
   const income = sumPeriodIncome(transactions, options.range);
-  const expense = sumPeriodExpense(transactions, options);
+  const grossExpense = sumPeriodGrossExpense(transactions, options);
+  const reimbursements = sumPeriodReturns(transactions, options.range);
+  const expense = Math.max(0, grossExpense - reimbursements);
   return {
     income,
+    grossExpense,
+    reimbursements,
     expense,
     net: income - expense,
   };

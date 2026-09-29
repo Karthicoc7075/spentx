@@ -14,6 +14,7 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useFriendSplits } from "@/hooks/useFriendSplits";
 import { useMonthlyPlanQuery } from "@/hooks/useMonthlyPlanQuery";
+import { useOutings } from "@/hooks/useOutings";
 import { useReflections } from "@/hooks/useReflections";
 import { useTransactions } from "@/hooks/useTransactions";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -23,7 +24,9 @@ export function useSmartAlerts() {
   const queryClient = useQueryClient();
   const { transactions } = useTransactions();
   const { reflections } = useReflections();
-  const { splits: friendSplits } = useFriendSplits();
+  const { splits: friendSplits, settlements: friendSettlements } =
+    useFriendSplits();
+  const { outings } = useOutings();
   const { settings } = useUserSettings();
   const planQuery = useMonthlyPlanQuery(getCurrentPlanMonth());
   const syncedRef = useRef<string>("");
@@ -64,11 +67,19 @@ export function useSmartAlerts() {
       generateSmartAlerts({
         transactions,
         monthlyPlan: planQuery.data ?? null,
-        reflections,
         friendSplits,
+        friendSettlements,
+        outings,
         notificationPreferences: settings.notificationPreferences,
       }),
-    [planQuery.data, reflections, transactions, friendSplits, settings.notificationPreferences],
+    [
+      planQuery.data,
+      transactions,
+      friendSplits,
+      friendSettlements,
+      outings,
+      settings.notificationPreferences,
+    ],
   );
 
   const alerts = useMemo(

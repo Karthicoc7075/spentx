@@ -291,7 +291,7 @@ export function TransactionDetailPanel({
               </span>
               <Badge variant="outline">{purposeLabel}</Badge>
               {isInvestment ? (
-                <Badge className="border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                <Badge variant="default">
                   Investment
                 </Badge>
               ) : null}
@@ -316,14 +316,14 @@ export function TransactionDetailPanel({
                   <ExternalLink className="size-3.5" />
                 </span>
               </Link>
-              {!isReadOnlyViewer && onUnlinkOuting && canUnlink ? (
+              {!isReadOnlyViewer && onUnlinkOuting ? (
                 <Button
-                  className="h-8 w-full text-xs"
+                  className="h-8 w-full text-xs cursor-pointer"
                   type="button"
                   variant="outline"
                   onClick={() => setUnlinkDialogOpen(true)}
                 >
-                  Unlink
+                  Unlink from outing
                 </Button>
               ) : null}
             </div>

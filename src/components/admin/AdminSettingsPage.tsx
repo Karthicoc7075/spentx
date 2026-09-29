@@ -64,7 +64,7 @@ export function AdminSettingsPage() {
       default_monthly_budget: String(row.default_monthly_budget ?? 0),
       max_category_limit: String(row.max_category_limit ?? 50),
       max_purposes_limit: String(row.max_purposes_limit ?? 10),
-      max_accounts_limit: String(row.max_accounts_limit ?? 10),
+      max_accounts_limit: String(row.max_accounts_limit ?? 8),
       max_contributors_limit: String(row.max_contributors_limit ?? 10),
       app_version: String(row.app_version ?? "1.0.0"),
       maintenance_mode: Boolean(row.maintenance_mode),
@@ -85,7 +85,7 @@ export function AdminSettingsPage() {
           default_monthly_budget: Number(form.default_monthly_budget) || 0,
           max_category_limit: Number(form.max_category_limit) || 50,
           max_purposes_limit: Number(form.max_purposes_limit) || 10,
-          max_accounts_limit: Number(form.max_accounts_limit) || 10,
+          max_accounts_limit: Number(form.max_accounts_limit) || 8,
           max_contributors_limit: Number(form.max_contributors_limit) || 10,
           app_version: form.app_version.trim() || "1.0.0",
           maintenance_mode: form.maintenance_mode,
@@ -94,6 +94,7 @@ export function AdminSettingsPage() {
       if (error) throw new Error(error.message);
       queryClient.invalidateQueries({ queryKey: ["admin-global-settings-raw"] });
       queryClient.invalidateQueries({ queryKey: ["admin-app-config"] });
+      queryClient.invalidateQueries({ queryKey: ["app-config"] });
       queryClient.invalidateQueries({ queryKey: ["app-config-shell"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.globalSettings() });
       notify({ title: "Global settings saved", description: "Changes apply to all users." });

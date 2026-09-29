@@ -6,7 +6,6 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Minus,
-  Sigma,
   Activity,
   Users,
 } from "lucide-react";
@@ -54,7 +53,6 @@ export function TransactionSummaryStrip({
     categories,
     periodIncomeOnly: true,
   });
-  const netPrefix = summary.net > 0 ? "+" : summary.net < 0 ? "" : "";
 
   // Green when positive, red when negative, neutral when exactly zero — which
   // also covers "no previous month data" (nothing before the selected period
@@ -63,16 +61,6 @@ export function TransactionSummaryStrip({
   const isCarryPositive = carryForward > 0;
   const isCarryNegative = carryForward < 0;
   const carryPrefix = isCarryPositive ? "+" : "";
-
-  const rawTxs = ledgerTransactions ?? transactions;
-  const totalReturns = rawTxs.reduce((sum, tx) => {
-    if (tx.type === "expense") return sum;
-    const cat = (tx.category ?? "").trim().toLowerCase();
-    if (cat === "friend returns") {
-      return sum + Number(tx.totalAmount ?? tx.amount ?? 0);
-    }
-    return sum;
-  }, 0);
 
   const items: Array<{
     label: string;
@@ -95,23 +83,19 @@ export function TransactionSummaryStrip({
     },
     {
       label: "Total Expense",
-      value: formatCurrency(summary.totalExpense, privateMode),
+      value: formatCurrency(summary.grossExpense, privateMode),
       tone: "text-rose-600 dark:text-rose-400",
       icon: ArrowDownCircle,
       iconRing: "ring-rose-500/20 text-rose-600",
+      hint: "before reimbursements",
     },
     {
-      label: "Net",
-      value: `${netPrefix}${formatCurrency(summary.net, privateMode)}`,
-      tone:
-        summary.net >= 0
-          ? "text-emerald-600 dark:text-emerald-400"
-          : "text-rose-600 dark:text-rose-400",
-      icon: Sigma,
-      iconRing:
-        summary.net >= 0
-          ? "ring-emerald-500/20 text-emerald-600"
-          : "ring-rose-500/20 text-rose-600",
+      label: "Reimbursements",
+      value: `+${formatCurrency(summary.totalReimbursements, privateMode)}`,
+      tone: "text-emerald-600 dark:text-emerald-400",
+      icon: Users,
+      iconRing: "ring-emerald-500/20 text-emerald-600",
+      hint: "friends returned",
     },
     {
       label: "Count",
@@ -142,39 +126,26 @@ export function TransactionSummaryStrip({
     },
   ];
 
-  // Already counted in Total Income above — called out separately so it's
-  // clear where the gap between Income/Expense and Net Worth movement comes
-  // from (a friend paying you back isn't newly-earned money).
-  if (totalReturns > 0) {
-    items.push({
-      label: "Friend Returns",
-      value: `+${formatCurrency(totalReturns, privateMode)}`,
-      tone: "text-emerald-600 dark:text-emerald-400",
-      icon: Users,
-      iconRing: "ring-emerald-500/20 text-emerald-600",
-    });
-  }
-
   return (
     <div
       className={cn(
-        "sx-surface group relative grid gap-4 overflow-hidden p-5 sm:grid-cols-2 lg:grid-cols-5",
+        "sx-surface group relative grid gap-4 overflow-hidden p-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5",
         className,
       )}
     >
       {items.map((item) => (
-        <div key={item.label} className="flex flex-col justify-between rounded-2xl bg-background/30 p-4 ring-1 ring-border/40 transition-colors hover:bg-background/50">
+        <div key={item.label} className="flex flex-col justify-between rounded-2xl bg-muted/30 p-4 ring-1 ring-border/40 transition-colors hover:bg-muted/50">
           <div className="flex items-center gap-2">
             <div className={cn("flex size-6 items-center justify-center rounded-full ring-1", item.iconRing)}>
               <item.icon className="size-3" />
             </div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{item.label}</p>
+            <p className="text-xs font-medium text-muted-foreground">{item.label}</p>
           </div>
-          <p className={cn("mt-4 font-mono text-2xl font-bold tracking-tight", item.tone)}>
+          <p className={cn("mt-3 font-sans text-2xl font-bold tracking-tight tabular-nums", item.tone)}>
             {item.value}
           </p>
           {item.hint ? (
-            <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+            <p className="mt-1 text-[11px] font-medium text-muted-foreground">
               {item.hint}
             </p>
           ) : null}

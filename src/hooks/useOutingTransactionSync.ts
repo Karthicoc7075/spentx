@@ -13,6 +13,7 @@ import {
 import {
   buildOutingExpenseFromTransaction,
   getOutingCandidatesForTransaction,
+  isWithinOutingDates,
 } from "@/lib/outing-sync";
 import {
   buildOutingRollupDraft,
@@ -83,9 +84,31 @@ export function useOutingTransactionSync() {
         if (runningRef.current) return;
         runningRef.current = true;
         try {
+          const today = new Date().toISOString().slice(0, 10);
           const activeAutoOutings = outings.filter(
-            (outing) => outing.status === "active",
+            (outing) =>
+              outing.status === "active" &&
+              outing.isActive !== false &&
+              !outing.isQuickSplit &&
+              isWithinOutingDates(outing, today),
           );
+
+          // Auto-complete any active outings whose end date has passed
+          for (const outing of outings) {
+            if (
+              outing.status === "active" &&
+              outing.isActive !== false &&
+              !outing.isQuickSplit &&
+              outing.startDate
+            ) {
+              const end = outing.endDate
+                ? outing.endDate.slice(0, 10)
+                : outing.startDate.slice(0, 10);
+              if (end && today > end) {
+                void saveOuting(user.id, { ...outing, status: "completed" }).catch(() => {});
+              }
+            }
+          }
 
           // Always re-fetch expenses so we never recompute from a stale cache
           // after a mobile edit lands in Postgres.

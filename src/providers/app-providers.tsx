@@ -1,5 +1,6 @@
 "use client";
 
+import "@/lib/crypto-polyfill";
 import { ReactNode } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppDataProvider } from "@/providers/app-data-provider";
@@ -9,17 +10,21 @@ import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { ToastProvider } from "@/providers/toast-provider";
 
+import { RoleModeProvider } from "@/providers/role-mode-provider";
+
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <ThemeProvider>
       <QueryProvider>
         <SupabaseProvider>
           <ViewerProvider>
-            <AppDataProvider>
-              <TooltipProvider>
-                <ToastProvider>{children}</ToastProvider>
-              </TooltipProvider>
-            </AppDataProvider>
+            <RoleModeProvider>
+              <AppDataProvider>
+                <TooltipProvider>
+                  <ToastProvider>{children}</ToastProvider>
+                </TooltipProvider>
+              </AppDataProvider>
+            </RoleModeProvider>
           </ViewerProvider>
         </SupabaseProvider>
       </QueryProvider>

@@ -191,7 +191,7 @@ export function TransactionTable({
                         />
                         {displayCategory}
                         {isInvestment ? (
-                          <Badge className="border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                          <Badge variant="default">
                             Investment
                           </Badge>
                         ) : null}

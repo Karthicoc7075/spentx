@@ -372,7 +372,7 @@ export function buildDashboardData(
   range: { dateFrom: string; dateTo: string },
   month = getCurrentPlanMonth(),
   unlinkedOutingExpenses: OutingExpense[] = [],
-  options: { includeOutingExpenses?: boolean } = {},
+  options: { includeOutingExpenses?: boolean; periodOutingSpend?: number } = {},
   purposeFilter: { purposeId: string; categories: string[] } = {
     purposeId: "",
     categories: [],
@@ -496,6 +496,8 @@ export function buildDashboardData(
       incomeSparkline: buildSparkline(scopedTransactions, month, "income", accounts),
       expenseSparkline: buildSparkline(scopedTransactions, month, "expense", accounts),
       savingsSparkline: buildSparkline(scopedTransactions, month, "savings", accounts),
+      outingExpense: options.periodOutingSpend ?? 0,
+      previousMonthRollover: previousSavings,
     },
     insights: {
       topCategory: topCategory?.name ?? null,
@@ -518,9 +520,12 @@ export function buildDashboardData(
 }
 
 export function getMonthDateRange(month: string) {
-  const { start, end } = monthRangeFor(month, 0);
+  const { year, monthIndex } = parseDashboardMonth(month);
+  const monthStr = String(monthIndex + 1).padStart(2, "0");
+  const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+  const lastDayStr = String(lastDay).padStart(2, "0");
   return {
-    dateFrom: start.toISOString().slice(0, 10),
-    dateTo: end.toISOString().slice(0, 10),
+    dateFrom: `${year}-${monthStr}-01`,
+    dateTo: `${year}-${monthStr}-${lastDayStr}`,
   };
 }

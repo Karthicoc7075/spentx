@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,9 +15,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useOutingCategories } from "@/hooks/useOutingCategories";
 import { usePurposes } from "@/hooks/usePurposes";
-import { getActivePurposes, getDefaultPersonalPurpose } from "@/lib/purposes";
+import {
+  getActivePurposes,
+  getDefaultPersonalPurpose,
+  PERSONAL_PURPOSE_ID,
+} from "@/lib/purposes";
 import { cn } from "@/lib/utils";
-import type { Friend, Outing, TripMember } from "@/types";
+import type { Friend, Outing, OutingStatus, TripMember } from "@/types";
 
 /** Shared member shape with mobile OutingMember / TripMember. */
 function makeYouMember(): TripMember {
@@ -70,7 +74,7 @@ export function CreateOutingModal({
   const [location, setLocation] = useState(initialValues?.location ?? "");
   const [budget, setBudget] = useState(initialValues?.budget?.toString() ?? "");
   const [startDate, setStartDate] = useState(
-    initialValues?.startDate.slice(0, 10) ?? new Date().toISOString().slice(0, 10),
+    initialValues?.startDate ? initialValues.startDate.slice(0, 10) : new Date().toISOString().slice(0, 10),
   );
   const [endDate, setEndDate] = useState(initialValues?.endDate?.slice(0, 10) ?? "");
   /** Same model as mobile: You + friends (id, name, friendId, upiId, isCurrentUser). */
@@ -84,8 +88,33 @@ export function CreateOutingModal({
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    if (open) {
+      if (initialValues) {
+        setName(initialValues.name ?? initialValues.title ?? "");
+        setCategory(initialValues.category ?? "Trip");
+        setPurposeId(initialValues.purposeId);
+        setLocation(initialValues.location ?? "");
+        setBudget(initialValues.budget != null ? String(initialValues.budget) : "");
+        setStartDate(
+          initialValues.startDate
+            ? initialValues.startDate.slice(0, 10)
+            : new Date().toISOString().slice(0, 10),
+        );
+        setEndDate(initialValues.endDate ? initialValues.endDate.slice(0, 10) : "");
+        setMembers(
+          initialValues.members?.length
+            ? initialValues.members
+            : [makeYouMember()],
+        );
+      } else {
+        reset();
+      }
+    }
+  }, [open, initialValues]);
+
   const categoryOptions = useMemo(() => {
-    const set = new Set<string>(remoteCategories);
+    const set = new Set<string>(["Outings", "Trip", ...remoteCategories]);
     if (initialValues?.category) set.add(initialValues.category);
     if (category) set.add(category);
     // Keep Other last when present.
@@ -98,8 +127,20 @@ export function CreateOutingModal({
     return list;
   }, [remoteCategories, initialValues, category]);
 
-  // Falls back to Personal until the user explicitly picks a different Purpose.
-  const selectedPurposeId = purposeId ?? defaultPurposeId;
+  // Resolves selected purpose reliably against active purposes by UUID, name, or alias.
+  const selectedPurposeId = useMemo(() => {
+    if (purposeId) {
+      const match = activePurposes.find(
+        (p) =>
+          p.id === purposeId ||
+          p.name.toLowerCase() === purposeId.toLowerCase() ||
+          (purposeId === PERSONAL_PURPOSE_ID &&
+            (p.isDefault || p.name.toLowerCase() === "personal")),
+      );
+      if (match) return match.id;
+    }
+    return defaultPurposeId ?? activePurposes[0]?.id;
+  }, [purposeId, activePurposes, defaultPurposeId]);
 
   function reset() {
     setName("");
@@ -177,6 +218,17 @@ export function CreateOutingModal({
 
     setSubmitting(true);
     try {
+      const today = new Date().toISOString().slice(0, 10);
+      const start = startDate ? startDate.slice(0, 10) : today;
+      const end = endDate ? endDate.slice(0, 10) : start;
+      const initialStatus = initialValues?.status;
+      let computedStatus: OutingStatus = "active";
+      if (initialStatus === "archived" || initialStatus === "cancelled" || initialStatus === "completed") {
+        computedStatus = initialStatus;
+      } else if (today > end) {
+        computedStatus = "completed";
+      }
+
       await onSubmit({
         name: name.trim(),
         category,
@@ -184,7 +236,7 @@ export function CreateOutingModal({
         budget: budget ? Number(budget) : undefined,
         startDate,
         endDate: endDate || undefined,
-        status: initialValues?.status ?? "active",
+        status: computedStatus,
         isActive: initialValues?.isActive ?? true,
         purposeId: selectedPurposeId,
         members: roster,

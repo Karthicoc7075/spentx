@@ -3,10 +3,11 @@
 import { useSupabaseAuth } from "@/providers/supabase-provider";
 
 export function useAuthReady() {
-  const { user, isConfigured, isLoading: authLoading } = useSupabaseAuth();
+  const { user, authUser, isConfigured, isLoading: authLoading } = useSupabaseAuth();
 
   return {
     user,
+    authUser,
     isConfigured,
     isReady: !isConfigured || !authLoading,
     authLoading,

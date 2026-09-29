@@ -1,6 +1,16 @@
 "use client";
 
-import { CreditCard, IndianRupee, Pencil, PiggyBank, Sparkles, Trash2, TrendingUp, Wallet } from "lucide-react";
+import {
+  Copy,
+  CreditCard,
+  IndianRupee,
+  Pencil,
+  PiggyBank,
+  Sparkles,
+  Trash2,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AddCategoryModal } from "@/components/plan/AddCategoryModal";
 import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
@@ -20,23 +30,24 @@ import {
   useAllMonthlyPlanActualsQuery,
   useAllMonthlyPlansQuery,
 } from "@/hooks/useMonthlyPlanQuery";
+import { useOutings } from "@/hooks/useOutings";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
 import {
   formatPlanMonth,
   getPieChartData,
-  getPlanDisplayTitle,
 } from "@/lib/plan";
 import type { MonthlyPlanActuals } from "@/lib/supabase-data";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
-import type { MonthlyPlan } from "@/types";
+import type { MonthlyPlan, PlanAllocation } from "@/types";
 
 export function PlanPage() {
   const { notify } = useToast();
   const plan = useMonthlyPlan();
   const { purposes } = usePurposes();
   const { transactions } = useTransactions();
+  const { outings } = useOutings();
   const dailySafeSpending = useDailySafeSpending();
   const allPlansQuery = useAllMonthlyPlansQuery();
   const allActualsQuery = useAllMonthlyPlanActualsQuery();
@@ -44,10 +55,6 @@ export function PlanPage() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const sheetOpen = isCreating || plan.isEditing;
-
-  useEffect(() => {
-    setIsCreating(false);
-  }, [plan.month, plan.purposeId]);
 
   const pieData = useMemo(
     () => getPieChartData(plan.allocations),
@@ -72,15 +79,15 @@ export function PlanPage() {
   function handleCancelSheet() {
     if (plan.isEditing) {
       plan.cancelEditing();
-    } else {
-      setIsCreating(false);
     }
+    setIsCreating(false);
   }
 
   async function handleSetAndSavePlan() {
     try {
       await plan.persistPlan();
       setIsCreating(false);
+      plan.cancelEditing();
       notify({
         title: plan.hasSavedPlan ? "Plan updated" : "Plan saved",
         description: `Your plan for ${formatPlanMonth(plan.month)} has been saved.`,
@@ -106,15 +113,45 @@ export function PlanPage() {
   }
 
   async function handleQuickAdjust(id: string, delta: number) {
-    const current = plan.allocations.find((a) => a.id === id);
-    if (!current) return;
-    const newAmount = Math.max(0, current.plannedAmount + delta);
-    plan.updateAllocation(id, newAmount);
+    const isOutingCat = (name: string) =>
+      name.toLowerCase() === "outings" ||
+      name.toLowerCase() === "outing" ||
+      name.toLowerCase() === "cat-exp-outings" ||
+      name.toLowerCase().includes("outing");
+
+    let current = plan.allocations.find((a) => a.id === id);
+    if (!current && id.startsWith("unbudgeted-")) {
+      const categoryName = id.replace("unbudgeted-", "");
+      current = plan.allocations.find((a) =>
+        isOutingCat(categoryName)
+          ? isOutingCat(a.category)
+          : a.category.toLowerCase() === categoryName.toLowerCase(),
+      );
+    }
+    if (!current && isOutingCat(id)) {
+      current = plan.allocations.find((a) => isOutingCat(a.category));
+    }
+
+    const currentPlanned = current?.plannedAmount ?? 0;
+    const newAmount = Math.max(0, currentPlanned + delta);
+
+    let updatedAllocations: PlanAllocation[] | undefined;
+    if (current) {
+      updatedAllocations = plan.updateAllocation(current.id, newAmount);
+    } else {
+      const categoryName = id.startsWith("unbudgeted-")
+        ? id.replace("unbudgeted-", "")
+        : isOutingCat(id)
+        ? "Outings"
+        : id;
+      updatedAllocations = plan.updateAllocation(id, newAmount, isOutingCat(categoryName) ? "Outings" : categoryName);
+    }
+
     try {
-      await plan.persistPlan();
+      await plan.persistPlan({ allocations: updatedAllocations });
       notify({
         title: "Category limit updated",
-        description: `${current.category} target limit set to ${formatCurrency(newAmount)}.`,
+        description: `Target limit set to ${formatCurrency(newAmount)}.`,
       });
     } catch {
       notify({
@@ -126,11 +163,15 @@ export function PlanPage() {
   }
 
   function handleSelectSavedPlan(savedPlan: MonthlyPlan) {
-    if (savedPlan.month !== plan.month) plan.setMonth(savedPlan.month);
-    if ((savedPlan.purposeId ?? "") !== plan.purposeId) {
-      plan.setPurposeId(savedPlan.purposeId ?? "");
-    }
-    plan.startEditing();
+    plan.loadAndEditPlan(savedPlan);
+  }
+
+  function handleCopyPlanToCurrent(sourcePlan: MonthlyPlan) {
+    plan.adoptPlanAsTemplate(sourcePlan);
+    notify({
+      title: "Plan Copied to " + formatPlanMonth(plan.month),
+      description: `Imported budget limits from ${formatPlanMonth(sourcePlan.month)}. Review and save your plan.`,
+    });
   }
 
   async function handleDeletePlan() {
@@ -154,6 +195,16 @@ export function PlanPage() {
     return Object.values(plan.categorySpentActuals).reduce((a, b) => a + b, 0);
   }, [plan.categorySpentActuals]);
 
+  const projectedMonthSpend = useMemo(() => {
+    if (!plan.month) return totalSpentSoFar;
+    const [y, m] = plan.month.split("-").map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const today = new Date();
+    const isCurrent = today.getFullYear() === y && today.getMonth() + 1 === m;
+    const day = isCurrent ? Math.max(1, today.getDate()) : daysInMonth;
+    return Math.round((totalSpentSoFar / day) * daysInMonth);
+  }, [plan.month, totalSpentSoFar]);
+
   const totalRemainingBudget = Math.max(0, plan.totalPlanned - totalSpentSoFar);
   const spentPercentage = plan.totalPlanned > 0 ? Math.min(100, Math.round((totalSpentSoFar / plan.totalPlanned) * 100)) : 0;
   const remainingPercentage = Math.max(0, 100 - spentPercentage);
@@ -171,13 +222,23 @@ export function PlanPage() {
 
         {plan.hasSavedPlan ? (
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="outline" onClick={handleAutoFillPlan}>
-              <Sparkles className="mr-1.5 size-3.5 text-primary" />
-              AI Auto-Fill
-            </Button>
-            <Button size="sm" onClick={plan.startEditing}>
-              <Pencil className="mr-1.5 size-3.5" />
+            {plan.isActivePlan ? (
+              <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                Active Plan
+              </span>
+            ) : null}
+            <Button onClick={plan.startEditing} className="gap-1.5 font-medium">
+              <Pencil className="size-4" />
               Edit Plan
+            </Button>
+            <Button
+              disabled={plan.isSaving}
+              variant="outline"
+              className="text-destructive hover:bg-destructive/10 hover:text-destructive gap-1.5 font-medium border-destructive/20"
+              onClick={() => setDeleteConfirmOpen(true)}
+            >
+              <Trash2 className="size-4" />
+              {plan.isActivePlan ? "Delete Active Plan" : "Delete Plan"}
             </Button>
           </div>
         ) : null}
@@ -217,9 +278,28 @@ export function PlanPage() {
           <p className="mt-1.5 text-sm text-muted-foreground">
             Set your expected income and allocate spending across categories.
           </p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button onClick={openSetupSheet}>
-              Setup Plan
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            {plan.hasPreviousSavedPlan ? (
+              <Button
+                className="gap-2"
+                onClick={() => {
+                  plan.copyFromPreviousPlan();
+                  setIsCreating(true);
+                  notify({
+                    title: "Copied from " + formatPlanMonth(plan.previousMonth),
+                    description: "Previous limits applied. Review and save your plan.",
+                  });
+                }}
+              >
+                <Copy className="size-4" />
+                Copy {formatPlanMonth(plan.previousMonth)} Plan
+              </Button>
+            ) : null}
+            <Button
+              variant={plan.hasPreviousSavedPlan ? "outline" : "default"}
+              onClick={openSetupSheet}
+            >
+              Setup Custom Plan
             </Button>
             <Button variant="outline" onClick={handleAutoFillPlan}>
               <Sparkles className="mr-1.5 size-4 text-primary" />
@@ -298,7 +378,7 @@ export function PlanPage() {
               </p>
               <div className="mt-2 flex items-center justify-between text-[11px]">
                 <span className="text-muted-foreground">Available Limit</span>
-                <Badge variant="outline" className="text-[10px] font-semibold border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                <Badge variant="success" className="text-[10px] font-semibold">
                   {remainingPercentage}% Left
                 </Badge>
               </div>
@@ -317,11 +397,24 @@ export function PlanPage() {
               <div className="mt-2 flex items-center justify-between text-[11px]">
                 <span className="text-muted-foreground">{dailySafeSpending.daysLeft} days left</span>
                 <Badge
-                  variant={dailySafeSpending.status === "overspent" ? "destructive" : "secondary"}
+                  variant={dailySafeSpending.status === "overspent" ? "destructive" : "success"}
                   className="text-[10px] font-semibold"
                 >
-                  {dailySafeSpending.status === "overspent" ? "Pacing Exceeded" : "🟢 On Track"}
+                  {dailySafeSpending.status === "overspent" ? "Pacing Exceeded" : "On Track"}
                 </Badge>
+              </div>
+              <div className="mt-2.5 flex items-center justify-between border-t border-border/40 pt-2 text-[11px] text-muted-foreground">
+                <span>Month-end pace:</span>
+                <span
+                  className={cn(
+                    "font-mono font-medium",
+                    projectedMonthSpend > plan.totalPlanned
+                      ? "text-rose-600 dark:text-rose-400"
+                      : "text-emerald-600 dark:text-emerald-400",
+                  )}
+                >
+                  {formatCurrency(projectedMonthSpend)}
+                </span>
               </div>
             </div>
           </div>
@@ -331,30 +424,7 @@ export function PlanPage() {
             totalPlanned={plan.totalPlanned}
           />
 
-          <div className="sx-surface flex flex-wrap items-center justify-between gap-2 px-4 py-3">
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              {plan.savedPlan
-                ? getPlanDisplayTitle(plan.savedPlan)
-                : `Plan saved for ${formatPlanMonth(plan.month)}`}
-              .
-              {plan.isActivePlan ? <Badge>Active plan</Badge> : null}
-            </p>
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={plan.startEditing}>
-                <Pencil className="mr-2 size-4" />
-                Edit plan
-              </Button>
-              <Button
-                disabled={plan.isSaving}
-                size="sm"
-                variant="destructive"
-                onClick={() => setDeleteConfirmOpen(true)}
-              >
-                <Trash2 className="mr-2 size-4" />
-                {plan.isActivePlan ? "Delete active plan" : "Delete plan"}
-              </Button>
-            </div>
-          </div>
+
 
           {/* 2-Column Split Desktop Layout */}
           <div className="grid gap-6 lg:grid-cols-12">
@@ -377,6 +447,7 @@ export function PlanPage() {
                 allocations={plan.allocations}
                 categorySpentActuals={plan.categorySpentActuals}
                 transactions={transactions}
+                outings={outings}
                 onQuickAdjust={handleQuickAdjust}
                 onEditClick={plan.startEditing}
               />
@@ -392,6 +463,7 @@ export function PlanPage() {
         plans={allPlansQuery.data ?? []}
         purposes={purposes}
         onSelect={handleSelectSavedPlan}
+        onCopyPlan={handleCopyPlanToCurrent}
       />
 
       <AddCategoryModal
@@ -415,6 +487,15 @@ export function PlanPage() {
         onAddCategory={() => setAddCategoryOpen(true)}
         onSave={handleSetAndSavePlan}
         onCancel={handleCancelSheet}
+        hasPreviousSavedPlan={plan.hasPreviousSavedPlan}
+        previousMonthLabel={formatPlanMonth(plan.previousMonth)}
+        onCopyFromPreviousPlan={() => {
+          plan.copyFromPreviousPlan();
+          notify({
+            title: "Copied from " + formatPlanMonth(plan.previousMonth),
+            description: "Previous limits applied to form.",
+          });
+        }}
       />
       <ConfirmDeleteDialog
         open={deleteConfirmOpen}

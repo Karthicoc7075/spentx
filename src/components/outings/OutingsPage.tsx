@@ -1,19 +1,23 @@
 "use client";
 
-import { ArrowRight, Map as MapIcon, MapPin, Plus } from "lucide-react";
+import { ArrowRight, Compass, Info, Map as MapIcon, MapPin, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { CreateOutingModal } from "@/components/outings/CreateOutingModal";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
 import { useFriends } from "@/hooks/useFriends";
 import { useOutings } from "@/hooks/useOutings";
+import { usePurposes } from "@/hooks/usePurposes";
+import { getDefaultPersonalPurpose } from "@/lib/purposes";
 import {
   filterOutings,
   formatOutingDates,
   getOutingStatusLabel,
+  isOutingActive,
   sortOutings,
   type OutingListFilter,
 } from "@/lib/outing-display";
@@ -24,6 +28,7 @@ import type { Outing, OutingExpense, TripMember } from "@/types";
 const statusTabs: Array<{ value: OutingListFilter; label: string }> = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
+  { value: "planned", label: "Planned" },
   { value: "completed", label: "Completed" },
   { value: "archived", label: "Archived" },
 ];
@@ -39,14 +44,16 @@ export function OutingsPage() {
   const router = useRouter();
   const { notify } = useToast();
   const { outings, isLoading, addOuting } = useOutings();
+  const { purposes } = usePurposes();
   const { friends } = useFriends();
   const { expenses: allExpenses, isLoading: expensesLoading } =
     useAllOutingExpenses();
   const [statusFilter, setStatusFilter] = useState<OutingListFilter>("all");
+  const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
 
   const activeOuting = useMemo(
-    () => outings.find((o) => o.status === "active" && o.isActive !== false),
+    () => outings.find((o) => isOutingActive(o) && o.isActive !== false),
     [outings],
   );
 
@@ -60,13 +67,23 @@ export function OutingsPage() {
     return map;
   }, [allExpenses]);
 
+  const tabCounts = useMemo(() => {
+    return {
+      all: filterOutings(outings, "all", "").length,
+      active: filterOutings(outings, "active", "").length,
+      planned: filterOutings(outings, "planned", "").length,
+      completed: filterOutings(outings, "completed", "").length,
+      archived: filterOutings(outings, "archived", "").length,
+    };
+  }, [outings]);
+
   const filteredOutings = useMemo(() => {
-    const filtered = filterOutings(outings, statusFilter, "");
+    const filtered = filterOutings(outings, statusFilter, search);
     return sortOutings(filtered, (outingId) => {
       const expenses = expensesByOuting.get(outingId) ?? [];
       return expenses.reduce((sum, expense) => sum + expense.amount, 0);
     });
-  }, [expensesByOuting, outings, statusFilter]);
+  }, [expensesByOuting, outings, statusFilter, search]);
 
   function outingTotal(outingId: string) {
     const expenses = expensesByOuting.get(outingId) ?? [];
@@ -134,55 +151,87 @@ export function OutingsPage() {
             Create Outing
           </Button>
           {activeOuting ? (
-            <p className="text-[11px] text-muted-foreground max-w-xs sm:text-right">
-              ℹ️ You already have an active outing. Complete or archive it before creating another outing.
+            <p className="text-xs text-muted-foreground max-w-xs sm:text-right flex items-center gap-1.5">
+              <Info className="size-3.5 shrink-0 text-muted-foreground" />
+              <span>You already have an active outing. Complete it before creating another.</span>
             </p>
           ) : null}
         </div>
       </div>
 
       {activeOuting ? (
-        <div className="rounded-2xl border border-primary/30 bg-primary/5 p-5 space-y-3">
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
-              🏕️ Active Outing
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
+              <Compass className="size-3.5" />
+              Active Outing
             </span>
-            <span className="inline-flex items-center rounded-full bg-primary px-2.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
-              ACTIVE
+            <span className="inline-flex items-center rounded-full bg-primary/10 border border-primary/20 px-2.5 py-0.5 text-xs font-semibold text-primary">
+              Active
             </span>
           </div>
-          <div>
-            <h3 className="text-lg font-bold">{activeOuting.name}</h3>
-            <p className="text-xs text-muted-foreground">{formatOutingDates(activeOuting)}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              className="bg-primary text-primary-foreground font-medium"
-              onClick={() => router.push(`/outings/${activeOuting.id}`)}
-            >
-              Manage Outing
-            </Button>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold">{activeOuting.name}</h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground mt-0.5">
+                {activeOuting.location ? (
+                  <span className="inline-flex items-center gap-1">
+                    <MapPin className="size-3" />
+                    {activeOuting.location}
+                  </span>
+                ) : null}
+                <span>{formatOutingDates(activeOuting)}</span>
+                <span>· {activeOuting.members.length} members</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-[10px] uppercase font-semibold text-muted-foreground">Total Spent</p>
+                <p className="text-base font-bold text-foreground tabular-nums">
+                  {formatCurrency(outingTotal(activeOuting.id))}
+                </p>
+              </div>
+              <Button
+                className="gap-1.5"
+                onClick={() => router.push(`/outings/${activeOuting.id}`)}
+              >
+                Manage Outing
+              </Button>
+            </div>
           </div>
         </div>
       ) : null}
 
-      <div className="inline-flex w-fit items-center rounded-full bg-muted p-1">
-        {statusTabs.map((tab) => (
-          <button
-            key={tab.value}
-            className={cn(
-              "rounded-full px-4 py-1.5 text-xs font-semibold transition-colors",
-              statusFilter === tab.value
-                ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-            type="button"
-            onClick={() => setStatusFilter(tab.value)}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="inline-flex flex-wrap items-center rounded-xl bg-muted/60 p-1 border border-border/40">
+          {statusTabs
+            .filter((tab) => tab.value !== "planned" || tabCounts.planned > 0)
+            .map((tab) => (
+              <button
+                key={tab.value}
+                className={cn(
+                  "rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors",
+                  statusFilter === tab.value
+                    ? "bg-card text-foreground shadow-xs font-semibold"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                type="button"
+                onClick={() => setStatusFilter(tab.value)}
+              >
+                {tab.label} ({tabCounts[tab.value]})
+              </button>
+            ))}
+        </div>
+
+        <div className="relative w-full sm:w-64">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="h-9 rounded-xl pl-9 text-sm"
+            placeholder="Search trips, location, category..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
       </div>
 
       {loading ? (
@@ -196,9 +245,13 @@ export function OutingsPage() {
           <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-accent text-accent-foreground">
             <MapIcon className="size-5" />
           </div>
-          <p className="text-sm font-semibold text-foreground">No outings yet</p>
+          <p className="text-sm font-semibold text-foreground">
+            {search ? "No outings match your search" : "No outings yet"}
+          </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Create your first trip to start splitting expenses.
+            {search
+              ? "Try adjusting your search terms or filter."
+              : "Create your first trip to start splitting expenses."}
           </p>
           <Button
             className="mt-5"
@@ -225,6 +278,13 @@ export function OutingsPage() {
             const total = outingTotal(outing.id);
             const visibleMembers = outing.members.slice(0, 4);
             const extraMembers = outing.members.length - visibleMembers.length;
+            const outingPurpose = outing.purposeId
+              ? purposes.find((p) => p.id === outing.purposeId) ??
+                purposes.find(
+                  (p) => p.name.toLowerCase() === outing.purposeId?.toLowerCase(),
+                ) ??
+                getDefaultPersonalPurpose(purposes)
+              : getDefaultPersonalPurpose(purposes);
 
             return (
               <Link
@@ -234,18 +294,39 @@ export function OutingsPage() {
               >
                 <div>
                   <div className="flex items-center justify-between gap-2">
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize",
-                        outing.status === "active"
-                          ? "bg-accent text-accent-foreground"
-                          : outing.status === "completed"
-                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
-                            : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
-                      )}
-                    >
-                      {getOutingStatusLabel(outing)}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(() => {
+                        const statusLabel = getOutingStatusLabel(outing);
+                        return (
+                          <span
+                            className={cn(
+                              "inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold capitalize",
+                              statusLabel === "Active"
+                                ? "bg-accent text-accent-foreground"
+                                : statusLabel === "Completed"
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+                                  : statusLabel === "Planned"
+                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400"
+                                    : "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400",
+                            )}
+                          >
+                            {statusLabel}
+                          </span>
+                        );
+                      })()}
+                      {outingPurpose ? (
+                        <span
+                          className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium"
+                          style={{
+                            borderColor: outingPurpose.color ? `${outingPurpose.color}40` : undefined,
+                            color: outingPurpose.color,
+                            backgroundColor: outingPurpose.color ? `${outingPurpose.color}15` : undefined,
+                          }}
+                        >
+                          {outingPurpose.name}
+                        </span>
+                      ) : null}
+                    </div>
                     <ArrowRight className="size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                   </div>
 

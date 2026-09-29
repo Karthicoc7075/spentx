@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isAdminEmail } from "@/lib/admin";
 
 export type BootstrapProfileHint = {
   name?: string;
@@ -166,16 +167,21 @@ export async function bootstrapUserWorkspace(
   }
 
   const existingUser = await throwIfError(
-    db.from("users").select("id, default_account_id, name, email, photo_url").eq("id", userId).maybeSingle(),
+    db.from("users").select("id, default_account_id, name, email, photo_url, role").eq("id", userId).maybeSingle(),
   );
   let createdUser = false;
+
+  const userEmail = (profileHint?.email ?? existingUser?.email ?? "").trim().toLowerCase();
+  const shouldBeAdmin = isAdminEmail(userEmail);
+  const expectedRole = shouldBeAdmin ? "admin" : "user";
 
   if (!existingUser) {
     createdUser = true;
     const userRow = {
       id: userId,
-      name: profileHint?.name ?? "SpentX User",
+      name: profileHint?.name ?? (shouldBeAdmin ? "Administrator" : "SpentX User"),
       email: profileHint?.email ?? "",
+      role: expectedRole,
       photo_url: profileHint?.photoURL ?? null,
       currency: "INR",
       timezone: "Asia/Kolkata",
@@ -191,18 +197,20 @@ export async function bootstrapUserWorkspace(
     if (createdUser) {
       await writeActivityLog(db, userId, "user_registered", "User Registered", "users", userId);
     }
-  } else if (profileHint?.name || profileHint?.email || profileHint?.photoURL) {
-    // Only PATCH when a field actually changed — auth re-entry always passed
-    // name/email and used to issue a 204 update on every page load.
-    const patch: Record<string, string> = {};
-    if (profileHint.name && profileHint.name !== existingUser.name) {
+  } else {
+    // Check if role, name, email, or photoURL needs updating
+    const patch: Record<string, unknown> = {};
+    if (existingUser.role !== expectedRole) {
+      patch.role = expectedRole;
+    }
+    if (profileHint?.name && profileHint.name !== existingUser.name) {
       patch.name = profileHint.name;
     }
-    if (profileHint.email && profileHint.email !== existingUser.email) {
+    if (profileHint?.email && profileHint.email !== existingUser.email) {
       patch.email = profileHint.email;
     }
     if (
-      profileHint.photoURL &&
+      profileHint?.photoURL &&
       profileHint.photoURL !== (existingUser.photo_url as string | null)
     ) {
       patch.photo_url = profileHint.photoURL;

@@ -79,7 +79,7 @@ export function settlementMembers(
 /** Settlement status copy for a reference after `paid` has been applied. */
 export function settlementStatus(outstanding: number, paid: number) {
   const remaining = Math.max(0, outstanding - paid);
-  if (remaining < 1) return { label: "Paid", remaining: 0, isFull: true };
+  if (remaining < 0.01) return { label: "Paid", remaining: 0, isFull: true };
   return { label: "Partially Paid", remaining, isFull: false };
 }
 

@@ -219,11 +219,12 @@ export const defaultCategories: Category[] = [
   { id: "cat-exp-8", name: "Shopping", type: "expense", color: "#ec4899", isDefault: true },
   { id: "cat-exp-9", name: "Education", type: "expense", color: "#06b6d4", isDefault: true },
   { id: "cat-exp-10", name: "Travel", type: "expense", color: "#14b8a6", isDefault: true },
-  { id: "cat-exp-11", name: "Bills & EMI", type: "expense", color: "#64748b", isDefault: true },
-  { id: "cat-exp-12", name: "Personal Care", type: "expense", color: "#f43f5e", isDefault: true },
-  { id: "cat-exp-13", name: "Gifts & Donations", type: "expense", color: "#f59e0b", isDefault: true },
-  { id: "cat-exp-14", name: "Miscellaneous", type: "expense", color: "#94a3b8", isDefault: true },
-  { id: "cat-exp-15", name: "Investment", type: "expense", color: "#6366f1", isDefault: true, isInvestment: true },
+  { id: "cat-exp-11", name: "Outings", type: "expense", color: "#0ea5e9", icon: "compass", isDefault: true },
+  { id: "cat-exp-12", name: "Bills & EMI", type: "expense", color: "#64748b", isDefault: true },
+  { id: "cat-exp-13", name: "Personal Care", type: "expense", color: "#f43f5e", isDefault: true },
+  { id: "cat-exp-14", name: "Gifts & Donations", type: "expense", color: "#f59e0b", isDefault: true },
+  { id: "cat-exp-15", name: "Miscellaneous", type: "expense", color: "#94a3b8", isDefault: true },
+  { id: "cat-exp-16", name: "Investment", type: "expense", color: "#6366f1", isDefault: true, isInvestment: true },
 ];
 
 export const defaultPurposes: Purpose[] = [
@@ -246,15 +247,16 @@ export const defaultPurposes: Purpose[] = [
 ];
 
 export const defaultNotificationPreferences: NotificationPreferences = {
-  dailySummary: true,
+  dailySummary: false,
   weeklySummary: true,
-  monthlySummary: true,
+  monthlySummary: false,
   salaryAlerts: true,
   budgetAlerts: true,
   dailyLimitAlerts: true,
   burnRateAlerts: true,
   settlementReminders: true,
-  snapshotReminders: true,
+  snapshotReminders: false,
+  outingAlerts: true,
 };
 
 export const defaultUserSettings: UserSettings = {
@@ -277,7 +279,7 @@ export const defaultAppConfig: AppConfig = {
   maintenanceMode: false,
   defaultMonthlyBudget: 30000,
   maxPurposesLimit: 5,
-  maxAccountsLimit: 10,
+  maxAccountsLimit: 8,
 };
 
 export const mockFriends: Friend[] = [

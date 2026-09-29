@@ -50,9 +50,9 @@ type TransactionBadge = {
 };
 
 const badgePurple =
-  "bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-400";
+  "bg-primary/10 text-primary border border-primary/20";
 const badgeGreen =
-  "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400";
+  "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20";
 
 /**
  * Badge for the special transaction types only. Normal transactions are the
@@ -200,39 +200,33 @@ export function TransactionsLedgerTable({
                       )}
                     </div>
                     <div className="min-w-0">
-                      <span className="block font-semibold tracking-tight">
-                        {displayTitle.primary}
-                      </span>
-                      {/* Normal transactions are the default and get no badge. */}
-                      {badge || displayTitle.itemsLabel ? (
-                        <span className="mt-0.5 flex flex-wrap items-center gap-1">
-                          {badge ? (
-                            <span
-                              className={cn(
-                                "inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                                badge.className,
-                              )}
-                            >
-                              {badge.label}
-                            </span>
-                          ) : null}
-                          {displayTitle.itemsLabel ? (
-                            <span className="inline-flex items-center whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-                              {displayTitle.itemsLabel}
-                            </span>
-                          ) : null}
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold tracking-tight">
+                          {displayTitle.primary}
                         </span>
-                      ) : null}
+                        {/* Normal transactions are the default and get no badge. */}
+                        {badge ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                              badge.className,
+                            )}
+                          >
+                            {badge.label}
+                          </span>
+                        ) : null}
+                        {displayTitle.itemsLabel ? (
+                          <span className="inline-flex items-center whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            {displayTitle.itemsLabel}
+                          </span>
+                        ) : null}
+                      </div>
                       {isPartialMatch && matchedLabels.length > 0 ? (
                         <p className="mt-0.5 text-[11px] font-medium text-muted-foreground">
                           Matched: {matchedLabels.join(" · ")}
                         </p>
                       ) : null}
-                      {isOutingRollup ? (
-                        <p className="text-[11px] font-medium text-primary">
-                          Outing total · tap to open
-                        </p>
-                      ) : isCash ? (
+                      {isCash ? (
                         <p className="text-[11px] font-medium text-muted-foreground">
                           Cash
                         </p>

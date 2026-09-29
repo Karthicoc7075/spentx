@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { invalidateSessionCache } from "@/lib/server/impersonation";
+import { isAdminUser } from "@/lib/admin";
 
 // Tab-close cleanup path for impersonation sessions (navigator.sendBeacon
 // can't call an RPC with auth headers, but it does send cookies). The
@@ -28,11 +29,14 @@ export async function POST(request: Request) {
 
     const { data: profile } = await supabase
       .from("users")
-      .select("role")
+      .select("role, email")
       .eq("id", user.id)
       .maybeSingle();
-    if (profile?.role !== "admin") {
-      return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+    if (!isAdminUser(user, profile)) {
+      return NextResponse.json(
+        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
+        { status: 403 },
+      );
     }
 
     const admin = createAdminClient();

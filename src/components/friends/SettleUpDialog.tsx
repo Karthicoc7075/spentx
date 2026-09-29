@@ -47,9 +47,9 @@ function todayIso() {
 
 /**
  * Settle up against one outing or one friend split. Writes the settlement
- * row to whichever table owns the reference, then a normal ledger
- * transaction — expense when you send money, income when you receive it —
- * counted like any other transaction (no special Settlements category).
+ * row to whichever table owns the reference, then a traceable ledger
+ * transaction. A received repayment is stored as a bank inflow but classified
+ * as a reimbursement by the shared accounting helpers, never as earnings.
  */
 export function SettleUpDialog({
   open,
@@ -68,7 +68,12 @@ export function SettleUpDialog({
 
   const [mode, setMode] = useState<"full" | "custom">("full");
   const [customAmount, setCustomAmount] = useState(String(target.outstanding));
-  const [accountName, setAccountName] = useState(accounts[0]?.name ?? "Cash");
+  const activeAccounts = accounts.filter((a) => a.isActive !== false);
+  const defaultAccountName = activeAccounts[0]?.name ?? accounts[0]?.name ?? "Cash";
+  const [accountName, setAccountName] = useState("");
+  const effectiveAccount = accountName && accounts.some((a) => a.name === accountName)
+    ? accountName
+    : defaultAccountName;
   const [date, setDate] = useState(todayIso());
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
@@ -119,20 +124,16 @@ export function SettleUpDialog({
         });
       }
 
-      // Money in when they repay you, money out when you repay them. Shown
-      // as a normal transaction — counted in Income/Expense like any other
-      // row, just under its own category so it can still be called out
-      // separately (TransactionSummaryStrip) instead of being lumped into
-      // "Other Income". Only the receive direction gets that category —
-      // paying a friend back isn't a "friend return".
+      // Money in when they repay you, money out when you repay them. Both
+      // remain visible in the ledger, but neither is personal income/expense.
       await addTransaction({
         type: isReceive ? "income" : "expense",
         amount,
         totalAmount: amount,
         merchant: settlementMerchant(target.referenceName, target.friendName),
-        category: isReceive ? "Friend Returns" : "Miscellaneous",
-        account: accountName,
-        accountName,
+        category: isReceive ? "Friend Returns" : "Settlements",
+        account: effectiveAccount,
+        accountName: effectiveAccount,
         purpose: PERSONAL_PURPOSE_ID,
         purposeId: PERSONAL_PURPOSE_ID,
         source: "manual",
@@ -148,7 +149,9 @@ export function SettleUpDialog({
         // Keeps the ledger row traceable back to the trip it settles.
         outingId: target.kind === "outing" ? target.referenceId : null,
         tags: [
+          "settlement",
           `settlement:${target.direction}`,
+          ...(isReceive ? ["reimbursement"] : []),
           `friend:${target.friendId}`,
           `${target.kind}:${target.referenceId}`,
           status.isFull ? "settlement:full" : "settlement:partial",
@@ -253,16 +256,20 @@ export function SettleUpDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="grid gap-1.5">
               <Label>Account</Label>
-              <Select value={accountName} onValueChange={setAccountName}>
+              <Select value={effectiveAccount} onValueChange={setAccountName}>
                 <SelectTrigger>
                   <SelectValue placeholder="Account" />
                 </SelectTrigger>
                 <SelectContent>
-                  {accounts.map((account) => (
-                    <SelectItem key={account.id} value={account.name}>
-                      {account.name}
-                    </SelectItem>
-                  ))}
+                  {accounts.length === 0 ? (
+                    <SelectItem value="Cash">Cash</SelectItem>
+                  ) : (
+                    accounts.map((account) => (
+                      <SelectItem key={account.id} value={account.name}>
+                        {account.name}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>

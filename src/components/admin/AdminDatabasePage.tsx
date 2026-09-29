@@ -27,12 +27,15 @@ import {
   User,
   Users,
   X,
+  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminBackupsPage } from "@/components/admin/AdminBackupsPage";
+import { AdminAddRowModal } from "@/components/admin/AdminAddRowModal";
 import { Button } from "@/components/ui/button";
+
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -380,6 +383,7 @@ export function AdminDatabasePage() {
   const [updateConfirmText, setUpdateConfirmText] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
   const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [addRowOpen, setAddRowOpen] = useState(false);
   // One view_table log per table-open in this session — the log records the
   // intent to browse a table, not every pagination click within it.
   const loggedTablesRef = useRef<Set<string>>(new Set());
@@ -689,8 +693,18 @@ export function AdminDatabasePage() {
                   <Lock className="size-3" /> read-only (append-only or protected)
                 </span>
               ) : null}
+              {selectedMeta?.deletable ? (
+                <Button
+                  className="ml-auto h-8 text-xs gap-1.5"
+                  size="sm"
+                  onClick={() => setAddRowOpen(true)}
+                >
+                  <Plus className="size-3.5" />
+                  <span>Add Record</span>
+                </Button>
+              ) : null}
               <Button
-                className="ml-auto h-8 text-xs"
+                className={cn("h-8 text-xs", !selectedMeta?.deletable && "ml-auto")}
                 size="sm"
                 variant="outline"
                 onClick={() => setOrderDir((d) => (d === "desc" ? "asc" : "desc"))}
@@ -1102,6 +1116,19 @@ export function AdminDatabasePage() {
         open={resetModalOpen}
         onOpenChange={setResetModalOpen}
       />
+
+      {selectedTable ? (
+        <AdminAddRowModal
+          open={addRowOpen}
+          onOpenChange={setAddRowOpen}
+          table={selectedTable}
+          sampleRow={rows?.[0] ?? null}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["admin-table-rows"] });
+            queryClient.invalidateQueries({ queryKey: ["admin-table-count"] });
+          }}
+        />
+      ) : null}
         </div>
       )}
     </div>

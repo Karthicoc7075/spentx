@@ -148,8 +148,14 @@ export function computeCategorySpentActuals(
       transaction.type === "expense" &&
       !isTransferTransaction(transaction)
     ) {
-      map[transaction.category] =
-        (map[transaction.category] || 0) + transaction.amount;
+      const isOuting =
+        transaction.category === "Outings" ||
+        transaction.category === "Outing" ||
+        Boolean(transaction.outingId) ||
+        (Array.isArray(transaction.tags) && transaction.tags.includes("outing"));
+
+      const categoryKey = isOuting ? "Outings" : transaction.category;
+      map[categoryKey] = (map[categoryKey] || 0) + transaction.amount;
     }
   });
   return map;

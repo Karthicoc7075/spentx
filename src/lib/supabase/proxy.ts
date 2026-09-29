@@ -2,7 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabasePublishableKey, getSupabaseUrl } from "@/lib/supabase/env";
 
-/** Keep auth cookies for 1 year; logout is the only intentional clear. */
+// Floor for auth cookie lifetime; logout is the only intentional clear.
+// @supabase/ssr normally supplies its own 400-day maxAge, so this is the
+// fallback for a cookie that arrives without one — never a session timer.
+// See src/lib/supabase/client.ts for what really bounds a session.
 const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 365;
 
 export async function updateSession(request: NextRequest) {

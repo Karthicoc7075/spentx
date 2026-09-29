@@ -4,14 +4,18 @@ import { useMemo, useState } from "react";
 import { QuickAccountTransfer } from "@/components/wealth/QuickAccountTransfer";
 import { WealthNetWorthIndicator } from "@/components/wealth/WealthNetWorthIndicator";
 import { WealthSegmentCards } from "@/components/wealth/WealthSegmentCards";
-import { DailySnapshotCard } from "@/components/wealth/DailySnapshotCard";
-import { useDailySnapshot } from "@/hooks/useDailySnapshot";
+import { WealthAccountsList } from "@/components/wealth/WealthAccountsList";
+import { DailySnapshotHistoryModal } from "@/components/wealth/DailySnapshotHistoryModal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
+import { CalendarClock, Plus } from "lucide-react";
+import { NewAccountModal } from "@/components/wealth/NewAccountModal";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
 import {
+  computeDailyFinancialSnapshots,
   computeNetWorthBreakdown,
   computeNetWorthByPurpose,
 } from "@/lib/wealth";
@@ -33,10 +37,18 @@ export function WealthPage() {
   const { outings } = useOutings();
   const { accounts, isLoading: accountsLoading } = useAccounts();
 
-  const [filter, setFilter] = useState<WealthFilter>({ type: "all" });
+  // Default active segment is "bank" as requested
+  const [filter, setFilter] = useState<WealthFilter>({
+    type: "segment",
+    segment: "bank",
+  });
   const [netWorthView, setNetWorthView] = useState<"combined" | "by-purpose">(
     "combined",
   );
+  const [newAccountOpen, setNewAccountOpen] = useState(false);
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  const [transferFromAccount, setTransferFromAccount] = useState<string | undefined>();
 
   const transactions = useMemo(
     () => buildTransactionsListRows(rawTransactions, outingExpenses, outings),
@@ -69,24 +81,28 @@ export function WealthPage() {
     [activeAccounts, transactions, unlinkedOutingExpenses],
   );
 
-  const purposeBreakdown = useMemo(
-    () =>
-      computeNetWorthByPurpose(
-        activeAccounts,
-        transactions,
-        purposes,
-        unlinkedOutingExpenses,
-      ),
-    [activeAccounts, transactions, purposes, unlinkedOutingExpenses],
-  );
+  // Lazily compute purpose breakdown only when user switches to "by-purpose" view
+  const purposeBreakdown = useMemo(() => {
+    if (netWorthView !== "by-purpose") return [];
+    return computeNetWorthByPurpose(
+      activeAccounts,
+      transactions,
+      purposes,
+      unlinkedOutingExpenses,
+    );
+  }, [netWorthView, activeAccounts, transactions, purposes, unlinkedOutingExpenses]);
 
   const isLoading = accountsLoading && accounts.length === 0;
 
-  const dailySnapshot = useDailySnapshot({
-    accounts: activeAccounts,
-    transactions,
-    unlinkedOutingExpenses,
-  });
+  // Lazily compute historical daily snapshots only when the user opens the modal
+  const dailySnapshots = useMemo(() => {
+    if (!snapshotModalOpen) return [];
+    return computeDailyFinancialSnapshots(
+      activeAccounts,
+      transactions,
+      unlinkedOutingExpenses,
+    );
+  }, [snapshotModalOpen, activeAccounts, transactions, unlinkedOutingExpenses]);
 
   async function handleTransfer({
     fromAccount,
@@ -149,16 +165,39 @@ export function WealthPage() {
   }
 
   return (
-    <div className="grid gap-6 pb-12">
+    <div className="grid gap-5 sm:gap-6 pb-12">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal">Wealth</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your available money across bank accounts and cash.
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-normal">Wealth</h1>
+          <p className="mt-0.5 sm:mt-1 text-xs sm:text-sm text-muted-foreground">
+            Your available money across bank accounts, wallets, cash, and investments.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <QuickAccountTransfer accounts={accounts} onTransfer={handleTransfer} />
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full lg:w-auto">
+          <Button
+            onClick={() => setNewAccountOpen(true)}
+            className="gap-2 font-medium"
+          >
+            <Plus className="size-4" />
+            New Account
+          </Button>
+          <Button
+            onClick={() => setSnapshotModalOpen(true)}
+            variant="outline"
+            className="gap-2 font-medium"
+          >
+            <CalendarClock className="size-4 text-primary" />
+            Snapshot History
+          </Button>
+          <div className="col-span-2 sm:col-span-1 w-full sm:w-auto">
+            <QuickAccountTransfer
+              accounts={accounts}
+              onTransfer={handleTransfer}
+              open={transferModalOpen}
+              onOpenChange={setTransferModalOpen}
+              defaultFromAccount={transferFromAccount}
+            />
+          </div>
         </div>
       </div>
 
@@ -171,11 +210,12 @@ export function WealthPage() {
       {isLoading ? (
         <div className="space-y-6">
           <Skeleton className="h-36" />
-          <div className="grid gap-3 sm:grid-cols-2">
-            {Array.from({ length: 2 }).map((_, index) => (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
               <Skeleton key={index} className="h-28" />
             ))}
           </div>
+          <Skeleton className="h-64" />
         </div>
       ) : (
         <>
@@ -194,9 +234,34 @@ export function WealthPage() {
             onFilter={setFilter}
           />
 
-          <DailySnapshotCard accounts={activeAccounts} snapshot={dailySnapshot} />
+          {/* All Accounts, Wallets, Cash, and Investments List */}
+          <WealthAccountsList
+            accounts={activeAccounts}
+            transactions={transactions}
+            unlinkedOutingExpenses={unlinkedOutingExpenses}
+            activeFilter={filter}
+            onFilterChange={setFilter}
+            onNewAccount={() => setNewAccountOpen(true)}
+            onTransfer={(accountName) => {
+              setTransferFromAccount(accountName);
+              setTransferModalOpen(true);
+            }}
+          />
         </>
       )}
+
+      <DailySnapshotHistoryModal
+        open={snapshotModalOpen}
+        onOpenChange={setSnapshotModalOpen}
+        dailySnapshots={dailySnapshots}
+        accounts={activeAccounts}
+        onNewAccount={() => setNewAccountOpen(true)}
+      />
+
+      <NewAccountModal
+        open={newAccountOpen}
+        onOpenChange={setNewAccountOpen}
+      />
     </div>
   );
 }

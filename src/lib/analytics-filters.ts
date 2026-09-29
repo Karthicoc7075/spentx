@@ -1,4 +1,4 @@
-import { isSpendingExpense } from "@/lib/investments";
+import { sumPeriodExpense, sumPeriodIncome } from "@/lib/period-totals";
 import { categoryGroups } from "@/lib/analytics-filter-config";
 import {
   computeOutingRollupAmount,
@@ -710,12 +710,8 @@ export function computeAnalyticsFilterSummary(
     if (meta) outingIds.add(meta.outingId);
   }
 
-  const totalIncome = transactions
-    .filter((transaction) => transaction.type === "income")
-    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
-  const totalExpense = transactions
-    .filter((transaction) => isSpendingExpense(transaction))
-    .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
+  const totalIncome = sumPeriodIncome(transactions);
+  const totalExpense = sumPeriodExpense(transactions);
 
   return {
     transactionCount: transactions.length,

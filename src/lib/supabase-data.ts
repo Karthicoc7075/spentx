@@ -20,7 +20,9 @@ import { deriveMonthKey } from "@/lib/data-schema";
 import { getTodayCalendarDate } from "@/lib/date-filters";
 import { buildOpeningBalanceTransaction } from "@/lib/wealth";
 import {
+  getDefaultFamilyPurpose,
   getDefaultPersonalPurpose,
+  isFamilyPurposeName,
   isPersonalPurposeRef,
   PERSONAL_PURPOSE_ID,
 } from "@/lib/purposes";
@@ -143,7 +145,8 @@ function toUserSettings(row: Row | null | undefined): UserSettings {
       row.monthly_safe_spending_alert ??
       defaultUserSettings.monthlySafeSpendingAlert,
     privateMode: row.private_mode ?? defaultUserSettings.privateMode,
-    includeOutingExpenses: row.include_outing_expenses ?? true,
+    includeOutingExpenses:
+      row.include_outing_expenses ?? defaultUserSettings.includeOutingExpenses,
     dashboardKpiCards: row.dashboard_kpi_cards ?? undefined,
   };
 }
@@ -227,6 +230,7 @@ function toPurpose(row: Row): Purpose {
     userId: row.user_id,
     name: row.name,
     color: row.color,
+    icon: row.icon ?? undefined,
     isDefault: row.is_default ?? false,
     canDelete: row.can_delete ?? true,
     isActive: row.is_active ?? true,
@@ -243,6 +247,7 @@ function purposePayload(userId: string | undefined, purpose: Purpose): Row {
     user_id: userId,
     name: purpose.name,
     color: purpose.color ?? "#8b7ff0",
+    icon: purpose.icon,
     is_default: purpose.isDefault ?? false,
     can_delete: purpose.canDelete ?? true,
     is_active: active,
@@ -652,6 +657,7 @@ export async function completeAuthSession(
 ) {
   if (userId) {
     await ensureUserWorkspace(userId, profile).catch(() => null);
+    void fetch("/api/auth/sync-role", { method: "POST" }).catch(() => null);
   }
   const { data, error } = await client().auth.getSession();
   if (error) throw error;
@@ -678,7 +684,11 @@ export async function signUpWithEmail(first: string, second: string, third: stri
 }
 
 export async function signOutUser() {
-  const { error } = await client().auth.signOut();
+  // Local scope: sign out THIS browser, not every device. supabase-js
+  // defaults to "global", which revokes every refresh token the account
+  // holds — so logging out here also killed the user's mobile session and
+  // any other browser, showing up over there as a random automatic logout.
+  const { error } = await client().auth.signOut({ scope: "local" });
   clearUserWorkspaceSessionCache();
   if (error) throw error;
 }
@@ -688,14 +698,18 @@ async function fetchTransactionsRaw(userId: string) {
     return await throwIfError(
       client()
         .from("transactions")
-        .select("*, accounts(name), transaction_splits(*), transaction_items(*)")
+        .select("*, accounts!account_id(name), transaction_splits(*), transaction_items(*)")
         .eq("user_id", userId)
         .eq("is_active", true)
         .order("transaction_date", { ascending: false }),
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (!message.toLowerCase().includes("relationship")) {
+    if (
+      !message.toLowerCase().includes("relationship") &&
+      !message.toLowerCase().includes("embed") &&
+      !message.toLowerCase().includes("more than one")
+    ) {
       throw error;
     }
     return await throwIfError(
@@ -808,15 +822,35 @@ export async function fetchTransactionsPage(
 
 export async function fetchTransaction(userId: string | undefined, transactionId: string) {
   if (!userId || !transactionId) return null;
-  const data = await throwIfError(
-    client()
-      .from("transactions")
-      .select("*, accounts(name), transaction_splits(*), transaction_items(*)")
-      .eq("user_id", userId)
-      .eq("id", transactionId)
-      .maybeSingle(),
-  );
-  return data ? toTransaction(data as Row) : null;
+  try {
+    const data = await throwIfError(
+      client()
+        .from("transactions")
+        .select("*, accounts!account_id(name), transaction_splits(*), transaction_items(*)")
+        .eq("user_id", userId)
+        .eq("id", transactionId)
+        .maybeSingle(),
+    );
+    return data ? toTransaction(data as Row) : null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (
+      message.toLowerCase().includes("relationship") ||
+      message.toLowerCase().includes("embed") ||
+      message.toLowerCase().includes("more than one")
+    ) {
+      const fallback = await throwIfError(
+        client()
+          .from("transactions")
+          .select("*, transaction_splits(*), transaction_items(*)")
+          .eq("user_id", userId)
+          .eq("id", transactionId)
+          .maybeSingle(),
+      );
+      return fallback ? toTransaction(fallback as Row) : null;
+    }
+    throw error;
+  }
 }
 
 async function resolveAccountId(
@@ -855,9 +889,36 @@ async function resolveAccountId(
 }
 
 async function resolvePurposeId(userId: string, purposeId?: string) {
-  if (isUuid(purposeId)) return purposeId!;
   const purposes = await fetchPurposes(userId);
-  const fallback = purposes.find((purpose) => purpose.isDefault) ?? purposes[0];
+  if (purposeId) {
+    if (isUuid(purposeId)) {
+      const byId = purposes.find((p) => p.id === purposeId);
+      if (byId) return byId.id;
+    }
+    const byName = purposes.find(
+      (p) => p.name?.trim().toLowerCase() === purposeId.trim().toLowerCase(),
+    );
+    if (byName) return byName.id;
+
+    if (isFamilyPurposeName(purposeId)) {
+      const family = getDefaultFamilyPurpose(purposes);
+      if (family) return family.id;
+    }
+
+    if (
+      purposeId === PERSONAL_PURPOSE_ID ||
+      purposeId.trim().toLowerCase() === "personal"
+    ) {
+      const personal = getDefaultPersonalPurpose(purposes);
+      if (personal) return personal.id;
+    }
+
+    if (isUuid(purposeId)) return purposeId;
+  }
+  const fallback =
+    getDefaultPersonalPurpose(purposes) ??
+    purposes.find((purpose) => purpose.isDefault) ??
+    purposes[0];
   if (!fallback?.id) {
     throw new Error("Add a purpose in Settings before recording transactions.");
   }
@@ -997,9 +1058,17 @@ export async function addTransaction(
 ) {
   if (!userId) throw new Error("Sign in before adding transactions.");
   const accountId = await resolveAccountId(userId, transaction);
+  let targetPurposeRef = transaction.purposeId ?? transaction.purpose;
+  if (transaction.outingId) {
+    const outings = await fetchOutings(userId);
+    const outing = outings.find((o) => o.id === transaction.outingId);
+    if (outing?.purposeId) {
+      targetPurposeRef = outing.purposeId;
+    }
+  }
   const purposeId = await resolvePurposeId(
     userId,
-    transaction.purposeId ?? transaction.purpose,
+    targetPurposeRef,
   );
   const contributorId = await resolveContributorId(
     userId,
@@ -1027,7 +1096,9 @@ export async function addTransaction(
     providedSplits.length > 1
       ? await Promise.all(
           providedSplits.map(async (item) => ({
-            purposeId: await resolvePurposeId(userId, item.purposeId),
+            purposeId: transaction.outingId
+              ? purposeId
+              : await resolvePurposeId(userId, item.purposeId),
             categoryId: item.categoryId || transaction.category,
             contributorId: item.contributorId ?? contributorId,
             outingId: item.outingId ?? transaction.outingId,
@@ -1080,6 +1151,15 @@ export async function updateTransaction(
 
   if (merged.accountId || merged.account) {
     merged.accountId = await resolveAccountId(userId, merged);
+  }
+
+  if (merged.outingId) {
+    const outings = await fetchOutings(userId);
+    const outing = outings.find((o) => o.id === merged.outingId);
+    if (outing?.purposeId) {
+      merged.purposeId = outing.purposeId;
+      merged.purpose = outing.purposeId;
+    }
   }
 
   if (merged.purposeId || merged.purpose) {
@@ -1155,7 +1235,9 @@ export async function updateTransaction(
           providedSplits.map(async (item) => ({
             transaction_id: transactionId,
             user_id: userId,
-            purpose_id: await resolvePurposeId(userId, item.purposeId),
+            purpose_id: merged.outingId
+              ? merged.purposeId
+              : await resolvePurposeId(userId, item.purposeId),
             category_id: item.categoryId || merged.category,
             contributor_id: item.contributorId ?? contributorId,
             outing_id: isUuid(item.outingId) ? item.outingId : merged.outingId,
@@ -1281,7 +1363,16 @@ export async function fetchPurposes(userId?: string) {
 
 export async function savePurpose(userId: string | undefined, purpose: Purpose) {
   if (!userId) throw new Error("Sign in before saving purposes.");
-  return upsertById("purposes", purposePayload(userId, purpose), toPurpose);
+  try {
+    return await upsertById("purposes", purposePayload(userId, purpose), toPurpose);
+  } catch (err: any) {
+    if (purpose.icon && err?.message && (err.message.includes("column") || err.message.includes("icon"))) {
+      const fallback = { ...purpose };
+      delete fallback.icon;
+      return await upsertById("purposes", purposePayload(userId, fallback), toPurpose);
+    }
+    throw err;
+  }
 }
 
 export async function archivePurpose(userId: string | undefined, purpose: Purpose) {
@@ -2178,24 +2269,54 @@ export async function fetchUserSettings(userId?: string): Promise<UserSettings> 
 
 export async function saveUserSettings(userId: string | undefined, settings: UserSettings) {
   if (!userId) throw new Error("Sign in before saving settings.");
+  const basePayload: Record<string, unknown> = {
+    theme: settings.theme,
+    notifications: settings.notifications,
+    default_account_id: isUuid(settings.defaultAccountId)
+      ? settings.defaultAccountId
+      : null,
+    monthly_safe_spending_alert: settings.monthlySafeSpendingAlert,
+    private_mode: settings.privateMode,
+    include_outing_expenses: settings.includeOutingExpenses ?? false,
+    dashboard_kpi_cards: settings.dashboardKpiCards ?? null,
+  };
+
+  const payloadWithNotificationPrefs = {
+    ...basePayload,
+    notification_preferences: settings.notificationPreferences ?? defaultNotificationPreferences,
+  };
+
+  const { error } = await client()
+    .from("users")
+    .update(payloadWithNotificationPrefs)
+    .eq("id", userId);
+
+  if (error) {
+    // If notification_preferences column does not exist in schema cache, fallback to base payload
+    if (error.code === "PGRST204" || error.message?.includes("notification_preferences")) {
+      await throwIfError(
+        client().from("users").update(basePayload).eq("id", userId)
+      );
+    } else {
+      throw error;
+    }
+  }
+
+  return settings;
+}
+
+export async function updateIncludeOutingExpenses(
+  userId: string | undefined,
+  includeOutingExpenses: boolean,
+) {
+  if (!userId) throw new Error("Sign in before saving settings.");
   await throwIfError(
     client()
       .from("users")
-      .update({
-        theme: settings.theme,
-        notifications: settings.notifications,
-        notification_preferences: settings.notificationPreferences ?? defaultNotificationPreferences,
-        default_account_id: isUuid(settings.defaultAccountId)
-          ? settings.defaultAccountId
-          : null,
-        monthly_safe_spending_alert: settings.monthlySafeSpendingAlert,
-        private_mode: settings.privateMode,
-        include_outing_expenses: settings.includeOutingExpenses ?? false,
-        dashboard_kpi_cards: settings.dashboardKpiCards ?? null,
-      })
+      .update({ include_outing_expenses: includeOutingExpenses })
       .eq("id", userId),
   );
-  return settings;
+  return includeOutingExpenses;
 }
 
 /**
@@ -2228,7 +2349,7 @@ export async function fetchAppConfig(): Promise<AppConfig> {
     maintenanceMode: row.maintenance_mode ?? false,
     defaultMonthlyBudget: Number(row.default_monthly_budget ?? 0),
     maxPurposesLimit: row.max_purposes_limit ?? 10,
-    maxAccountsLimit: row.max_accounts_limit ?? 10,
+    maxAccountsLimit: row.max_accounts_limit ?? 8,
   };
 }
 
@@ -2860,7 +2981,62 @@ export function subscribeToAlerts(
 
 export async function saveOuting(userId: string | undefined, outing: Outing) {
   if (!userId) throw new Error("Sign in before saving outings.");
-  return upsertById("outings", outingPayload(userId, outing), toOuting);
+  const resolvedPurposeId = await resolvePurposeId(userId, outing.purposeId);
+  const outingWithPurpose: Outing = { ...outing, purposeId: resolvedPurposeId };
+  const saved = await upsertById("outings", outingPayload(userId, outingWithPurpose), toOuting);
+
+  // CASCADE PURPOSE UPDATE:
+  // If the outing has a resolved purpose, all transactions and splits linked to this outing
+  // (both directly via outing_id and indirectly via outing_expenses.linked_transaction_id)
+  // must update to this purpose immediately!
+  if (saved.id && resolvedPurposeId) {
+    try {
+      // 1. Direct transactions and splits by outing_id
+      await client()
+        .from("transactions")
+        .update({ purpose_id: resolvedPurposeId })
+        .eq("user_id", userId)
+        .eq("outing_id", saved.id);
+
+      await client()
+        .from("transaction_splits")
+        .update({ purpose_id: resolvedPurposeId })
+        .eq("user_id", userId)
+        .eq("outing_id", saved.id);
+
+      // 2. Indirect transactions linked via outing_expenses
+      const { data: expenses } = await client()
+        .from("outing_expenses")
+        .select("linked_transaction_id")
+        .eq("user_id", userId)
+        .eq("outing_id", saved.id)
+        .not("linked_transaction_id", "is", null);
+
+      if (expenses && expenses.length > 0) {
+        const linkedTxIds = (expenses as Row[])
+          .map((e) => e.linked_transaction_id)
+          .filter((id): id is string => Boolean(id) && isUuid(id));
+
+        if (linkedTxIds.length > 0) {
+          await client()
+            .from("transactions")
+            .update({ purpose_id: resolvedPurposeId })
+            .eq("user_id", userId)
+            .in("id", linkedTxIds);
+
+          await client()
+            .from("transaction_splits")
+            .update({ purpose_id: resolvedPurposeId })
+            .eq("user_id", userId)
+            .in("transaction_id", linkedTxIds);
+        }
+      }
+    } catch (cascadeError) {
+      console.error("Failed to cascade purpose to outing transactions:", cascadeError);
+    }
+  }
+
+  return saved;
 }
 
 /**
@@ -2957,6 +3133,28 @@ export async function saveOutingExpense(userId: string | undefined, expense: Out
       .select("*")
       .single(),
   );
+  if (isUuid(expense.linkedTransactionId) && isUuid(expense.outingId)) {
+    try {
+      const outings = await fetchOutings(userId);
+      const outing = outings.find((o) => o.id === expense.outingId);
+      if (outing?.purposeId) {
+        const resolvedPurposeId = await resolvePurposeId(userId, outing.purposeId);
+        await client()
+          .from("transactions")
+          .update({ purpose_id: resolvedPurposeId, outing_id: expense.outingId })
+          .eq("user_id", userId)
+          .eq("id", expense.linkedTransactionId);
+        await client()
+          .from("transaction_splits")
+          .update({ purpose_id: resolvedPurposeId, outing_id: expense.outingId })
+          .eq("user_id", userId)
+          .eq("transaction_id", expense.linkedTransactionId);
+      }
+    } catch (linkError) {
+      console.error("Failed to sync linked transaction purpose with outing:", linkError);
+    }
+  }
+
   return (await fetchOutingExpenses(userId)).find((item) => item.id === (data as Row).id)!;
 }
 

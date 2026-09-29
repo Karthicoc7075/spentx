@@ -1,6 +1,10 @@
 "use client";
 
-import { isAuthApiError, type User as SupabaseUser } from "@supabase/supabase-js";
+import {
+  isAuthApiError,
+  isAuthSessionMissingError,
+  type User as SupabaseUser,
+} from "@supabase/supabase-js";
 import {
   createContext,
   ReactNode,
@@ -34,6 +38,24 @@ const AuthContext = createContext<AuthContextValue>({
   isLoading: false,
 });
 
+// Only these say "this account/session no longer exists". Everything else an
+// auth call can return — a 401 from an access token that expired while a
+// refresh was already in flight, a 4xx bubbled up through /api/proxy, a
+// rotated-token blip — is transient and must never end a 1-year session.
+const REVOKED_ERROR_CODES = new Set([
+  "user_not_found",
+  "session_not_found",
+  "refresh_token_not_found",
+  "session_expired",
+  "user_banned",
+]);
+
+function isRevocationError(error: unknown): boolean {
+  if (isAuthSessionMissingError(error)) return true;
+  if (!isAuthApiError(error)) return false;
+  return REVOKED_ERROR_CODES.has(error.code ?? "");
+}
+
 function readCachedUser(): User | null {
   if (typeof window === "undefined") return null;
 
@@ -62,6 +84,8 @@ function persistCachedUser(user: User | null) {
 function buildUserFromSupabase(
   supabaseUser: SupabaseUser,
   profileName?: string | null,
+  profileJoinedAt?: string | null,
+  profilePhotoUrl?: string | null,
 ): User {
   return {
     id: supabaseUser.id,
@@ -71,7 +95,12 @@ function buildUserFromSupabase(
       "SpentX User",
     email: supabaseUser.email ?? "",
     photoUrl:
+      profilePhotoUrl ??
       (supabaseUser.user_metadata?.avatar_url as string | undefined) ??
+      undefined,
+    createdAt:
+      profileJoinedAt ??
+      supabaseUser.created_at ??
       undefined,
   };
 }
@@ -84,6 +113,7 @@ function readHasSessionFlag() {
 export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
   const [profileName, setProfileName] = useState<string | null>(null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
   const [cachedUser, setCachedUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(() => isSupabaseConfigured);
 
@@ -94,6 +124,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
     if (cached) {
       setCachedUser(cached);
       setProfileName(cached.name);
+      if (cached.photoUrl) setProfilePhotoUrl(cached.photoUrl);
       setIsLoading(false);
       return;
     }
@@ -108,10 +139,16 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       const profile = await fetchUserProfile(userId).catch(() => null);
       const name = profile?.name ?? "SpentX User";
       setProfileName(name);
+      setProfilePhotoUrl(profile?.photoURL ?? null);
 
       setSupabaseUser((current) => {
         if (!current || current.id !== userId) return current;
-        const userObj = buildUserFromSupabase(current, name);
+        const userObj = buildUserFromSupabase(
+          current,
+          name,
+          profile?.joinedAt,
+          profile?.photoURL,
+        );
         setCachedUser(userObj);
         persistCachedUser(userObj);
         return current;
@@ -207,7 +244,13 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
 
         setProfileName(updatedName);
-        const userObj = buildUserFromSupabase(nextUser, updatedName);
+        setProfilePhotoUrl(profile?.photoURL ?? null);
+        const userObj = buildUserFromSupabase(
+          nextUser,
+          updatedName,
+          profile?.joinedAt,
+          profile?.photoURL,
+        );
         setCachedUser(userObj);
         persistCachedUser(userObj);
       })();
@@ -260,32 +303,54 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
   //     layer replaces the other; the broadcast is the fast path, the poll
   //     is the safety net under it.
   //
-  // Only a genuine AuthApiError (the auth server itself rejected the
-  // request — token invalid, user gone) counts as revocation, mirroring
-  // the mobile client's AuthService.verifyAccountStillExists(). Everything
-  // else — a network blip, the dev server recompiling the proxy route
-  // mid-request, a transient 5xx — surfaces as AuthRetryableFetchError (or a
-  // thrown fetch error) and must NOT sign the user out; the next poll or
-  // focus check will simply try again.
+  // Only an error that names the account or session as gone counts as
+  // revocation (see isRevocationError), mirroring the mobile client's
+  // AuthService.verifyAccountStillExists() — and even then only when a
+  // confirming re-check agrees. Everything else — a network blip, the dev
+  // server recompiling the proxy route mid-request, a transient 5xx, a 401
+  // from an access token that expired while its refresh was still in
+  // flight — must NOT sign the user out; the next poll or focus check will
+  // simply try again. This poll is the safety net under the broadcast, not
+  // a session timer: a signed-in user stays signed in until they log out.
   useEffect(() => {
     if (!isSupabaseConfigured || !supabaseUser?.id) return;
 
     let cancelled = false;
+    let revokedStrikes = 0;
+    let confirmTimer: number | undefined;
+    let lastCheckAt = 0;
     const supabase = createClient();
 
     async function forceSignOutIfRevoked() {
       if (cancelled) return;
+      lastCheckAt = Date.now();
       const { error } = await supabase.auth.getUser();
       if (cancelled) return;
-      if (isAuthApiError(error)) {
-        await signOutAndRedirect();
+
+      if (!isRevocationError(error)) {
+        revokedStrikes = 0;
+        return;
       }
+
+      revokedStrikes += 1;
+      if (revokedStrikes < 2) {
+        // One rejection is not proof the account is gone — confirm shortly.
+        confirmTimer = window.setTimeout(() => {
+          void forceSignOutIfRevoked();
+        }, 5000);
+        return;
+      }
+
+      await signOutAndRedirect();
     }
 
     async function signOutAndRedirect() {
       if (cancelled) return;
       cancelled = true;
-      await supabase.auth.signOut().catch(() => undefined);
+      // Local scope: clear THIS browser only. A global sign-out would revoke
+      // every refresh token this account holds, killing the user's other
+      // devices (mobile included) as a side effect.
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
       if (typeof window !== "undefined") {
         window.location.href = "/auth/sign-in";
       }
@@ -299,7 +364,9 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       void forceSignOutIfRevoked();
     }, 60 * 1000);
 
+    // Tab focus fires on every alt-tab; don't turn that into an auth call.
     function handleFocus() {
+      if (Date.now() - lastCheckAt < 60 * 1000) return;
       void forceSignOutIfRevoked();
     }
     window.addEventListener("focus", handleFocus);
@@ -308,13 +375,14 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       unsubscribeRevoked();
       window.clearInterval(pollInterval);
+      window.clearTimeout(confirmTimer);
       window.removeEventListener("focus", handleFocus);
     };
   }, [supabaseUser?.id]);
 
   const value = useMemo<AuthContextValue>(() => {
     const user = supabaseUser
-      ? buildUserFromSupabase(supabaseUser, profileName)
+      ? buildUserFromSupabase(supabaseUser, profileName, null, profilePhotoUrl)
       : cachedUser;
 
     return {
@@ -323,7 +391,7 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
       isConfigured: isSupabaseConfigured,
       isLoading,
     };
-  }, [supabaseUser, isLoading, profileName, cachedUser]);
+  }, [supabaseUser, isLoading, profileName, profilePhotoUrl, cachedUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

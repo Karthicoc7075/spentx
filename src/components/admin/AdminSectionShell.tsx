@@ -9,23 +9,37 @@ import {
   Activity,
   Sun,
   Moon,
+  Layers,
+  Settings,
+  Smartphone,
+  DatabaseBackup,
+  User,
+  ArrowRight,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/providers/theme-provider";
+import { useRoleMode } from "@/hooks/useRoleMode";
+import { RoleSwitchControl } from "@/components/admin/RoleSwitchControl";
 
 const adminTabs = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/database", label: "Database", icon: Database },
+  { href: "/admin/categories", label: "Content & Categories", icon: Layers },
+  { href: "/admin/database", label: "Database Data", icon: Database },
+  { href: "/admin/settings", label: "Website Settings", icon: Settings },
+  { href: "/admin/sms-rules", label: "SMS Rules", icon: Smartphone },
   { href: "/admin/logs", label: "System & Logs", icon: ScrollText },
+  { href: "/admin/api-logs", label: "API Logs", icon: Activity },
+  { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
 ];
 
 export function AdminSectionShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { resolvedTheme, setTheme } = useTheme();
+  const { setMode } = useRoleMode();
 
   const toggleTheme = () => {
     setTheme(resolvedTheme === "dark" ? "light" : "dark");
@@ -49,6 +63,9 @@ export function AdminSectionShell({ children }: { children: ReactNode }) {
                   <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   LIVE
                 </span>
+                <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                  Admin View
+                </span>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Audit logging active • Real-time production management & system state
@@ -57,6 +74,17 @@ export function AdminSectionShell({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Quick Switch to User View */}
+            <button
+              type="button"
+              onClick={() => setMode("user")}
+              className="flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary shadow-xs transition-all hover:bg-primary/20 cursor-pointer"
+              title="Switch to User View to see the website exactly as a normal user sees it"
+            >
+              <User className="size-3.5" />
+              <span>Switch to User View</span>
+            </button>
+
             <button
               type="button"
               onClick={toggleTheme}
@@ -83,7 +111,7 @@ export function AdminSectionShell({ children }: { children: ReactNode }) {
         </div>
 
         {/* Header Navigation Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto border-t border-border/60 pt-3">
+        <div className="flex items-center gap-1.5 overflow-x-auto border-t border-border/60 pt-3 scrollbar-none">
           {adminTabs.map((tab) => {
             const Icon = tab.icon;
             const isActive =

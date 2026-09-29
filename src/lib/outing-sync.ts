@@ -18,29 +18,26 @@ export function withoutOutingUnlinkedTag(tags?: string[]) {
   return (tags ?? []).filter((t) => t !== OUTING_UNLINKED_TAG);
 }
 
-/** Inclusive calendar range for an outing (end-of-day on endDate). */
+/** Inclusive calendar range for an outing (startDate through endDate, or single day on startDate). */
 export function isWithinOutingDates(outing: Outing, date: string) {
-  if (!date) return false;
-  const value = new Date(date).getTime();
-  if (Number.isNaN(value)) return false;
-  const start = new Date(`${outing.startDate.slice(0, 10)}T00:00:00`).getTime();
-  const endRaw = outing.endDate?.slice(0, 10);
-  const end = endRaw
-    ? new Date(`${endRaw}T23:59:59`).getTime()
-    : Number.POSITIVE_INFINITY;
-  return value >= start && value <= end;
+  if (!date || !outing.startDate) return false;
+  const txDate = date.slice(0, 10);
+  const start = outing.startDate.slice(0, 10);
+  const end = outing.endDate ? outing.endDate.slice(0, 10) : start;
+  return txDate >= start && txDate <= end;
 }
 
 /** Currently running outing that should auto-attach new spends. */
 export function getActiveAutoOuting(outings: Outing[]): Outing | null {
+  const today = new Date().toISOString().slice(0, 10);
   const active = outings.filter(
-    (o) => o.status === "active" && !o.isQuickSplit,
+    (o) =>
+      o.status === "active" &&
+      !o.isQuickSplit &&
+      o.isActive !== false &&
+      isWithinOutingDates(o, today),
   );
   if (active.length === 0) return null;
-  // Prefer the one that includes today; else newest start.
-  const today = new Date().toISOString().slice(0, 10);
-  const running = active.find((o) => isWithinOutingDates(o, today));
-  if (running) return running;
   return [...active].sort((a, b) =>
     b.startDate.localeCompare(a.startDate),
   )[0];
@@ -50,11 +47,13 @@ export function hasOtherActiveOuting(
   outings: Outing[],
   excludeOutingId?: string,
 ) {
+  const today = new Date().toISOString().slice(0, 10);
   return outings.some(
     (o) =>
       o.status === "active" &&
       o.id !== excludeOutingId &&
-      o.isActive !== false,
+      o.isActive !== false &&
+      isWithinOutingDates(o, today),
   );
 }
 
@@ -84,14 +83,21 @@ export function isAutoLinkedOutingTransaction(
 export function isBankLikeTransactionSource(transaction: Transaction) {
   const source = (transaction.source ?? "").toLowerCase();
   const entry = (transaction.entrySource ?? "").toLowerCase();
+  if (
+    source === "manual" ||
+    entry === "manual" ||
+    entry === "mobile-manual" ||
+    entry.includes("manual")
+  ) {
+    return false;
+  }
   return (
-    source === "mobile" ||
     source === "bank-sync" ||
-    source === "import" ||
     source === "sms" ||
+    source === "import" ||
     entry.includes("sms") ||
     entry.includes("bank") ||
-    entry.includes("mobile")
+    entry.includes("auto-detected")
   );
 }
 

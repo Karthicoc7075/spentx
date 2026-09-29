@@ -3,6 +3,7 @@ import { getServerAuthCallbackUrl } from "@/lib/auth-redirect";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
+import { isAdminUser } from "@/lib/admin";
 
 // Admin-triggered password reset. This sends the TARGET user the standard
 // reset-password email — the same flow they'd trigger themselves from
@@ -31,12 +32,15 @@ async function handlePost(
 
     const { data: callerProfile } = await supabase
       .from("users")
-      .select("role")
+      .select("role, email")
       .eq("id", user.id)
       .maybeSingle();
 
-    if (callerProfile?.role !== "admin") {
-      return NextResponse.json({ error: "Admin access required." }, { status: 403 });
+    if (!isAdminUser(user, callerProfile)) {
+      return NextResponse.json(
+        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
+        { status: 403 },
+      );
     }
 
     // Look up the TARGET user's email via the service-role client.

@@ -46,7 +46,7 @@ export function TransactionsPagination({
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           Rows per page
           <select
-            className="h-8 rounded-lg border border-input bg-background px-2 text-sm"
+            className="h-8.5 rounded-xl border border-input bg-card px-2.5 text-xs font-medium"
             value={pageSize}
             onChange={(event) =>
               onPageSizeChange(Number(event.target.value) as TransactionPageSize)
@@ -66,6 +66,7 @@ export function TransactionsPagination({
             disabled={currentPage <= 1}
             size="icon-sm"
             variant="outline"
+            className="rounded-lg"
             onClick={() => onPageChange(currentPage - 1)}
           >
             <ChevronLeft className="size-4" />
@@ -81,7 +82,8 @@ export function TransactionsPagination({
                   <span className="px-1 text-sm text-muted-foreground">…</span>
                 ) : null}
                 <Button
-                  className="min-w-8"
+                  size="sm"
+                  className="min-w-8 rounded-lg font-medium"
                   variant={page === currentPage ? "default" : "outline"}
                   onClick={() => onPageChange(page)}
                 >

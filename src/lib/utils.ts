@@ -17,7 +17,11 @@ export function compareTransactionsNewestFirst(
   a: Pick<Transaction, "date" | "transactionDate">,
   b: Pick<Transaction, "date" | "transactionDate">,
 ) {
-  return transactionDateKey(b).localeCompare(transactionDateKey(a));
+  const aKey = transactionDateKey(a);
+  const bKey = transactionDateKey(b);
+  if (bKey > aKey) return 1;
+  if (bKey < aKey) return -1;
+  return 0;
 }
 
 export function cn(...inputs: ClassValue[]) {
@@ -197,7 +201,10 @@ function dayKey(value: string) {
   if (match) return match[1];
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return "";
-  return parsed.toISOString().slice(0, 10);
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function transactionAccountLabel(transaction: Transaction) {
@@ -282,8 +289,12 @@ export function splitRowMatchesFilters(
   filters: Pick<GlobalFilters, "categories" | "purposeId">,
   purposes: Purpose[],
 ) {
+  const rowCategory = (row.categoryId ?? "").trim().toLowerCase();
   const categoryOk =
-    !filters.categories.length || filters.categories.includes(row.categoryId ?? "");
+    !filters.categories.length ||
+    filters.categories.some(
+      (cat) => cat.trim().toLowerCase() === rowCategory,
+    );
   const purposeOk = transactionMatchesPurpose(
     row.purposeId,
     filters.purposeId,
@@ -458,10 +469,12 @@ export function filterTransactions(
       (!filters.transactionType ||
         transaction.type === filters.transactionType) &&
       (!filters.contributorSource ||
-        (transaction.contributorSource || "Me") === filters.contributorSource) &&
+        (transaction.contributorSource || "Me").trim().toLowerCase() ===
+          filters.contributorSource.trim().toLowerCase()) &&
       (!search ||
         [
           transaction.merchant,
+          transaction.title,
           transaction.description,
           accountLabel,
           transaction.note,

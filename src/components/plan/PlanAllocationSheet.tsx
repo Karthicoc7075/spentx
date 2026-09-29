@@ -1,7 +1,7 @@
 "use client";
 
-import { IndianRupee, Plus, Save } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Compass, Copy, IndianRupee, Plus, Save } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { formatPlanMonth, sumPlanned, type RolloverBreakdown } from "@/lib/plan";
 import { cn, formatCurrency } from "@/lib/utils";
+import { getCategoryIcon } from "@/lib/transaction-ui";
 import type { PlanAllocation } from "@/types";
 
 type PlanAllocationSheetProps = {
@@ -28,11 +29,14 @@ type PlanAllocationSheetProps = {
   categorySpentActuals: Record<string, number>;
   rolloverBreakdowns?: Record<string, RolloverBreakdown>;
   isSaving: boolean;
-  onAmountChange: (id: string, amount: number) => void;
+  onAmountChange: (id: string, amount: number, categoryName?: string) => void;
   onToggleRollover?: (id: string) => void;
   onAddCategory: () => void;
   onSave: () => Promise<void> | void;
   onCancel: () => void;
+  hasPreviousSavedPlan?: boolean;
+  previousMonthLabel?: string;
+  onCopyFromPreviousPlan?: () => void;
 };
 
 function sanitizeAmount(value: string) {
@@ -60,8 +64,44 @@ export function PlanAllocationSheet({
   onAddCategory,
   onSave,
   onCancel,
+  hasPreviousSavedPlan,
+  previousMonthLabel,
+  onCopyFromPreviousPlan,
 }: PlanAllocationSheetProps) {
-  const totalPlanned = sumPlanned(allocations);
+  // Ensure Outings category and any category where money was spent this month are shown in modal to set limits
+  const allAllocations = useMemo(() => {
+    const list = allocations.map((a) => ({
+      ...a,
+      category: a.category === "cat-exp-outings" ? "Outings" : a.category,
+    }));
+    const seen = new Set(list.map((a) => a.category.toLowerCase()));
+
+    if (!seen.has("outings") && !seen.has("outing")) {
+      seen.add("outings");
+      list.push({
+        id: "cat-exp-11",
+        category: "Outings",
+        plannedAmount: 0,
+        color: "#0ea5e9",
+      });
+    }
+
+    for (const [catName, spent] of Object.entries(categorySpentActuals)) {
+      if (spent > 0 && !seen.has(catName.toLowerCase())) {
+        seen.add(catName.toLowerCase());
+        list.push({
+          id: `unbudgeted-${catName}`,
+          category: catName,
+          plannedAmount: 0,
+          color: "#94a3b8",
+        });
+      }
+    }
+
+    return list;
+  }, [allocations, categorySpentActuals]);
+
+  const totalPlanned = sumPlanned(allAllocations);
   const totalActual = Object.values(categorySpentActuals).reduce(
     (sum, amount) => sum + amount,
     0,
@@ -77,7 +117,10 @@ export function PlanAllocationSheet({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => (next ? undefined : onCancel())}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => (next ? undefined : onCancel())}
+    >
       <DialogContent className="flex max-h-[90vh] w-full max-w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="shrink-0 border-b border-border px-6 pb-5 pt-6 text-left">
           <DialogTitle className="text-xl font-semibold tracking-tight">
@@ -105,16 +148,31 @@ export function PlanAllocationSheet({
                 onChange={(event) => onExpectedIncomeChange(Number(event.target.value) || 0)}
               />
             </div>
-            {incomeSuggestion > 0 && expectedIncome !== incomeSuggestion ? (
-              <Button
-                className="mt-3"
-                type="button"
-                variant="outline"
-                onClick={() => onExpectedIncomeChange(incomeSuggestion)}
-              >
-                Use suggested income ({formatCurrency(incomeSuggestion)})
-              </Button>
-            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {incomeSuggestion > 0 && expectedIncome !== incomeSuggestion ? (
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={() => onExpectedIncomeChange(incomeSuggestion)}
+                >
+                  Use suggested income ({formatCurrency(incomeSuggestion)})
+                </Button>
+              ) : null}
+
+              {hasPreviousSavedPlan && onCopyFromPreviousPlan ? (
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  className="gap-1.5"
+                  onClick={onCopyFromPreviousPlan}
+                >
+                  <Copy className="size-3.5" />
+                  Copy from {previousMonthLabel || "Last Month"}
+                </Button>
+              ) : null}
+            </div>
           </div>
 
           <div
@@ -174,7 +232,7 @@ export function PlanAllocationSheet({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {allocations.map((allocation) => (
+                {allAllocations.map((allocation) => (
                   <AllocationRow
                     key={allocation.id}
                     allocation={allocation}
@@ -217,7 +275,7 @@ export function PlanAllocationSheet({
           <Button disabled={isSaving} type="button" variant="outline" onClick={onCancel}>
             Cancel
           </Button>
-          <Button disabled={isSaving || isOverAllocated} onClick={handleSave}>
+          <Button disabled={isSaving || isOverAllocated} type="button" onClick={handleSave}>
             <Save className="mr-2 size-4" />
             {isSaving ? "Saving…" : "Set & Save Plan"}
           </Button>
@@ -237,7 +295,7 @@ function AllocationRow({
   allocation: PlanAllocation;
   actualSpent: number;
   rollover?: RolloverBreakdown;
-  onAmountChange: (id: string, amount: number) => void;
+  onAmountChange: (id: string, amount: number, categoryName?: string) => void;
   onToggleRollover?: (id: string) => void;
 }) {
   const [draftAmount, setDraftAmount] = useState(
@@ -260,18 +318,46 @@ function AllocationRow({
     const sanitized = sanitizeAmount(raw);
     const nextAmount = sanitized === "" ? 0 : Number(sanitized);
     setDraftAmount(sanitized);
-    onAmountChange(allocation.id, nextAmount);
+    onAmountChange(allocation.id, nextAmount, allocation.category);
   }
+
+  const isOuting =
+    allocation.category.toLowerCase() === "outings" ||
+    allocation.category.toLowerCase() === "outing";
+  const isUnbudgeted = allocation.plannedAmount === 0 && actualSpent > 0;
+  const CategoryIcon = getCategoryIcon(allocation.icon || allocation.category);
 
   return (
     <tr>
       <td className="px-6 py-4">
-        <div className="flex items-center gap-2 font-medium">
+        <div className="flex flex-wrap items-center gap-2 font-medium">
           <span
-            className="size-2.5 rounded-full"
-            style={{ backgroundColor: allocation.color }}
-          />
-          {allocation.category}
+            className="flex size-6 items-center justify-center rounded-md shrink-0 shadow-2xs font-bold"
+            style={{
+              backgroundColor: `${allocation.color}25`,
+              color: allocation.color,
+            }}
+          >
+            <CategoryIcon className="size-3.5" />
+          </span>
+          <span>{allocation.category}</span>
+          {isOuting ? (
+            <Badge
+              variant="secondary"
+              className="text-[10px] px-1.5 py-0 font-normal text-sky-600 dark:text-sky-400 bg-sky-500/10 border border-sky-500/20 gap-1"
+            >
+              <Compass className="size-2.5" />
+              Outing
+            </Badge>
+          ) : null}
+          {isUnbudgeted ? (
+            <Badge
+              variant="outline"
+              className="text-[9px] px-1.5 py-0 font-normal border-amber-500/40 text-amber-600 dark:text-amber-400 bg-amber-500/10"
+            >
+              No limit set
+            </Badge>
+          ) : null}
         </div>
         <div className="mt-2 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-muted">
           <div
@@ -308,11 +394,22 @@ function AllocationRow({
               const sanitized = sanitizeAmount(event.target.value);
               setDraftAmount(sanitized);
               if (sanitized !== "") {
-                onAmountChange(allocation.id, Number(sanitized));
+                onAmountChange(allocation.id, Number(sanitized), allocation.category);
               }
             }}
           />
         </div>
+        {isUnbudgeted && draftAmount === "" ? (
+          <div className="mt-1">
+            <button
+              type="button"
+              onClick={() => commitAmount(String(actualSpent))}
+              className="text-[10px] text-primary hover:underline font-medium"
+            >
+              Match spent ({formatCurrency(actualSpent)})
+            </button>
+          </div>
+        ) : null}
       </td>
       {onToggleRollover ? (
         <>
@@ -333,11 +430,11 @@ function AllocationRow({
         {status === "not-started" ? (
           <span className="text-sm text-muted-foreground">—</span>
         ) : status === "over" ? (
-          <Badge className="border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300">
+          <Badge variant="destructive">
             Over plan
           </Badge>
         ) : (
-          <Badge className="border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+          <Badge variant="success">
             On track
           </Badge>
         )}

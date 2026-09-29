@@ -20,9 +20,9 @@ export function AlertItem({ alert, onRead, compact = false }: AlertItemProps) {
   return (
     <button
       className={cn(
-        "flex w-full items-start gap-3 rounded-lg border px-3 py-3 text-left transition-colors hover:border-primary/40 dark:border-white/10",
-        !alert.read && "border-primary/20 bg-primary/5",
-        compact && "px-2 py-2",
+        "flex w-full items-start gap-3 rounded-xl border border-border/70 bg-card px-4 py-3 text-left transition-all hover:bg-muted/40 hover:border-primary/40 shadow-xs",
+        !alert.read && "border-primary/30 bg-primary/5",
+        compact && "px-3 py-2.5",
       )}
       type="button"
       onClick={() => onRead?.(alert.id)}

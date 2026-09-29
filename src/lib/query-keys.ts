@@ -35,6 +35,8 @@ export const queryKeys = {
     ["outingExpenses", userId, "all"] as const,
   outingSettlements: (userId?: string, outingId?: string) =>
     ["outingSettlements", userId, outingId] as const,
+  allOutingSettlements: (userId?: string) =>
+    ["outingSettlements", userId, "all"] as const,
   friends: (userId?: string) => ["friends", userId] as const,
   /** Includes soft-deleted friends — historical records still reference them. */
   allFriends: (userId?: string) => ["friends", userId, "all"] as const,

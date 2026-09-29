@@ -16,11 +16,9 @@ import {
 } from "@/components/ui/table";
 import { useFriends } from "@/hooks/useFriends";
 import { useOutings } from "@/hooks/useOutings";
-import {
-  fetchOutingExpenses,
-  fetchOutingSettlements,
-  normalizeFriendUpis,
-} from "@/lib/supabase-data";
+import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
+import { useAllOutingSettlements } from "@/hooks/useAllOutingSettlements";
+import { normalizeFriendUpis } from "@/lib/supabase-data";
 import { computeNetBalancesByMember } from "@/lib/outings";
 import {
   computeFriendSplitNetBalances,
@@ -36,7 +34,6 @@ import {
 import { formatCurrency } from "@/lib/utils";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useToast } from "@/providers/toast-provider";
-import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import type { Friend } from "@/types";
 
@@ -83,14 +80,8 @@ export function FriendsPage() {
     }
   }
 
-  const { data: allExpenses = [] } = useQuery({
-    queryKey: ["allOutingExpenses", user?.id],
-    queryFn: () => fetchOutingExpenses(user?.id),
-  });
-  const { data: allSettlements = [] } = useQuery({
-    queryKey: ["allOutingSettlements", user?.id],
-    queryFn: () => fetchOutingSettlements(user?.id),
-  });
+  const { expenses: allExpenses } = useAllOutingExpenses();
+  const { settlements: allSettlements } = useAllOutingSettlements();
 
   // A friend's balance spans both trips and one-off friend splits.
   const netBalancesByMember = useMemo(
@@ -130,13 +121,50 @@ export function FriendsPage() {
     return counts;
   }, [outings]);
 
+  const [filterTab, setFilterTab] = useState<"all" | "pending" | "settled">("all");
+
+  const counts = useMemo(() => {
+    let pending = 0;
+    let settled = 0;
+    for (const friend of friends) {
+      const balance =
+        netBalancesByMember.find((item) => item.key === friend.id)?.balance ?? 0;
+      if (Math.abs(balance) >= 0.01) pending++;
+      else settled++;
+    }
+    return { all: friends.length, pending, settled };
+  }, [friends, netBalancesByMember]);
+
   const visibleFriends = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return friends;
-    return friends.filter((friend) =>
-      friend.name.toLowerCase().includes(query),
-    );
-  }, [friends, search]);
+    let result = friends;
+
+    if (query) {
+      result = result.filter((friend) => {
+        const matchName = friend.name.toLowerCase().includes(query);
+        const matchPhone = friend.phone?.toLowerCase().includes(query);
+        const upis = friendUpiList(friend);
+        const matchUpi = upis.some((u) => u.toLowerCase().includes(query));
+        return matchName || matchPhone || matchUpi;
+      });
+    }
+
+    if (filterTab === "pending") {
+      result = result.filter((friend) => {
+        const balance =
+          netBalancesByMember.find((item) => item.key === friend.id)?.balance ?? 0;
+        return Math.abs(balance) >= 0.01;
+      });
+    } else if (filterTab === "settled") {
+      result = result.filter((friend) => {
+        const balance =
+          netBalancesByMember.find((item) => item.key === friend.id)?.balance ?? 0;
+        return Math.abs(balance) < 0.01;
+      });
+    }
+
+    return result;
+  }, [friends, search, filterTab, netBalancesByMember]);
 
   function openAddFriend() {
     setEditTarget(null);
@@ -184,22 +212,29 @@ export function FriendsPage() {
       </div>
 
       {hasBalance ? (
-        <div className="sx-surface flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Net balance
-          </p>
-          <p className="text-sm">
-            <span className="text-muted-foreground">You owe: </span>
-            <span className="font-semibold tabular-nums text-destructive">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="sx-surface p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">You Owe</span>
+              <span className="inline-flex items-center rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                To settle
+              </span>
+            </div>
+            <p className="mt-3 font-sans text-2xl sm:text-3xl font-bold tracking-tight text-destructive tabular-nums">
               {formatCurrency(youOwe)}
-            </span>
-          </p>
-          <p className="text-sm">
-            <span className="text-muted-foreground">You are owed: </span>
-            <span className="font-semibold tabular-nums text-success">
+            </p>
+          </div>
+          <div className="sx-surface p-5 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">You Are Owed</span>
+              <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                Collect
+              </span>
+            </div>
+            <p className="mt-3 font-sans text-2xl sm:text-3xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400 tabular-nums">
               {formatCurrency(youAreOwed)}
-            </span>
-          </p>
+            </p>
+          </div>
         </div>
       ) : null}
 
@@ -214,14 +249,54 @@ export function FriendsPage() {
                 Click a row to see trips and balances.
               </p>
             </div>
-            <div className="relative w-full sm:w-56">
-              <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="h-9 pl-8"
-                placeholder="Search friends..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex rounded-xl border border-border/40 bg-muted/60 p-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setFilterTab("all")}
+                  className={cn(
+                    "rounded-lg px-3.5 py-1.5 font-medium transition-colors",
+                    filterTab === "all"
+                      ? "bg-card text-foreground shadow-xs font-semibold"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  All ({counts.all})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterTab("pending")}
+                  className={cn(
+                    "rounded-lg px-3.5 py-1.5 font-medium transition-colors",
+                    filterTab === "pending"
+                      ? "bg-card text-foreground shadow-xs font-semibold"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  Pending ({counts.pending})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterTab("settled")}
+                  className={cn(
+                    "rounded-lg px-3.5 py-1.5 font-medium transition-colors",
+                    filterTab === "settled"
+                      ? "bg-card text-foreground shadow-xs font-semibold"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  Settled ({counts.settled})
+                </button>
+              </div>
+              <div className="relative w-full sm:w-56">
+                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 pl-9 rounded-xl text-sm"
+                  placeholder="Search name, phone, UPI..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
             </div>
           </div>
           <Table>
@@ -256,7 +331,7 @@ export function FriendsPage() {
                   >
                     {friends.length === 0
                       ? "No friends added yet."
-                      : "No friends match your search."}
+                      : "No friends match your search or filter."}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -282,7 +357,22 @@ export function FriendsPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {friend.phone || "—"}
+                        {friend.phone ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              navigator.clipboard.writeText(friend.phone!);
+                              notify({ title: `Copied ${friend.phone} to clipboard` });
+                            }}
+                            className="hover:text-foreground hover:underline transition-colors"
+                            title="Click to copy phone number"
+                          >
+                            {friend.phone}
+                          </button>
+                        ) : (
+                          "—"
+                        )}
                       </TableCell>
                       <TableCell className="max-w-xs">
                         {upiList.length === 0 ? (
@@ -290,12 +380,19 @@ export function FriendsPage() {
                         ) : (
                           <div className="flex flex-wrap gap-1">
                             {upiList.map((upi) => (
-                              <span
+                              <button
+                                type="button"
                                 key={upi.toLowerCase()}
-                                className="max-w-full truncate rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] font-medium"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  navigator.clipboard.writeText(upi);
+                                  notify({ title: `Copied ${upi} to clipboard` });
+                                }}
+                                className="max-w-full truncate rounded-full border border-border bg-muted/50 px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+                                title="Click to copy UPI ID"
                               >
                                 {upi}
-                              </span>
+                              </button>
                             ))}
                           </div>
                         )}

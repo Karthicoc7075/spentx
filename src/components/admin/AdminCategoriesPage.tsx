@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
 } from "@/lib/admin-api";
 import { fetchGlobalSettings } from "@/lib/supabase-data";
 import { getCategoryIcon } from "@/lib/transaction-ui";
+import { IconPicker, ColorPicker, InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
 import { queryKeys } from "@/lib/query-keys";
 import type { DefaultCategory } from "@/types";
 import { useToast } from "@/providers/toast-provider";
@@ -96,6 +97,7 @@ export function AdminCategoriesPage() {
         });
         notify({ title: "Category updated", description: `Saved "${form.name.trim()}".` });
       }
+      saveCustomPaletteColor(form.color);
       setForm(null);
       refresh();
     } catch (error) {
@@ -147,7 +149,7 @@ export function AdminCategoriesPage() {
       {list.length ? (
         <div className="grid gap-2">
           {list.map((category) => {
-            const Icon = getCategoryIcon(category.name);
+            const Icon = getCategoryIcon(category.icon || category.name);
             return (
               <div
                 key={category.id}
@@ -229,19 +231,47 @@ export function AdminCategoriesPage() {
 
       {/* Add / edit form */}
       {form ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="sx-surface w-full max-w-sm space-y-4 p-6">
-            <h3 className="text-sm font-bold">
-              {form.mode === "add"
-                ? `Add ${form.type} category`
-                : `Edit "${form.name}"`}
-            </h3>
-            <div className="grid gap-3">
-              <div className="grid gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Name</label>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setForm(null)}
+        >
+          <div
+            className="sx-surface w-full max-w-md space-y-4 p-5 sm:p-6 scale-in duration-200 shadow-2xl border border-border/80 rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-border/60 pb-3">
+              <h3 className="text-sm font-bold text-foreground">
+                {form.mode === "add"
+                  ? `Add ${form.type === "income" ? "Income" : "Expense"} Category`
+                  : `Edit Category`}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setForm(null)}
+                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 rounded-lg hover:bg-muted transition-colors"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Hero Input Section */}
+            <div className="flex items-center gap-3">
+              <div
+                className="flex size-12 shrink-0 items-center justify-center rounded-2xl shadow-xs transition-colors"
+                style={{ backgroundColor: `${form.color}20`, color: form.color }}
+              >
+                {(() => {
+                  const CatIcon = getCategoryIcon(form.icon || form.name);
+                  return <CatIcon className="size-6" />;
+                })()}
+              </div>
+
+              <div className="flex-1 space-y-1">
                 <Input
                   autoFocus
-                  className="h-10 text-sm"
+                  className="h-10 text-sm font-semibold rounded-xl bg-muted/20 border-border/70"
+                  placeholder="Category name"
                   value={form.name}
                   onChange={(event) =>
                     setForm((current) =>
@@ -259,56 +289,42 @@ export function AdminCategoriesPage() {
                   }
                 />
                 {form.mode === "add" && form.id ? (
-                  <p className="text-[11px] text-muted-foreground">id: {form.id}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono">id: {form.id}</p>
                 ) : null}
               </div>
-              <div className="grid gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Color</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    className="h-10 w-14 cursor-pointer rounded-lg border border-border bg-transparent"
-                    type="color"
-                    value={form.color}
-                    onChange={(event) =>
-                      setForm((current) =>
-                        current ? { ...current, color: event.target.value } : current,
-                      )
-                    }
-                  />
-                  <Input
-                    className="h-10 flex-1 text-sm"
-                    value={form.color}
-                    onChange={(event) =>
-                      setForm((current) =>
-                        current ? { ...current, color: event.target.value } : current,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-              <div className="grid gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
-                  Icon name (optional)
-                </label>
-                <Input
-                  className="h-10 text-sm"
-                  placeholder="e.g. ShoppingCart"
-                  value={form.icon}
-                  onChange={(event) =>
-                    setForm((current) =>
-                      current ? { ...current, icon: event.target.value } : current,
-                    )
-                  }
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Display icons are matched by category name; this field is
-                  stored for future use.
-                </p>
-              </div>
             </div>
-            <div className="flex gap-2 pt-1">
+
+            {/* Color Swatches */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Color
+              </span>
+              <InlineColorPicker
+                value={form.color}
+                onChange={(hex) =>
+                  setForm((current) => (current ? { ...current, color: hex } : current))
+                }
+              />
+            </div>
+
+            {/* Icon Picker */}
+            <div className="space-y-1.5 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">
+                Icon
+              </span>
+              <InlineIconPicker
+                value={form.icon}
+                onChange={(icon) =>
+                  setForm((current) => (current ? { ...current, icon } : current))
+                }
+                color={form.color}
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-2 pt-2 border-t border-border/60">
               <Button
-                className="h-10 flex-1 text-xs font-bold"
+                className="h-10 flex-1 text-xs font-bold rounded-xl cursor-pointer"
                 disabled={isSaving}
                 variant="outline"
                 onClick={() => setForm(null)}
@@ -316,11 +332,11 @@ export function AdminCategoriesPage() {
                 Cancel
               </Button>
               <Button
-                className="h-10 flex-1 text-xs font-bold"
+                className="h-10 flex-1 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl cursor-pointer"
                 disabled={isSaving}
                 onClick={handleSave}
               >
-                {isSaving ? <Loader2 className="size-4 animate-spin" /> : "Save"}
+                {isSaving ? <Loader2 className="size-4 animate-spin" /> : "Save Category"}
               </Button>
             </div>
           </div>
@@ -329,8 +345,14 @@ export function AdminCategoriesPage() {
 
       {/* Delete confirm — global blast radius, and the copy says so */}
       {pendingDelete ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="sx-surface w-full max-w-sm space-y-4 p-6 text-center">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200"
+          onClick={() => setPendingDelete(null)}
+        >
+          <div
+            className="sx-surface w-full max-w-sm space-y-4 p-6 text-center scale-in duration-200 shadow-2xl border border-border/80"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex justify-center">
               <span className="flex size-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-500">
                 <AlertTriangle className="size-6" />
@@ -349,7 +371,7 @@ export function AdminCategoriesPage() {
             </div>
             <div className="flex gap-2 pt-2">
               <Button
-                className="h-10 flex-1 text-xs font-bold"
+                className="h-10 flex-1 text-xs font-bold cursor-pointer"
                 disabled={isSaving}
                 variant="outline"
                 onClick={() => setPendingDelete(null)}
@@ -357,7 +379,7 @@ export function AdminCategoriesPage() {
                 Cancel
               </Button>
               <Button
-                className="h-10 flex-1 bg-rose-500 text-xs font-bold text-white hover:bg-rose-600"
+                className="h-10 flex-1 bg-rose-500 text-xs font-bold text-white hover:bg-rose-600 cursor-pointer"
                 disabled={isSaving}
                 onClick={handleConfirmDelete}
               >

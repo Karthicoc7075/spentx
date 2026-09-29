@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Plus, Receipt } from "lucide-react";
+import { ArrowRight, Compass, Plus, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCategories } from "@/hooks/useCategories";
@@ -46,7 +46,7 @@ export function DashboardRecentTransactions({
           </p>
         </div>
         <Link
-          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+          className="inline-flex h-9 items-center gap-1.5 rounded-[0.5rem] border border-border/80 bg-card px-3 text-xs font-semibold text-foreground transition-colors hover:bg-muted shadow-xs"
           href="/transactions"
         >
           See All
@@ -72,26 +72,26 @@ export function DashboardRecentTransactions({
               <div
                 key={tx.id}
                 className={cn(
-                  "flex items-center gap-3.5 rounded-xl bg-muted/50 p-3.5 transition-colors hover:bg-muted",
+                  "flex items-center gap-3.5 rounded-xl bg-muted/40 p-3.5 transition-colors hover:bg-muted/70",
                   isOuting && "cursor-pointer hover:border-primary/40 border border-transparent",
                 )}
               >
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border bg-card text-xs font-semibold tracking-wide text-foreground">
-                  {isOuting ? "🏕️" : merchantInitials(tx.merchant)}
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border/80 bg-card text-xs font-semibold tracking-wide text-foreground">
+                  {isOuting ? <Compass className="size-4 text-primary" /> : merchantInitials(tx.merchant)}
                 </div>
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={cn(
-                        "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                        "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold",
                         isOuting
-                          ? "bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-400"
+                          ? "bg-primary/10 text-primary border border-primary/20"
                           : isIncome
-                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
                             : isInvestment
-                              ? "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400"
-                              : "bg-accent text-accent-foreground",
+                              ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"
+                              : "bg-muted text-muted-foreground border border-border/50",
                       )}
                     >
                       {tx.category}

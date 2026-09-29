@@ -1,7 +1,7 @@
 "use client";
 
 import { ListFilter, RotateCcw, Search } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,7 +65,7 @@ const typeOptions: Array<{ value: "" | TransactionType; label: string }> = [
 ];
 
 const selectClassName =
-  "h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
+  "h-9 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
 
 type TransactionFiltersProps = {
   filters: GlobalFilters;
@@ -73,6 +73,7 @@ type TransactionFiltersProps = {
     key: K,
     value: GlobalFilters[K],
   ) => void;
+  updateFilters?: (updates: Partial<GlobalFilters>) => void;
   resetFilters: () => void;
   /** True only on the anonymous /share/[token]/transactions route — not
    * the owner's page, and not the separate signed-in "claimed viewer"
@@ -81,11 +82,13 @@ type TransactionFiltersProps = {
   /** The shared purpose's own transactions, used to scope the Account/
    * Contributor options when isSharedView is true. Unused otherwise. */
   transactions?: Transaction[];
+  minMonth?: string;
 };
 
 export function TransactionFilters({
   filters,
   updateFilter,
+  updateFilters,
   resetFilters,
   isSharedView = false,
   transactions = [],
@@ -113,17 +116,39 @@ export function TransactionFilters({
   }, [showContributorFilter, filters.contributorSource, updateFilter]);
 
   function applyDatePreset(preset: DashboardDatePreset) {
+    if (preset === "custom") {
+      if (updateFilters) {
+        updateFilters({ dashboardDatePreset: "custom" });
+      } else {
+        updateFilter("dashboardDatePreset", "custom");
+      }
+      return;
+    }
+
     const specificMonth = filters.specificMonth || getCurrentPlanMonth();
     const range = getDateRangeForDashboardPreset(preset, specificMonth);
 
-    updateFilter("dashboardDatePreset", preset);
-    updateFilter("dateFrom", range.dateFrom);
-    updateFilter("dateTo", range.dateTo);
+    const updates: Partial<GlobalFilters> = {
+      dashboardDatePreset: preset,
+      dateFrom: range.dateFrom,
+      dateTo: range.dateTo,
+    };
 
     if (preset === "this-month") {
-      updateFilter("dashboardMonth", getCurrentPlanMonth());
+      updates.dashboardMonth = getCurrentPlanMonth();
     } else if (preset === "last-month") {
-      updateFilter("dashboardMonth", range.dateFrom.slice(0, 7));
+      updates.dashboardMonth = range.dateFrom.slice(0, 7);
+    }
+
+    if (updateFilters) {
+      updateFilters(updates);
+    } else {
+      updateFilter("dashboardDatePreset", preset);
+      updateFilter("dateFrom", range.dateFrom);
+      updateFilter("dateTo", range.dateTo);
+      if (updates.dashboardMonth) {
+        updateFilter("dashboardMonth", updates.dashboardMonth);
+      }
     }
   }
 
@@ -132,9 +157,9 @@ export function TransactionFilters({
   }
 
   const activeFilterCount = [
-    filters.search,
+    filters.search.trim(),
     isSharedView ? "" : filters.purposeId,
-    filters.categories[0],
+    filters.categories.length > 0 ? "categories" : "",
     filters.account,
     filters.transactionType,
     filters.contributorSource,
@@ -166,27 +191,27 @@ export function TransactionFilters({
       {/* Search + type toggle */}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative w-full lg:max-w-sm">
-          <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             id="transaction-search"
             aria-label="Search transactions"
-            className="h-10 rounded-full border-border bg-background pl-11 text-sm shadow-none"
+            className="h-9 rounded-xl border-border bg-card pl-10 text-sm shadow-none"
             placeholder="Search by name, note, or tag..."
             value={filters.search}
             onChange={(event) => updateFilter("search", event.target.value)}
           />
         </div>
 
-        <div className="inline-flex w-fit shrink-0 items-center rounded-full bg-muted p-1">
+        <div className="inline-flex w-fit shrink-0 items-center rounded-xl bg-muted/60 p-1 border border-border/40">
           {typeOptions.map((option) => {
             const active = filters.transactionType === option.value;
             return (
               <button
                 key={option.value || "all"}
                 className={cn(
-                  "rounded-full px-4 py-1.5 text-xs font-semibold transition-colors",
+                  "rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors",
                   active
-                    ? "bg-card text-foreground shadow-sm"
+                    ? "bg-card text-foreground shadow-xs font-semibold"
                     : "text-muted-foreground hover:text-foreground",
                 )}
                 type="button"

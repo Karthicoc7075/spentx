@@ -20,7 +20,7 @@ type AnalysisDateFilterProps = {
 };
 
 const selectClassName =
-  "h-9 rounded-lg border border-input bg-background px-2.5 text-sm";
+  "h-9 rounded-xl border border-input bg-card px-3 text-sm font-medium shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export function AnalysisDateFilter({
   preset,
