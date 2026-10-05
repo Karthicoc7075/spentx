@@ -15,7 +15,7 @@ import {
   TransactionsPagination,
   type TransactionPageSize,
 } from "@/components/transactions/TransactionsPagination";
-import { Download, Minus, Plus } from "lucide-react";
+import { Download, Minus, Plus, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
@@ -101,6 +101,8 @@ export function TransactionsPage() {
     transactions: ledgerTransactions,
     addTransaction,
     deleteTransaction,
+    verifyTransaction,
+    rejectTransaction,
     error,
     isLoading: transactionsLoading,
     isMutating,
@@ -124,19 +126,52 @@ export function TransactionsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState<TransactionPageSize>(DEFAULT_PAGE_SIZE);
 
-  // Spec A1.2 — Undo Toast on Delete. Deletes are held for 5s before the
-  // real database write, so the user can undo. Pending-delete rows are
-  // hidden from the UI immediately for the optimistic "it's gone" feel.
   const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
   const [deleteTarget, setDeleteTarget] = useState<Transaction | null>(null);
-  const deleteTimers = useRef<Map<string, number>>(new Map());
 
-  useEffect(() => {
-    const timers = deleteTimers.current;
-    return () => {
-      timers.forEach((timer) => window.clearTimeout(timer));
-    };
-  }, []);
+  const unverifiedCount = useMemo(
+    () =>
+      ledgerTransactions.filter(
+        (t) =>
+          t.status === "unverified" &&
+          t.isActive !== false &&
+          !t.deletedAt &&
+          !pendingDeleteIds.has(t.id),
+      ).length,
+    [ledgerTransactions, pendingDeleteIds],
+  );
+
+  async function handleVerify(transaction: Transaction) {
+    try {
+      await verifyTransaction(transaction.id);
+      notify({
+        title: "Transaction verified",
+        description: `${transaction.merchant || "Transaction"} confirmed and added to your ledger.`,
+      });
+    } catch (err) {
+      notify({
+        title: "Failed to verify transaction",
+        description: err instanceof Error ? err.message : "An error occurred.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function handleReject(transaction: Transaction) {
+    try {
+      await rejectTransaction(transaction.id);
+      notify({
+        title: "Transaction rejected",
+        description: `${transaction.merchant || "Transaction"} was rejected.`,
+      });
+    } catch (err) {
+      notify({
+        title: "Failed to reject transaction",
+        description: err instanceof Error ? err.message : "An error occurred.",
+        variant: "destructive",
+      });
+    }
+  }
 
   // Settlement rows (both directions) stay visible here — the ledger is where
   // users check "did that repayment get recorded?". They're still excluded
@@ -475,8 +510,8 @@ export function TransactionsPage() {
     }
   }
 
-  /** Deletes are confirmed first — this only runs once the user says Delete. */
-  function handleDelete(transaction: Transaction) {
+  /** Deletes are confirmed first — commits delete directly to server so it never reverts on tab close/refresh. */
+  async function handleDelete(transaction: Transaction) {
     setDetailOpen(false);
     setSelectedTransaction(null);
     setEditingTransaction(null);
@@ -484,58 +519,31 @@ export function TransactionsPage() {
 
     setPendingDeleteIds((current) => new Set(current).add(transaction.id));
 
-    const commitDelete = () => {
-      deleteTimers.current.delete(transaction.id);
-      void deleteTransaction(transaction.id)
-        .then(async () => {
-          // Cascade: drop linked outing_expenses + recompute trip total in DB.
-          await afterTransactionRemovedFromOuting(user?.id, transaction, {
-            previousOutingId: transaction.outingId,
-          });
-          await invalidateFinancialData(queryClient, user?.id, {
-            outingId: transaction.outingId ?? undefined,
-          });
-        })
-        .catch(() => {
-          // Write failed — bring the row back so it isn't silently lost.
-          setPendingDeleteIds((current) => {
-            const next = new Set(current);
-            next.delete(transaction.id);
-            return next;
-          });
-          notify({
-            title: "Couldn't delete transaction.",
-            variant: "destructive",
-          });
-        });
-    };
-
-    const timer = window.setTimeout(commitDelete, 5000);
-    deleteTimers.current.set(transaction.id, timer);
-
-    notify({
-      title: "Transaction deleted successfully.",
-      description: `${formatCurrency(transaction.amount)} · ${transaction.merchant}`,
-      action: {
-        label: "Undo",
-        onClick: () => {
-          const pending = deleteTimers.current.get(transaction.id);
-          if (pending) {
-            window.clearTimeout(pending);
-            deleteTimers.current.delete(transaction.id);
-          }
-          setPendingDeleteIds((current) => {
-            const next = new Set(current);
-            next.delete(transaction.id);
-            return next;
-          });
-          notify({ title: "Transaction restored" });
-        },
-      },
-      duration: 5000,
-    });
-
-    return Promise.resolve();
+    try {
+      await deleteTransaction(transaction.id);
+      // Cascade: drop linked outing_expenses + recompute trip total in DB.
+      await afterTransactionRemovedFromOuting(user?.id, transaction, {
+        previousOutingId: transaction.outingId,
+      });
+      await invalidateFinancialData(queryClient, user?.id, {
+        outingId: transaction.outingId ?? undefined,
+      });
+      notify({
+        title: "Transaction deleted successfully.",
+        description: `${formatCurrency(transaction.amount)} · ${transaction.merchant}`,
+      });
+    } catch (err) {
+      setPendingDeleteIds((current) => {
+        const next = new Set(current);
+        next.delete(transaction.id);
+        return next;
+      });
+      notify({
+        title: "Couldn't delete transaction.",
+        description: err instanceof Error ? err.message : "Server failed to delete.",
+        variant: "destructive",
+      });
+    }
   }
 
   function requestDelete(transaction: Transaction) {
@@ -599,6 +607,45 @@ export function TransactionsPage() {
         </div>
       </div>
 
+      {unverifiedCount > 0 && !share ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 shadow-xs">
+          <div className="flex items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400">
+              <Zap className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                {unverifiedCount} Unverified {unverifiedCount === 1 ? "transaction" : "transactions"} detected
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Uploaded via mobile sync. Excluded from totals until verified, edited, or rejected.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-center">
+            {filters.status === "unverified" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => updateFilter("status", "")}
+              >
+                Show All
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs font-semibold border-amber-500/30 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                onClick={() => updateFilter("status", "unverified")}
+              >
+                Review Unverified ({unverifiedCount})
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       <TransactionFilters
         filters={filters}
         isSharedView={Boolean(share)}
@@ -632,6 +679,8 @@ export function TransactionsPage() {
           transactions={pageTransactions}
           onClearFilters={handleResetFilters}
           onSelect={handleSelectTransaction}
+          onVerify={isReadOnlyViewer ? undefined : handleVerify}
+          onReject={isReadOnlyViewer ? undefined : handleReject}
         />
         <TransactionsPagination
           currentPage={safeCurrentPage}
@@ -662,6 +711,8 @@ export function TransactionsPage() {
         open={detailOpen}
         transaction={selectedTransaction}
         onDelete={isReadOnlyViewer ? undefined : requestDelete}
+        onVerify={isReadOnlyViewer ? undefined : handleVerify}
+        onReject={isReadOnlyViewer ? undefined : handleReject}
         onEdit={
           isReadOnlyViewer
             ? undefined

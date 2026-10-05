@@ -30,6 +30,15 @@ export function isInvestmentTransaction(
   transaction: Transaction,
   categories: Category[] = [],
 ) {
+  if (
+    transaction.isActive === false ||
+    Boolean(transaction.deletedAt) ||
+    transaction.status === "unverified" ||
+    transaction.status === "rejected" ||
+    transaction.status === "deleted"
+  ) {
+    return false;
+  }
   if (transaction.type !== "expense") return false;
   if (isTransferTransaction(transaction)) return false;
   if (isOutingRollupLike(transaction)) return false;
@@ -68,6 +77,15 @@ const REIMBURSEMENT_CATEGORIES = new Set([
  * expense reversal instead.
  */
 export function isReimbursementTransaction(transaction: Transaction) {
+  if (
+    transaction.isActive === false ||
+    Boolean(transaction.deletedAt) ||
+    transaction.status === "unverified" ||
+    transaction.status === "rejected" ||
+    transaction.status === "deleted"
+  ) {
+    return false;
+  }
   if (transaction.type !== "income") return false;
   const category = (transaction.category ?? "").trim().toLowerCase();
   const tags = transaction.tags ?? [];
@@ -110,6 +128,15 @@ export function isOutingRollupLike(transaction: Transaction) {
  */
 export function isSpendingExpense(transaction: Transaction, categories: Category[] = []) {
   void categories; // kept for call-site compatibility
+  if (
+    transaction.isActive === false ||
+    Boolean(transaction.deletedAt) ||
+    transaction.status === "unverified" ||
+    transaction.status === "rejected" ||
+    transaction.status === "deleted"
+  ) {
+    return false;
+  }
   return (
     transaction.type === "expense" &&
     !isTransferTransaction(transaction) &&

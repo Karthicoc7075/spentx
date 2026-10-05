@@ -7,6 +7,7 @@ import {
   LineChart,
   Plus,
   Settings2,
+  Zap,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useEffect, type ReactNode } from "react";
@@ -176,6 +177,13 @@ export function DashboardPage() {
   const activeOuting = useMemo(
     () => outings.find((o) => isOutingActive(o) && o.isActive !== false && !o.deletedAt),
     [outings],
+  );
+  const unverifiedTransactionsCount = useMemo(
+    () =>
+      transactions.filter(
+        (tx) => tx.status === "unverified" && tx.isActive !== false && !tx.deletedAt,
+      ).length,
+    [transactions],
   );
   const { filters, updateFilter } = useGlobalFilters();
   const { isReadOnlyViewer } = useViewerAccess();
@@ -457,6 +465,32 @@ export function DashboardPage() {
           )
         }
       </header>
+
+      {unverifiedTransactionsCount > 0 && !isReadOnlyViewer ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 shadow-xs">
+          <div className="flex items-center gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-amber-600 dark:text-amber-400">
+              <Zap className="size-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                {unverifiedTransactionsCount} Unverified {unverifiedTransactionsCount === 1 ? "transaction" : "transactions"} detected
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Uploaded via mobile sync. Excluded from confirmed balances until verified.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs font-semibold border-amber-500/30 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300 self-end sm:self-center"
+            onClick={() => router.push("/transactions")}
+          >
+            Review on Transactions →
+          </Button>
+        </div>
+      ) : null}
 
       {activeOuting && !isReadOnlyViewer ? (
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 space-y-3">

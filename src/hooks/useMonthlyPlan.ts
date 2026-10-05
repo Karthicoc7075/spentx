@@ -286,6 +286,15 @@ export function useMonthlyPlan(
     const categorySpentMap: Record<string, number> = {};
     
     purposeTransactions.forEach((tx) => {
+      if (
+        tx.isActive === false ||
+        Boolean(tx.deletedAt) ||
+        tx.status === "unverified" ||
+        tx.status === "rejected" ||
+        tx.status === "deleted"
+      ) {
+        return;
+      }
       const txDate = new Date(tx.transactionDate ?? tx.date ?? "");
       if (txDate >= thirtyDaysAgo) {
         if (tx.type === "income") {

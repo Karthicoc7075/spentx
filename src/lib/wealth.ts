@@ -34,6 +34,15 @@ export function isOpeningBalanceTransaction(transaction: Transaction) {
  * Ledger rows that must NOT move account balance / net worth.
  */
 export function isBalanceExcludedTransaction(transaction: Transaction) {
+  if (
+    transaction.isActive === false ||
+    Boolean(transaction.deletedAt) ||
+    transaction.status === "unverified" ||
+    transaction.status === "rejected" ||
+    transaction.status === "deleted"
+  ) {
+    return true;
+  }
   if (isOpeningBalanceTransaction(transaction)) return true;
   if (isOutingRollupTransaction(transaction)) return true;
   return false;
@@ -139,7 +148,7 @@ export function computeAccountBalancesMap(
   const len = transactions.length;
   for (let i = 0; i < len; i++) {
     const tx = transactions[i];
-    if (isOpeningBalanceTransaction(tx)) continue;
+    if (isBalanceExcludedTransaction(tx)) continue;
     if (isOutingRollupTransaction(tx)) {
       if (
         (tx.outingId && outingIdsWithIndividualTx.has(tx.outingId)) ||
@@ -210,7 +219,7 @@ export function getAccountBalance(
 
   for (let i = 0; i < len; i++) {
     const tx = transactions[i];
-    if (isOpeningBalanceTransaction(tx)) continue;
+    if (isBalanceExcludedTransaction(tx)) continue;
     if (isOutingRollupTransaction(tx)) {
       if (
         (tx.outingId && outingIdsWithIndividualTx.has(tx.outingId)) ||

@@ -43,6 +43,8 @@ export type EntrySource = "manual" | "mobile-manual" | "sms-auto-detected";
 export type TransactionStatus =
   | "completed"
   | "pending"
+  | "unverified"
+  | "rejected"
   | "failed"
   | "refunded"
   | "deleted";
@@ -119,6 +121,8 @@ export type Transaction = {
   /** Flutter/Android field — mapped to type on read */
   isExpense?: boolean;
   isAutoDetected?: boolean;
+  /** Deduplication key from hybrid sync detection: user + bank + account + amount + type + ref + time */
+  detectionKey?: string;
   receiptImageUrl?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -463,6 +467,7 @@ export type GlobalFilters = {
   purposeId: string;
   contributorSource: "" | ContributorSource;
   specificMonth: string;
+  status?: "" | "all" | "completed" | "unverified";
 };
 
 export type AnalyticsDatePreset =

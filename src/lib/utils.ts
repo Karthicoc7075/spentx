@@ -446,7 +446,8 @@ export function hasActiveTransactionFilters(filters: GlobalFilters) {
       filters.maxAmount ||
       filters.transactionType ||
       filters.purposeId ||
-      filters.contributorSource,
+      filters.contributorSource ||
+      (filters.status && filters.status !== "all"),
   );
 }
 
@@ -491,8 +492,18 @@ export function filterTransactions(
       ""
     ).toLowerCase();
 
+    const matchesStatus =
+      !filters.status ||
+      filters.status === "all" ||
+      (filters.status === "unverified"
+        ? transaction.status === "unverified"
+        : transaction.status !== "unverified" &&
+          transaction.status !== "rejected" &&
+          transaction.status !== "deleted");
+
     return (
       matchesDate &&
+      matchesStatus &&
       matchingTransactionSplits(transaction, filters, purposes).length > 0 &&
       matchesAccount &&
       (!filters.source || matchesTransactionSource(transaction, filters.source)) &&

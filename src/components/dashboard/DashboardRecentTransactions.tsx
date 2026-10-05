@@ -97,6 +97,11 @@ export function DashboardRecentTransactions({
                         {displayTitle.itemsLabel}
                       </span>
                     ) : null}
+                    {tx.status === "unverified" ? (
+                      <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400 border border-amber-500/30 animate-pulse">
+                        Unverified
+                      </span>
+                    ) : null}
                     <span
                       className={cn(
                         "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold",

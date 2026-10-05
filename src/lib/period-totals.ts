@@ -44,7 +44,23 @@ export function isInPeriodRange(rawDate: string | undefined | null, range?: Peri
   return true;
 }
 
+/**
+ * Returns true if a transaction is confirmed and active.
+ * Unverified (detected but not yet approved by user), rejected, or soft-deleted
+ * transactions must never count towards confirmed finance totals.
+ */
+export function isConfirmedTransaction(transaction: Transaction) {
+  if (transaction.isActive === false || Boolean(transaction.deletedAt)) return false;
+  return (
+    transaction.status !== "unverified" &&
+    transaction.status !== "rejected" &&
+    transaction.status !== "failed" &&
+    transaction.status !== "deleted"
+  );
+}
+
 export function isPeriodIncome(transaction: Transaction) {
+  if (!isConfirmedTransaction(transaction)) return false;
   if (transaction.type !== "income") return false;
   if (isReimbursementTransaction(transaction)) return false;
   const cat = (transaction.category ?? "").trim().toLowerCase();
@@ -67,6 +83,7 @@ export function isPeriodExpense(
   _categories: Category[] = [],
   options: { includeOutingExpenses?: boolean } = {},
 ) {
+  if (!isConfirmedTransaction(transaction)) return false;
   // Includes Investment category (normal cash outflow).
   if (transaction.type !== "expense") return false;
   if (isTransferTransaction(transaction)) return false;
@@ -189,6 +206,7 @@ export function sumPeriodGrossExpense(
   const countedRollupOutings = new Set<string>();
 
   const ledgerSpend = scoped.reduce((sum, tx) => {
+    if (!isConfirmedTransaction(tx)) return sum;
     if (tx.type !== "expense") return sum;
     if (isTransferTransaction(tx)) return sum;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { MapPin, ReceiptText } from "lucide-react";
+import { Check, MapPin, ReceiptText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -42,10 +42,12 @@ type TransactionsLedgerTableProps = {
   matchedLabels?: string[];
   onSelect?: (transaction: Transaction) => void;
   onClearFilters?: () => void;
+  onVerify?: (transaction: Transaction) => void;
+  onReject?: (transaction: Transaction) => void;
 };
 
 type TransactionBadge = {
-  label: "Split Expense" | "Friend Split" | "Outing";
+  label: "Split Expense" | "Friend Split" | "Outing" | "Unverified";
   className: string;
 };
 
@@ -53,6 +55,8 @@ const badgePurple =
   "bg-primary/10 text-primary border border-primary/20";
 const badgeGreen =
   "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20";
+const badgeAmber =
+  "bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 animate-pulse";
 
 /**
  * Badge for the special transaction types only. Normal transactions are the
@@ -62,6 +66,9 @@ function getTransactionBadge(
   transaction: Transaction,
   friendSplitTransactionIds: Set<string>,
 ): TransactionBadge | null {
+  if (transaction.status === "unverified") {
+    return { label: "Unverified", className: badgeAmber };
+  }
   // A friend split is standalone — it never carries an outingId.
   if (friendSplitTransactionIds.has(transaction.id)) {
     return { label: "Friend Split", className: badgeGreen };
@@ -90,6 +97,8 @@ export function TransactionsLedgerTable({
   matchedLabels = [],
   onSelect,
   onClearFilters,
+  onVerify,
+  onReject,
 }: TransactionsLedgerTableProps) {
   const { purposes } = usePurposes();
   const { splits: friendSplits } = useFriendSplits();
@@ -171,7 +180,11 @@ export function TransactionsLedgerTable({
             return (
               <TableRow
                 key={transaction.id}
-                className="cursor-pointer border-border/60 hover:bg-muted/40"
+                className={cn(
+                  "cursor-pointer border-border/60 hover:bg-muted/40 transition-colors",
+                  transaction.status === "unverified" &&
+                    "bg-amber-500/[0.04] dark:bg-amber-500/[0.07] hover:bg-amber-500/[0.09] border-l-2 border-l-amber-500",
+                )}
                 onClick={() => onSelect?.(transaction)}
               >
                 <TableCell className="whitespace-nowrap px-4 text-muted-foreground">
@@ -291,22 +304,57 @@ export function TransactionsLedgerTable({
                   ) : null}
                 </TableCell>
                 <TableCell className="whitespace-nowrap pr-4 text-right">
-                  <span
-                    className={cn(
-                      "inline-flex shrink-0 text-sm font-bold tabular-nums",
-                      isIncome
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-foreground",
-                    )}
-                  >
-                    {isIncome ? "+" : "−"}
-                    {formatCurrency(amount, privateMode)}
-                  </span>
-                  {isPartialMatch ? (
-                    <span className="block text-[11px] font-medium text-muted-foreground tabular-nums">
-                      of {formatCurrency(total, privateMode)}
+                  <div className="flex flex-col items-end">
+                    <span
+                      className={cn(
+                        "inline-flex shrink-0 text-sm font-bold tabular-nums",
+                        transaction.status === "unverified"
+                          ? "text-amber-600 dark:text-amber-400"
+                          : isIncome
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-foreground",
+                      )}
+                    >
+                      {isIncome ? "+" : "−"}
+                      {formatCurrency(amount, privateMode)}
                     </span>
-                  ) : null}
+                    {isPartialMatch ? (
+                      <span className="block text-[11px] font-medium text-muted-foreground tabular-nums">
+                        of {formatCurrency(total, privateMode)}
+                      </span>
+                    ) : null}
+                    {transaction.status === "unverified" && (onVerify || onReject) ? (
+                      <div
+                        className="mt-1.5 flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {onVerify ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 gap-1 px-2 text-[10px] font-semibold text-emerald-600 border-emerald-500/30 hover:bg-emerald-500/10 dark:text-emerald-400"
+                            onClick={() => onVerify(transaction)}
+                            title="Verify & confirm transaction"
+                          >
+                            <Check className="size-3" />
+                            Verify
+                          </Button>
+                        ) : null}
+                        {onReject ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 gap-1 px-2 text-[10px] font-semibold text-rose-600 border-rose-500/30 hover:bg-rose-500/10 dark:text-rose-400"
+                            onClick={() => onReject(transaction)}
+                            title="Reject & remove transaction"
+                          >
+                            <X className="size-3" />
+                            Reject
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </TableCell>
               </TableRow>
             );

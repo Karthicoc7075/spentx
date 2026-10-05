@@ -115,6 +115,15 @@ export function sumVisibleSpending(transactions: Transaction[]) {
   const countedRollupOutings = new Set<string>();
 
   return transactions.reduce((sum, transaction) => {
+    if (
+      transaction.isActive === false ||
+      Boolean(transaction.deletedAt) ||
+      transaction.status === "unverified" ||
+      transaction.status === "rejected" ||
+      transaction.status === "deleted"
+    ) {
+      return sum;
+    }
     if (transaction.type !== "expense") return sum;
     if (isTransferTransaction(transaction)) return sum;
     // Investment category counts as cash outflow (same as Top Categories / Period Outflow).

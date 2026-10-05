@@ -23,6 +23,7 @@ export function createDefaultGlobalFilters(
     purposeId: "",
     contributorSource: "",
     specificMonth: currentMonth,
+    status: "",
     ...overrides,
   };
 }

@@ -144,6 +144,11 @@ export function computeCategorySpentActuals(
   const map: Record<string, number> = {};
   transactions.forEach((transaction) => {
     if (
+      transaction.isActive !== false &&
+      !transaction.deletedAt &&
+      transaction.status !== "unverified" &&
+      transaction.status !== "rejected" &&
+      transaction.status !== "deleted" &&
       (transaction.transactionDate ?? transaction.date ?? "").startsWith(month) &&
       transaction.type === "expense" &&
       !isTransferTransaction(transaction)

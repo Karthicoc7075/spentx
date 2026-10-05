@@ -64,6 +64,12 @@ const typeOptions: Array<{ value: "" | TransactionType; label: string }> = [
   { value: "expense", label: "Expense" },
 ];
 
+const statusOptions = [
+  { value: "", label: "All statuses" },
+  { value: "completed", label: "Confirmed only" },
+  { value: "unverified", label: "Unverified only" },
+] as const;
+
 const selectClassName =
   "h-9 w-full rounded-xl border border-input bg-card px-3 text-sm text-foreground transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
 
@@ -347,6 +353,31 @@ export function TransactionFilters({
               {sourceOptions.map((source) => (
                 <option key={source.value || "all"} value={source.value}>
                   {source.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
+        {!isSharedView ? (
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground" htmlFor="status-filter">
+              Status
+            </Label>
+            <select
+              id="status-filter"
+              className={selectClassName}
+              value={filters.status ?? ""}
+              onChange={(event) =>
+                updateFilter(
+                  "status",
+                  event.target.value as GlobalFilters["status"],
+                )
+              }
+            >
+              {statusOptions.map((status) => (
+                <option key={status.value || "all"} value={status.value}>
+                  {status.label}
                 </option>
               ))}
             </select>

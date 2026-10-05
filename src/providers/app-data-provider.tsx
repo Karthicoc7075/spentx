@@ -17,6 +17,8 @@ import {
   addTransaction,
   deleteTransaction,
   updateTransaction,
+  verifyTransaction,
+  rejectTransaction,
   fetchAccounts,
   fetchPurposes,
   fetchTransactions,
@@ -27,6 +29,7 @@ import {
   deleteOuting,
 } from "@/lib/supabase-data";
 import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
+import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { isOutingActive } from "@/lib/outing-display";
 import { useAutoBackup } from "@/hooks/useAutoBackup";
 import { useApplyUserPreferences } from "@/hooks/useApplyUserPreferences";
@@ -59,6 +62,8 @@ type AppDataContextValue = {
     transaction: Partial<Transaction>;
   }) => Promise<void>;
   deleteTransaction: (id: string) => Promise<void>;
+  verifyTransaction: (id: string) => Promise<void>;
+  rejectTransaction: (id: string) => Promise<void>;
   addOuting: (
     outing: Omit<Outing, "id" | "userId" | "createdAt" | "updatedAt">,
   ) => Promise<Outing>;
@@ -511,6 +516,48 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     },
   });
 
+  const verifyMutation = useMutation({
+    mutationFn: (id: string) => {
+      assertCanMutate(isReadOnlyViewer);
+      return verifyTransaction(user?.id, id);
+    },
+    onSuccess: (_, id) => {
+      setTransactions((current) => {
+        const next = current.map((t) => (t.id === id ? { ...t, status: "completed" as const } : t));
+        transactionsRef.current = next;
+        if (user?.id) {
+          queryClient.setQueryData(queryKeys.transactions(user.id), next);
+          writeQueryCache(user.id, cacheKeys.transactions, next);
+        }
+        return next;
+      });
+      if (user?.id) {
+        void invalidateFinancialData(queryClient, user.id);
+      }
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: (id: string) => {
+      assertCanMutate(isReadOnlyViewer);
+      return rejectTransaction(user?.id, id);
+    },
+    onSuccess: (_, id) => {
+      setTransactions((current) => {
+        const next = current.filter((t) => t.id !== id);
+        transactionsRef.current = next;
+        if (user?.id) {
+          queryClient.setQueryData(queryKeys.transactions(user.id), next);
+          writeQueryCache(user.id, cacheKeys.transactions, next);
+        }
+        return next;
+      });
+      if (user?.id) {
+        void invalidateFinancialData(queryClient, user.id);
+      }
+    },
+  });
+
   const reloadTransactions = useCallback(async () => {
     if (!effectiveUserId) return;
 
@@ -548,6 +595,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       addTransaction: addMutation.mutateAsync,
       updateTransaction: updateMutation.mutateAsync,
       deleteTransaction: deleteMutation.mutateAsync,
+      verifyTransaction: verifyMutation.mutateAsync,
+      rejectTransaction: rejectMutation.mutateAsync,
       addOuting: async (outing) => {
         assertCanMutate(isReadOnlyViewer);
         // Only one active outing at a time (matches mobile).
@@ -625,13 +674,17 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       isTransactionsMutating:
         addMutation.isPending ||
         updateMutation.isPending ||
-        deleteMutation.isPending,
+        deleteMutation.isPending ||
+        verifyMutation.isPending ||
+        rejectMutation.isPending,
       lastSyncedAt,
       reloadTransactions,
     }),
     [
       addMutation,
       deleteMutation,
+      verifyMutation,
+      rejectMutation,
       lastSyncedAt,
       outings,
       outingsLoading,

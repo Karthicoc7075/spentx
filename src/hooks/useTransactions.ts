@@ -44,6 +44,8 @@ export function useTransactions() {
     addTransaction,
     updateTransaction,
     deleteTransaction,
+    verifyTransaction,
+    rejectTransaction,
     isTransactionsMutating,
     reloadTransactions,
     lastSyncedAt,
@@ -77,6 +79,8 @@ export function useTransactions() {
     addTransaction,
     updateTransaction,
     deleteTransaction,
+    verifyTransaction,
+    rejectTransaction,
     isMutating: isTransactionsMutating,
     reloadTransactions: async () => {
       await reloadTransactions();

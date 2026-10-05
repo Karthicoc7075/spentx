@@ -61,6 +61,7 @@ import type {
   SmsDetectionRule,
   SmsTemplateRule,
   Transaction,
+  TransactionStatus,
   UserDocument,
   UserMerchant,
   UserProfile,
@@ -360,7 +361,13 @@ function toTransaction(row: Row): Transaction {
     items: mappedItems.length > 0 ? mappedItems : undefined,
     hasItems: row.has_items ?? mappedItems.length > 0,
     outingId: row.outing_id ?? undefined,
-    status: row.status ?? "completed",
+    status: (row.status ?? "completed") as TransactionStatus,
+    isAutoDetected:
+      row.is_auto_detected === true ||
+      row.entry_source === "sms-auto-detected" ||
+      row.status === "unverified" ||
+      Boolean(Array.isArray(row.tags) && (row.tags as string[]).includes("auto-detected")),
+    detectionKey: row.detection_key ? String(row.detection_key) : undefined,
     tags: row.tags ?? undefined,
     receiptImageUrl: row.receipt_url ?? undefined,
     createdAt: row.created_at ?? undefined,
@@ -407,6 +414,8 @@ function transactionParentPayload(transaction: Partial<Transaction> & Row): Row 
       transaction.reference?.trim() ||
       undefined,
     status: transaction.status ?? "completed",
+    isAutoDetected: transaction.isAutoDetected,
+    detectionKey: transaction.detectionKey,
     tags: transaction.tags,
     outingId: transaction.outingId,
   });
@@ -432,6 +441,8 @@ function transactionRowPayload(userId: string | undefined, transaction: Partial<
     upi: payload.upi ?? null,
     raw_identifier: payload.rawIdentifier ?? null,
     status: payload.status,
+    is_auto_detected: payload.isAutoDetected ?? (payload.status === "unverified" || payload.entrySource === "sms-auto-detected"),
+    detection_key: payload.detectionKey ?? null,
     tags: payload.tags,
     // Explicit null clears an outing link on update (unlink).
     outing_id: isUuid(payload.outingId)
@@ -1324,6 +1335,44 @@ export async function deleteTransaction(userId: string | undefined, transactionI
     client()
       .from("transactions")
       .update({ is_active: false, deleted_at: now, deleted_by: userId })
+      .eq("user_id", userId)
+      .eq("id", transactionId),
+  );
+}
+
+/**
+ * Confirms an unverified detected transaction, marking it 'completed'.
+ * Supabase touch_updated_at trigger automatically updates updated_at,
+ * broadcasting via Supabase Realtime immediately to an open mobile app,
+ * and making it available via delta sync when a closed mobile app opens.
+ */
+export async function verifyTransaction(userId: string | undefined, transactionId: string) {
+  if (!userId) {
+    throw new Error("Sign in before verifying transactions.");
+  }
+  const now = nowIso();
+  await throwIfError(
+    client()
+      .from("transactions")
+      .update({ status: "completed", updated_at: now })
+      .eq("user_id", userId)
+      .eq("id", transactionId),
+  );
+}
+
+/**
+ * Rejects an unverified detected transaction, soft-deleting it with status='rejected'.
+ * Rejection reaches an open mobile app via Realtime, and reaches a closed app via delta sync.
+ */
+export async function rejectTransaction(userId: string | undefined, transactionId: string) {
+  if (!userId) {
+    throw new Error("Sign in before rejecting transactions.");
+  }
+  const now = nowIso();
+  await throwIfError(
+    client()
+      .from("transactions")
+      .update({ is_active: false, deleted_at: now, deleted_by: userId, status: "rejected", updated_at: now })
       .eq("user_id", userId)
       .eq("id", transactionId),
   );

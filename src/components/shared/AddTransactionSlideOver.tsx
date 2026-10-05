@@ -1053,7 +1053,7 @@ export function AddTransactionSlideOver({
         transactionDate: isoDate,
         paymentMethod,
         paymentType: paymentMethod,
-        status: initialValues?.status ?? "completed",
+        status: initialValues?.status === "unverified" ? "completed" : (initialValues?.status ?? "completed"),
         reference: merchantIdentifier,
         referenceId: merchantIdentifier,
         // Always store identifier in upiId for cross-platform merchant matching.
@@ -2430,26 +2430,15 @@ export function AddTransactionSlideOver({
               <span />
             )}
             <div className="grid w-full min-w-0 grid-cols-1 gap-2 min-[430px]:grid-cols-2 sm:flex sm:w-auto sm:items-center sm:justify-end">
-              {!initialValues && !initialExpense && ownerMode !== "trip" && !friendSplitEnabled ? (
-                <Button
-                  className="w-full px-3 text-xs sm:w-auto sm:px-4 sm:text-sm"
-                  disabled={
-                    isSaving ||
-                    isSubmitting ||
-                    tripSubmitting ||
-                    friendSplitSubmitting ||
-                    !splitSectionValid
-                  }
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    void handleSubmit(submitAndAddAnother)();
-                  }}
-                >
-                  <Plus className="mr-1.5 size-3.5" />
-                  Save & Add Another
-                </Button>
-              ) : null}
+              <Button
+                className="w-full px-3 text-xs sm:w-auto sm:px-4 sm:text-sm"
+                disabled={isSaving || isSubmitting || tripSubmitting || friendSplitSubmitting}
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
               <Button
                 className={cn("w-full text-xs sm:w-auto sm:px-8 sm:text-sm", typeMeta.accent.button)}
                 disabled={

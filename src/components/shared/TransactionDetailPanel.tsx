@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 import {
+  AlertCircle,
   Check,
   CalendarClock,
   CreditCard,
@@ -20,6 +21,7 @@ import {
   UserRound,
   Users,
   Wallet,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -65,6 +67,8 @@ type TransactionDetailPanelProps = {
   onOpenChange: (open: boolean) => void;
   onEdit: (transaction: Transaction) => void;
   onDelete: (transaction: Transaction) => void;
+  onVerify?: (transaction: Transaction) => void;
+  onReject?: (transaction: Transaction) => void;
   /** Receives the user's choice from the unlink dialog — "split" additionally
    * expects the caller to open Split Expense on this transaction. */
   onUnlinkOuting?: (
@@ -83,6 +87,8 @@ export function TransactionDetailPanel({
   onOpenChange,
   onDelete,
   onEdit,
+  onVerify,
+  onReject,
   onUnlinkOuting,
   outingExpenses = [],
   activeFilters,
@@ -300,7 +306,24 @@ export function TransactionDetailPanel({
                   Investment
                 </Badge>
               ) : null}
+              {transaction.status === "unverified" ? (
+                <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-semibold">
+                  Unverified
+                </Badge>
+              ) : null}
             </div>
+
+            {transaction.status === "unverified" ? (
+              <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-300">
+                <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="font-semibold">Unverified Detected Transaction</p>
+                  <p className="mt-0.5 text-amber-800/90 dark:text-amber-400/90 leading-relaxed">
+                    Auto-detected via mobile sync. Excluded from confirmed spending and account balances until verified.
+                  </p>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -491,15 +514,58 @@ export function TransactionDetailPanel({
         </div>
 
         {!isReadOnlyViewer ? (
-          <SheetFooter className="border-t px-6 py-4">
-            <Button variant="outline" onClick={() => onEdit(transaction)}>
-              <Pencil className="size-4" />
-              Edit
-            </Button>
-            <Button variant="destructive" onClick={() => onDelete(transaction)}>
-              <Trash2 className="size-4" />
-              Delete
-            </Button>
+          <SheetFooter className="border-t px-6 py-4 flex flex-row flex-wrap items-center justify-between gap-2">
+            {transaction.status === "unverified" ? (
+              <>
+                <div className="flex items-center gap-2">
+                  {onVerify ? (
+                    <Button
+                      variant="default"
+                      className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-xs"
+                      onClick={() => {
+                        onVerify(transaction);
+                        onOpenChange(false);
+                      }}
+                    >
+                      <Check className="size-4" />
+                      Verify
+                    </Button>
+                  ) : null}
+                  <Button variant="outline" onClick={() => onEdit(transaction)}>
+                    <Pencil className="size-4" />
+                    Edit
+                  </Button>
+                </div>
+                {onReject ? (
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      onReject(transaction);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <X className="size-4" />
+                    Reject
+                  </Button>
+                ) : (
+                  <Button variant="destructive" onClick={() => onDelete(transaction)}>
+                    <Trash2 className="size-4" />
+                    Delete
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => onEdit(transaction)}>
+                  <Pencil className="size-4" />
+                  Edit
+                </Button>
+                <Button variant="destructive" onClick={() => onDelete(transaction)}>
+                  <Trash2 className="size-4" />
+                  Delete
+                </Button>
+              </>
+            )}
           </SheetFooter>
         ) : null}
       </SheetContent>
