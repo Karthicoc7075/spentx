@@ -370,6 +370,8 @@ function toTransaction(row: Row): Transaction {
     detectionKey: row.detection_key ? String(row.detection_key) : undefined,
     tags: row.tags ?? undefined,
     receiptImageUrl: row.receipt_url ?? undefined,
+    isActive: row.is_active ?? true,
+    deletedAt: row.deleted_at ?? undefined,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
     contributorSource: split?.contributor_id ?? undefined,
@@ -1324,17 +1326,22 @@ export async function deleteTransaction(userId: string | undefined, transactionI
   const now = nowIso();
   // Soft delete matches mobile: is_active = false, deleted_at = now
   // Related friend_splits are also soft-deleted so friend balance remains consistent.
-  await throwIfError(
-    client()
-      .from("friend_splits")
-      .update({ is_active: false, deleted_at: now, deleted_by: userId })
-      .eq("user_id", userId)
-      .eq("transaction_id", transactionId),
-  );
+  try {
+    await throwIfError(
+      client()
+        .from("friend_splits")
+        .update({ is_active: false, deleted_at: now, deleted_by: userId })
+        .eq("user_id", userId)
+        .eq("transaction_id", transactionId),
+    );
+  } catch (err) {
+    console.warn("Could not soft-delete friend_splits for transaction:", err);
+  }
+
   await throwIfError(
     client()
       .from("transactions")
-      .update({ is_active: false, deleted_at: now, deleted_by: userId })
+      .update({ is_active: false, deleted_at: now })
       .eq("user_id", userId)
       .eq("id", transactionId),
   );
@@ -1372,7 +1379,7 @@ export async function rejectTransaction(userId: string | undefined, transactionI
   await throwIfError(
     client()
       .from("transactions")
-      .update({ is_active: false, deleted_at: now, deleted_by: userId, status: "rejected", updated_at: now })
+      .update({ is_active: false, deleted_at: now, status: "rejected", updated_at: now })
       .eq("user_id", userId)
       .eq("id", transactionId),
   );

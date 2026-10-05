@@ -108,6 +108,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const prefetchedRef = useRef<string | undefined>(undefined);
   const transactionsRef = useRef<Transaction[]>([]);
+  const localDeletedTxIdsRef = useRef<Set<string>>(new Set());
 
   // Automatic backups (weekly + debounced on-change). Only for the signed-in
   // owner — read-only viewers must not back up someone else's data. Admins
@@ -237,20 +238,26 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       userId,
       (next) => {
         hydrateTransactions(next);
+        if (userId) {
+          void invalidateFinancialData(queryClient, userId);
+        }
       },
       (error) => {
         setTransactionsError(error);
         setTransactionsLoading(false);
       },
       (deletedTx) => {
-        const merchant = deletedTx.merchant?.trim() || "Transaction";
-        const amtStr = deletedTx.amount
-          ? ` (-₹${deletedTx.amount.toLocaleString("en-IN")})`
-          : "";
-        notify({
-          title: "Transaction deleted",
-          description: `You deleted ${merchant}${amtStr}`,
-        });
+        const isSelfInitiated = localDeletedTxIdsRef.current.has(deletedTx.id);
+        if (!isSelfInitiated) {
+          const merchant = deletedTx.merchant?.trim() || "Transaction";
+          const amtStr = deletedTx.amount
+            ? ` (-₹${deletedTx.amount.toLocaleString("en-IN")})`
+            : "";
+          notify({
+            title: "Transaction deleted",
+            description: `${merchant}${amtStr}`,
+          });
+        }
 
         // Instantly purge from memory state, query client, and local storage cache
         setTransactions((prev) => {
@@ -260,6 +267,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           queryClient.setQueryData(queryKeys.transactions(userId), next);
           return next;
         });
+        if (userId) {
+          void invalidateFinancialData(queryClient, userId);
+        }
       },
     );
 
@@ -423,6 +433,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         if (user?.id) {
           queryClient.setQueryData(queryKeys.transactions(user.id), finalNext);
           writeQueryCache(user.id, cacheKeys.transactions, finalNext);
+          void invalidateFinancialData(queryClient, user.id);
         }
         return finalNext;
       });
@@ -477,6 +488,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         if (user?.id) {
           queryClient.setQueryData(queryKeys.transactions(user.id), next);
           writeQueryCache(user.id, cacheKeys.transactions, next);
+          void invalidateFinancialData(queryClient, user.id);
         }
         return next;
       });
@@ -486,6 +498,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => {
       assertCanMutate(isReadOnlyViewer);
+      localDeletedTxIdsRef.current.add(id);
+      setTimeout(() => {
+        localDeletedTxIdsRef.current.delete(id);
+      }, 10000);
       return deleteTransaction(user?.id, id);
     },
     onSuccess: (_, id) => {
@@ -512,6 +528,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({
           queryKey: queryKeys.allFriendSettlements(user.id),
         });
+        void invalidateFinancialData(queryClient, user.id);
       }
     },
   });
