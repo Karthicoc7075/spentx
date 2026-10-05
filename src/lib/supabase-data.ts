@@ -1593,16 +1593,11 @@ export async function createPurposeShare(
   );
 }
 
-export async function sendEmail(payload: {
-  to: string;
-  subject: string;
-  html: string;
-  text?: string;
-}) {
+async function sendShareInvite(token: string) {
   const response = await fetch("/api/send-email", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ token }),
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
@@ -1623,12 +1618,9 @@ export async function sendPurposeShareInviteEmail(params: {
   purposeName: string;
   shareUrl?: string;
 }) {
-  const ownerName = params.ownerName ?? params.inviterName ?? "SpentX";
-  return sendEmail({
-    to: params.to ?? params.viewerEmail ?? "",
-    subject: `${ownerName} shared ${params.purposeName} with you`,
-    html: `<p>${ownerName} shared a SpentX purpose with you.</p><p><a href="${params.shareUrl ?? "#"}">Open shared view</a></p>`,
-  });
+  const token = params.shareUrl ? new URL(params.shareUrl).pathname.split("/").pop() : "";
+  if (!token) throw new Error("A share link is required.");
+  return sendShareInvite(token);
 }
 
 export async function getOrCreateShareLink(params: {
