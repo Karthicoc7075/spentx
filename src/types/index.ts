@@ -721,6 +721,11 @@ export type SavingsGoal = {
   targetAmount: number;
   savedAmount: number;
   monthlyContribution?: number;
+  isActive?: boolean;
+  deletedAt?: string;
+  targetDate?: string;
+  color?: string;
+  icon?: string;
   createdAt?: string;
   updatedAt?: string;
 };

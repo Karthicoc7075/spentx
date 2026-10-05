@@ -15,6 +15,7 @@ import {
   getOutingCandidatesForTransaction,
   isWithinOutingDates,
 } from "@/lib/outing-sync";
+import { getLocalTodayDateStr } from "@/lib/outing-display";
 import {
   buildOutingRollupDraft,
   computeOutingRollupAmount,
@@ -84,7 +85,7 @@ export function useOutingTransactionSync() {
         if (runningRef.current) return;
         runningRef.current = true;
         try {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = getLocalTodayDateStr();
           const activeAutoOutings = outings.filter(
             (outing) =>
               outing.status === "active" &&
@@ -105,7 +106,11 @@ export function useOutingTransactionSync() {
                 ? outing.endDate.slice(0, 10)
                 : outing.startDate.slice(0, 10);
               if (end && today > end) {
-                void saveOuting(user.id, { ...outing, status: "completed" }).catch(() => {});
+                void saveOuting(user.id, {
+                  ...outing,
+                  status: "completed",
+                  isActive: false,
+                }).catch(() => {});
               }
             }
           }

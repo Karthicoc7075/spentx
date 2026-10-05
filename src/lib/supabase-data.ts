@@ -1272,6 +1272,7 @@ export async function addTransaction(
   broadcastUserSyncEvent(userId, "transaction-changed", {
     op: "insert",
     id: transactionId,
+    source: "web",
   });
 
   return created;
@@ -1412,6 +1413,7 @@ export async function updateTransaction(
   broadcastUserSyncEvent(userId, "transaction-changed", {
     op: "update",
     id: transactionId,
+    source: "web",
   });
 }
 
@@ -1484,6 +1486,23 @@ export async function deleteTransaction(userId: string | undefined, transactionI
             .eq("outing_id", tx.outing_id)
             .or(`note.ilike.%${transactionId}%,amount.eq.${tx.amount}`);
         } catch (_) {}
+      } else if (tx?.merchant && tx?.amount) {
+        // Fallback: match by friend member name in trip_members
+        try {
+          const cleanName = tx.merchant.replace(/^From\s+/i, "").trim();
+          const { data: memberRows } = await client()
+            .from("trip_members")
+            .select("id, outing_id")
+            .ilike("name", cleanName);
+          if (memberRows && memberRows.length > 0) {
+            const memberIds = memberRows.map((m: any) => m.id);
+            await client()
+              .from("outing_settlements")
+              .delete()
+              .in("from_member_id", memberIds)
+              .eq("amount", tx.amount);
+          }
+        } catch (_) {}
       }
     }
   } catch (err) {
@@ -1515,6 +1534,7 @@ export async function deleteTransaction(userId: string | undefined, transactionI
   broadcastUserSyncEvent(userId, "transaction-changed", {
     op: "delete",
     id: transactionId,
+    source: "web",
   });
 }
 
@@ -1540,6 +1560,7 @@ export async function verifyTransaction(userId: string | undefined, transactionI
   broadcastUserSyncEvent(userId, "transaction-changed", {
     op: "update",
     id: transactionId,
+    source: "web",
   });
 }
 
@@ -1563,6 +1584,7 @@ export async function rejectTransaction(userId: string | undefined, transactionI
   broadcastUserSyncEvent(userId, "transaction-changed", {
     op: "delete",
     id: transactionId,
+    source: "web",
   });
 }
 
@@ -1578,7 +1600,13 @@ export async function saveAccount(userId: string | undefined, account: Account) 
       client().from("accounts").update({ is_default: false }).eq("user_id", userId),
     );
   }
-  return upsertById("accounts", accountPayload(userId, account), toAccount);
+  const saved = await upsertById("accounts", accountPayload(userId, account), toAccount);
+  broadcastUserSyncEvent(userId, "account-changed", {
+    op: "upsert",
+    id: saved.id,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteAccount(userId: string | undefined, accountId: string) {
@@ -1590,6 +1618,11 @@ export async function deleteAccount(userId: string | undefined, accountId: strin
       .eq("user_id", userId)
       .eq("id", accountId),
   );
+  broadcastUserSyncEvent(userId, "account-changed", {
+    op: "delete",
+    id: accountId,
+    source: "web",
+  });
 }
 
 export async function fetchDefaultCategories(): Promise<Category[]> {
@@ -2938,16 +2971,25 @@ export async function saveMonthlyPlan(userId: string | undefined, plan: MonthlyP
     return toPlan(data as Row)!;
   }
 
+  let saved: MonthlyPlan;
   try {
-    return await upsertPlan(resolvedPlan);
+    saved = await upsertPlan(resolvedPlan);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (plan.title && isMissingMonthlyPlanTitleColumn(message)) {
       const { title: _title, ...planWithoutTitle } = resolvedPlan;
-      return upsertPlan(planWithoutTitle as MonthlyPlan);
+      saved = await upsertPlan(planWithoutTitle as MonthlyPlan);
+    } else {
+      throw error;
     }
-    throw error;
   }
+
+  broadcastUserSyncEvent(userId, "plan-changed", {
+    op: "upsert",
+    id: saved.id,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteMonthlyPlan(userId: string | undefined, planId: string) {
@@ -2955,6 +2997,11 @@ export async function deleteMonthlyPlan(userId: string | undefined, planId: stri
   await throwIfError(
     client().from("monthly_plans").delete().eq("user_id", userId).eq("id", planId),
   );
+  broadcastUserSyncEvent(userId, "plan-changed", {
+    op: "delete",
+    id: planId,
+    source: "web",
+  });
 }
 
 
@@ -3148,7 +3195,8 @@ export async function fetchInvestmentTotal(userId?: string) {
 }
 
 export async function fetchSavingsGoals(userId?: string) {
-  return selectByUser("savings_goals", userId, (row) => ({
+  if (!userId) return [];
+  const rows = await selectByUser("savings_goals", userId, (row) => ({
     id: row.id,
     userId: row.user_id,
     name: row.name,
@@ -3156,9 +3204,12 @@ export async function fetchSavingsGoals(userId?: string) {
     savedAmount: Number(row.saved_amount ?? 0),
     monthlyContribution:
       row.monthly_contribution === null ? undefined : Number(row.monthly_contribution),
+    isActive: row.is_active ?? true,
+    deletedAt: row.deleted_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }) as SavingsGoal);
+  return rows.filter((goal) => goal.isActive !== false && !goal.deletedAt);
 }
 
 export async function saveSavingsGoal(userId: string | undefined, goal: SavingsGoal) {
@@ -3174,17 +3225,68 @@ export async function saveSavingsGoal(userId: string | undefined, goal: SavingsG
           target_amount: goal.targetAmount,
           saved_amount: goal.savedAmount,
           monthly_contribution: goal.monthlyContribution,
+          is_active: goal.isActive ?? true,
+          updated_at: new Date().toISOString(),
         }),
       )
       .select("*")
       .single(),
   );
-  return (await fetchSavingsGoals(userId)).find((item) => item.id === (data as Row).id)!;
+  const saved = (await fetchSavingsGoals(userId)).find((item) => item.id === (data as Row).id)!;
+  broadcastUserSyncEvent(userId, "investment-changed", {
+    op: "upsert",
+    id: saved?.id,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteSavingsGoal(userId: string | undefined, goalId: string) {
   if (!userId) return;
-  await throwIfError(client().from("savings_goals").delete().eq("user_id", userId).eq("id", goalId));
+  const now = nowIso();
+  try {
+    await client()
+      .from("savings_goals")
+      .update({ is_active: false, deleted_at: now })
+      .eq("user_id", userId)
+      .eq("id", goalId);
+  } catch (_) {
+    await throwIfError(client().from("savings_goals").delete().eq("user_id", userId).eq("id", goalId));
+  }
+  broadcastUserSyncEvent(userId, "investment-changed", {
+    op: "delete",
+    id: goalId,
+    source: "web",
+  });
+}
+
+export function subscribeToSavingsGoals(
+  userId: string | undefined,
+  onChange: () => void,
+) {
+  if (!userId) return () => undefined;
+  const supabase = client();
+  const syncChannel = getUserSyncChannel(userId);
+  if (syncChannel) {
+    syncChannel.on("broadcast", { event: "investment-changed" }, () => onChange());
+  }
+  const channel = supabase
+    .channel(uniqueTopic(`savings_goals:${userId}`))
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "savings_goals", filter: `user_id=eq.${userId}` },
+      () => onChange(),
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "projector_settings", filter: `user_id=eq.${userId}` },
+      () => onChange(),
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
 }
 
 export async function fetchProjectorSettings(userId?: string) {
@@ -3200,6 +3302,10 @@ export async function saveProjectorSettings(userId: string | undefined, settings
   await throwIfError(
     client().from("projector_settings").upsert({ user_id: userId, settings }),
   );
+  broadcastUserSyncEvent(userId, "investment-changed", {
+    op: "update",
+    source: "web",
+  });
   return settings;
 }
 
@@ -3226,6 +3332,25 @@ export function subscribeToOutings(
   void fetchOutings(userId).then(onData).catch(onError);
   const supabase = client();
   logRealtimeSubscribe("outings");
+
+  const syncChannel = getUserSyncChannel(userId);
+  if (syncChannel) {
+    syncChannel.on(
+      "broadcast",
+      { event: "outing-changed" },
+      (payload) => {
+        const data = payload.payload as { op?: string; id?: string; name?: string } | undefined;
+        if (data?.op === "delete" && data?.id) {
+          onOutingDeleted?.({
+            id: String(data.id),
+            name: data.name,
+          });
+        }
+        void fetchOutings(userId).then(onData).catch(onError);
+      },
+    );
+  }
+
   const channel = supabase
     .channel(uniqueTopic(`outings:${userId}`))
     .on(
@@ -3272,6 +3397,14 @@ export function subscribeToOutingExpenseChanges(
   if (!userId) return () => undefined;
   const supabase = client();
   logRealtimeSubscribe("outing_expenses");
+
+  const syncChannel = getUserSyncChannel(userId);
+  if (syncChannel) {
+    syncChannel.on("broadcast", { event: "outing-changed" }, () => {
+      onChange();
+    });
+  }
+
   const channel = supabase
     .channel(uniqueTopic(`outing_expenses:${userId}`))
     .on(
@@ -3325,6 +3458,14 @@ export function subscribeToAccountChanges(
   if (!entry) {
     const listeners = new Set<() => void>();
     logRealtimeSubscribe("accounts");
+
+    const syncChannel = getUserSyncChannel(userId);
+    if (syncChannel) {
+      syncChannel.on("broadcast", { event: "account-changed" }, () => {
+        for (const listener of listeners) listener();
+      });
+    }
+
     // Attach the handler BEFORE subscribe(), exactly once per user.
     const channel = supabase
       .channel(uniqueTopic(`accounts:${userId}`))
@@ -3470,6 +3611,11 @@ export async function saveOuting(userId: string | undefined, outing: Outing) {
     }
   }
 
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "upsert",
+    id: saved.id,
+    source: "web",
+  });
   return saved;
 }
 
@@ -3485,6 +3631,11 @@ export async function deleteOuting(userId: string | undefined, outingId: string)
   await throwIfError(
     client().rpc("cascade_delete_outing", { p_outing_id: outingId, p_user_id: userId }),
   );
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "delete",
+    id: outingId,
+    source: "web",
+  });
 }
 
 /** Reverses deleteOuting — restores the outing and everything it cascaded. */
@@ -3493,6 +3644,11 @@ export async function restoreOuting(userId: string | undefined, outingId: string
   await throwIfError(
     client().rpc("restore_deleted_outing", { p_outing_id: outingId, p_user_id: userId }),
   );
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "restore",
+    id: outingId,
+    source: "web",
+  });
 }
 
 /**
@@ -3605,12 +3761,24 @@ export async function saveOutingExpense(userId: string | undefined, expense: Out
     }
   }
 
-  return (await fetchOutingExpenses(userId)).find((item) => item.id === (data as Row).id)!;
+  const saved = (await fetchOutingExpenses(userId)).find((item) => item.id === (data as Row).id)!;
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "expense-upsert",
+    id: saved?.id,
+    outingId: expense.outingId,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteOutingExpense(userId: string | undefined, expenseId: string) {
   if (!userId) return;
   await throwIfError(client().from("outing_expenses").delete().eq("user_id", userId).eq("id", expenseId));
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "expense-delete",
+    id: expenseId,
+    source: "web",
+  });
 }
 
 export async function fetchOutingSettlements(userId?: string, outingId?: string) {
@@ -3651,7 +3819,14 @@ export async function saveOutingSettlement(userId: string | undefined, settlemen
       .select("*")
       .single(),
   );
-  return (await fetchOutingSettlements(userId)).find((item) => item.id === (data as Row).id)!;
+  const saved = (await fetchOutingSettlements(userId)).find((item) => item.id === (data as Row).id)!;
+  broadcastUserSyncEvent(userId, "outing-changed", {
+    op: "settlement-upsert",
+    id: saved?.id,
+    outingId: settlement.outingId,
+    source: "web",
+  });
+  return saved;
 }
 
 // ============================================================================
@@ -3724,7 +3899,13 @@ export async function saveFriendSplit(userId: string | undefined, split: FriendS
       .select("*")
       .single(),
   );
-  return toFriendSplit(data as Row);
+  const saved = toFriendSplit(data as Row);
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "split-upsert",
+    id: saved.id,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteFriendSplit(userId: string | undefined, splitId: string) {
@@ -3732,6 +3913,11 @@ export async function deleteFriendSplit(userId: string | undefined, splitId: str
   await throwIfError(
     client().from("friend_splits").delete().eq("user_id", userId).eq("id", splitId),
   );
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "split-delete",
+    id: splitId,
+    source: "web",
+  });
 }
 
 export async function fetchFriendSettlements(userId?: string, friendSplitId?: string) {
@@ -3776,7 +3962,7 @@ export async function saveFriendSettlement(
       .single(),
   );
   const row = data as Row;
-  return {
+  const saved = {
     id: row.id,
     userId: row.user_id,
     friendSplitId: row.friend_split_id,
@@ -3787,6 +3973,12 @@ export async function saveFriendSettlement(
     note: row.note ?? undefined,
     createdAt: row.created_at,
   } as FriendSettlement;
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "settlement-upsert",
+    id: saved.id,
+    source: "web",
+  });
+  return saved;
 }
 
 export async function deleteFriendSettlement(userId: string | undefined, id: string) {
@@ -3794,6 +3986,11 @@ export async function deleteFriendSettlement(userId: string | undefined, id: str
   await throwIfError(
     client().from("friend_settlements").delete().eq("user_id", userId).eq("id", id),
   );
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "settlement-delete",
+    id,
+    source: "web",
+  });
 }
 
 /** Merge primary + list into unique ordered UPI handles (first = primary). */
@@ -3882,7 +4079,13 @@ export async function saveFriend(userId: string | undefined, friend: Friend) {
   );
   // Map the returned row directly. Re-fetching and .find()!-ing it could
   // yield undefined (and a broken cache entry) if the row didn't come back.
-  return toFriend(data as Row);
+  const saved = toFriend(data as Row);
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "upsert",
+    id: saved.id,
+    source: "web",
+  });
+  return saved;
 }
 
 /**
@@ -3898,6 +4101,11 @@ export async function deleteFriend(userId: string | undefined, friendId: string)
       p_user_id: userId,
     }),
   );
+  broadcastUserSyncEvent(userId, "friend-changed", {
+    op: "delete",
+    id: friendId,
+    source: "web",
+  });
 }
 
 // ── Outing categories (picker: Trip / Other / custom) ────────────────────

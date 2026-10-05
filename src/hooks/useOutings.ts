@@ -1,16 +1,19 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAppData } from "@/providers/app-data-provider";
 import { afterOutingUpdated } from "@/lib/outing-ledger-sync";
 import { queryKeys } from "@/lib/query-keys";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { getLocalTodayDateStr } from "@/lib/outing-display";
 import type { Outing } from "@/types";
 
 export function useOutings() {
   const { user } = useAuthReady();
   const queryClient = useQueryClient();
+  const autoExpiredRef = useRef<Set<string>>(new Set());
   const {
     outings,
     outingsLoading,
@@ -18,6 +21,30 @@ export function useOutings() {
     updateOuting,
     removeOuting,
   } = useAppData();
+
+  // Lifecycle reconciliation: auto-complete any active outings whose end date has passed local calendar day
+  useEffect(() => {
+    if (!user?.id || !outings.length) return;
+    const today = getLocalTodayDateStr();
+    for (const o of outings) {
+      if (
+        o.status === "active" &&
+        o.isActive !== false &&
+        !o.isQuickSplit &&
+        o.startDate
+      ) {
+        const end = o.endDate ? o.endDate.slice(0, 10) : o.startDate.slice(0, 10);
+        if (end && today > end && !autoExpiredRef.current.has(o.id)) {
+          autoExpiredRef.current.add(o.id);
+          void updateOuting({
+            ...o,
+            status: "completed",
+            isActive: false,
+          }).catch(() => {});
+        }
+      }
+    }
+  }, [outings, user?.id, updateOuting]);
 
   async function addOutingWithCache(
     outing: Omit<Outing, "id" | "userId" | "createdAt" | "updatedAt">,

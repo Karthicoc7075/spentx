@@ -114,9 +114,7 @@ export function RecordSettlementDialog({
           type: isReceive ? "income" : "expense",
           amount: finalAmount,
           totalAmount: finalAmount,
-          merchant: isReceive
-            ? `Settlement: ${fromName} → You`
-            : `Settlement: You → ${toName}`,
+          merchant: isReceive ? `From ${fromName}` : `To ${toName}`,
           category: isReceive ? "Friend Returns" : "Settlements",
           account: effectiveAccount,
           accountName: effectiveAccount,

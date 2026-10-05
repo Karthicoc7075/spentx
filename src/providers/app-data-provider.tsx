@@ -27,6 +27,8 @@ import {
   subscribeToOutingExpenseChanges,
   subscribeToTransactions,
   deleteOuting,
+  fetchOutings,
+  getUserSyncChannel,
 } from "@/lib/supabase-data";
 import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
@@ -323,6 +325,82 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           if (!cancelled) hydrateTransactions(fetched);
         })();
       });
+
+      // Fast broadcast listeners (<100ms relay from mobile app)
+      const syncChannel = getUserSyncChannel(userId);
+      if (syncChannel) {
+        syncChannel.on("broadcast", { event: "outing-changed" }, () => {
+          void (async () => {
+            try {
+              await syncAllOutingRollups(userId);
+            } catch {}
+            if (cancelled) return;
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.outings(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.deletedOutings(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.outingExpenses(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.allOutingExpenses(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.outingSettlements(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.transactions(userId) }),
+            ]);
+            const [fetchedOutings, fetchedTx] = await Promise.all([
+              fetchOutings(userId),
+              fetchTransactions(userId),
+            ]);
+            if (!cancelled) {
+              setOutings(fetchedOutings);
+              hydrateTransactions(fetchedTx);
+            }
+          })();
+        });
+
+        syncChannel.on("broadcast", { event: "friend-changed" }, () => {
+          void (async () => {
+            if (cancelled) return;
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.friends(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.allFriends(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.friendSplits(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.allFriendSplits(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.friendSettlements(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.allFriendSettlements(userId) }),
+            ]);
+            if (userId) void invalidateFinancialData(queryClient, userId);
+          })();
+        });
+
+        syncChannel.on("broadcast", { event: "plan-changed" }, () => {
+          void (async () => {
+            if (cancelled) return;
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.allMonthlyPlans(userId) }),
+              queryClient.invalidateQueries({ queryKey: ["monthlyPlan"] }),
+            ]);
+          })();
+        });
+
+        syncChannel.on("broadcast", { event: "account-changed" }, () => {
+          void (async () => {
+            if (cancelled) return;
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.accounts(userId) }),
+            ]);
+            if (userId) void invalidateFinancialData(queryClient, userId);
+          })();
+        });
+
+        syncChannel.on("broadcast", { event: "investment-changed" }, () => {
+          void (async () => {
+            if (cancelled) return;
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: queryKeys.projectorSettings(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.savingsGoals(userId) }),
+              queryClient.invalidateQueries({ queryKey: queryKeys.investmentTotal(userId) }),
+            ]);
+            if (userId) void invalidateFinancialData(queryClient, userId);
+          })();
+        });
+      }
     } else {
       setOutings([]);
       setOutingsLoading(false);

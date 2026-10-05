@@ -27,9 +27,11 @@ export function isWithinOutingDates(outing: Outing, date: string) {
   return txDate >= start && txDate <= end;
 }
 
+import { getLocalTodayDateStr } from "@/lib/outing-display";
+
 /** Currently running outing that should auto-attach new spends. */
 export function getActiveAutoOuting(outings: Outing[]): Outing | null {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalTodayDateStr();
   const active = outings.filter(
     (o) =>
       o.status === "active" &&
@@ -47,7 +49,7 @@ export function hasOtherActiveOuting(
   outings: Outing[],
   excludeOutingId?: string,
 ) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalTodayDateStr();
   return outings.some(
     (o) =>
       o.status === "active" &&

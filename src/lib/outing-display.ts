@@ -48,11 +48,19 @@ export function formatOutingDates(outing: Outing) {
   return "";
 }
 
+export function getLocalTodayDateStr(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function isOutingPlanned(outing: Outing, todayStr?: string) {
   if (outing.isActive === false || Boolean(outing.deletedAt)) return false;
   if (outing.status !== "active") return false;
   if (!outing.startDate) return false;
-  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const today = todayStr || getLocalTodayDateStr();
   const start = outing.startDate.slice(0, 10);
   return today < start;
 }
@@ -61,7 +69,7 @@ export function isOutingActive(outing: Outing, todayStr?: string) {
   if (outing.isActive === false || Boolean(outing.deletedAt)) return false;
   if (outing.status !== "active") return false;
   if (!outing.startDate) return true;
-  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const today = todayStr || getLocalTodayDateStr();
   const start = outing.startDate.slice(0, 10);
   const end = outing.endDate ? outing.endDate.slice(0, 10) : start;
   return today >= start && today <= end;
@@ -71,14 +79,14 @@ export function isOutingCompleted(outing: Outing, todayStr?: string) {
   if (outing.status === "completed") return true;
   if (outing.status !== "active") return false;
   if (!outing.startDate) return false;
-  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const today = todayStr || getLocalTodayDateStr();
   const start = outing.startDate.slice(0, 10);
   const end = outing.endDate ? outing.endDate.slice(0, 10) : start;
   return today > end;
 }
 
 export function getOutingStatusLabel(outing: Outing, todayStr?: string) {
-  const today = todayStr || new Date().toISOString().slice(0, 10);
+  const today = todayStr || getLocalTodayDateStr();
   if (outing.status === "archived") return "Archived";
   if (outing.status === "cancelled") return "Cancelled";
   if (isOutingPlanned(outing, today)) return "Planned";
@@ -92,7 +100,7 @@ export function filterOutings(
   filter: OutingListFilter,
   searchQuery: string,
 ) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getLocalTodayDateStr();
   const query = searchQuery.trim().toLowerCase();
 
   return outings.filter((outing) => {
