@@ -26,7 +26,15 @@ export default function ShareLayout({
 
     claimShareLink(token)
       .then((link) => {
-        if (!cancelled) setState({ status: "ready", link });
+        if (!cancelled) {
+          setState({ status: "ready", link });
+          // Record view: moves status to active, updates last_viewed_at, logs access & notifies owner
+          void fetch("/api/share/view", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, page: typeof window !== "undefined" ? window.location.pathname : "/share" }),
+          }).catch(() => {});
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) {

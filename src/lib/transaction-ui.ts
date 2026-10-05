@@ -27,6 +27,7 @@ import {
   Compass,
   Percent,
   Plus,
+  UserCheck,
 } from "lucide-react";
 import type { Transaction, TransactionType } from "@/types";
 
@@ -108,6 +109,8 @@ const categoryIconMap: Record<string, LucideIcon> = {
   "Gifts Received": Gift,
   "Interest": Percent,
   "Other Income": Plus,
+  "Friend Returns": UserCheck,
+  "Friend Return": UserCheck,
   
   // Legacy / Fallbacks
   "Freelance": Sparkles,
@@ -172,6 +175,31 @@ export function getTransactionDisplayTitle(transaction: Transaction): {
   primary: string;
   itemsLabel?: string;
 } {
+  const isFriendReturn =
+    transaction.type === "income" &&
+    (transaction.category?.trim().toLowerCase() === "friend returns" ||
+      transaction.category?.trim().toLowerCase() === "friend return" ||
+      Boolean(transaction.linkedExpenseId));
+
+  if (isFriendReturn) {
+    const m = transaction.merchant?.trim() ?? "";
+    const mLower = m.toLowerCase();
+    const isGeneric =
+      !m ||
+      mLower === "friend returns" ||
+      mLower === "friend return" ||
+      mLower === "unknown" ||
+      mLower === "transaction";
+    if (!isGeneric) {
+      return { primary: m.startsWith("From ") ? m : `From ${m}` };
+    }
+    const note = transaction.note?.trim();
+    if (note && note.toLowerCase() !== "friend returns" && note.toLowerCase() !== "friend return") {
+      return { primary: note };
+    }
+    return { primary: "Friend Repayment" };
+  }
+
   const itemCount = transaction.items?.length ?? 0;
   if (itemCount >= 2) {
     return { primary: transaction.merchant, itemsLabel: `${itemCount} Items` };
@@ -179,5 +207,5 @@ export function getTransactionDisplayTitle(transaction: Transaction): {
   if (transaction.title?.trim()) {
     return { primary: transaction.title.trim() };
   }
-  return { primary: transaction.merchant };
+  return { primary: transaction.merchant || "Transaction" };
 }

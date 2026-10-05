@@ -1420,6 +1420,76 @@ export async function deleteTransaction(userId: string | undefined, transactionI
     throw new Error("Sign in before deleting transactions.");
   }
   const now = nowIso();
+
+  // 1. If deleting a friend repayment/return transaction:
+  // Revert/delete linked settlements so the friend's debt card reopens!
+  try {
+    const { data: tx } = await client()
+      .from("transactions")
+      .select("category, type, linked_expense_id, merchant, amount, outing_id")
+      .eq("id", transactionId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    const isFriendReturn =
+      tx?.type === "income" &&
+      (tx?.category?.trim().toLowerCase() === "friend returns" ||
+        tx?.category?.trim().toLowerCase() === "friend return" ||
+        Boolean(tx?.linked_expense_id));
+
+    if (isFriendReturn) {
+      // Revert in friend_settlements: match by direct note or transactionId
+      await client()
+        .from("friend_settlements")
+        .delete()
+        .eq("user_id", userId)
+        .or(`note.ilike.%${transactionId}%,note.eq.${transactionId}`);
+
+      // Fallback: match by friend name and amount if unlinked
+      if (tx?.merchant && tx?.amount) {
+        const cleanName = tx.merchant.replace(/^From\s+/i, "").trim();
+        const { data: friendRows } = await client()
+          .from("friends")
+          .select("id")
+          .eq("user_id", userId)
+          .ilike("name", cleanName);
+
+        if (friendRows && friendRows.length > 0) {
+          const friendIds = friendRows.map((f: any) => f.id);
+          const { data: recentSettlements } = await client()
+            .from("friend_settlements")
+            .select("id")
+            .eq("user_id", userId)
+            .in("from_member_id", friendIds)
+            .eq("amount", tx.amount)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (recentSettlements && recentSettlements.length > 0) {
+            await client()
+              .from("friend_settlements")
+              .delete()
+              .eq("user_id", userId)
+              .eq("id", recentSettlements[0].id);
+          }
+        }
+      }
+
+      // If linked to an outing, also remove from outing_settlements
+      if (tx?.outing_id) {
+        try {
+          await client()
+            .from("outing_settlements")
+            .delete()
+            .eq("outing_id", tx.outing_id)
+            .or(`note.ilike.%${transactionId}%,amount.eq.${tx.amount}`);
+        } catch (_) {}
+      }
+    }
+  } catch (err) {
+    console.warn("Could not check/revert friend settlements on delete:", err);
+  }
+
   // Soft delete matches mobile: is_active = false, deleted_at = now
   // Related friend_splits are also soft-deleted so friend balance remains consistent.
   try {

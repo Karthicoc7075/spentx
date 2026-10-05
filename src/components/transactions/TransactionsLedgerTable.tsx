@@ -47,7 +47,7 @@ type TransactionsLedgerTableProps = {
 };
 
 type TransactionBadge = {
-  label: "Split Expense" | "Friend Split" | "Outing" | "Unverified";
+  label: "Split Expense" | "Friend Split" | "Outing" | "Unverified" | "Friend Return";
   className: string;
 };
 
@@ -69,6 +69,16 @@ function getTransactionBadge(
   if (transaction.status === "unverified") {
     return { label: "Unverified", className: badgeAmber };
   }
+  const isFriendReturn =
+    transaction.type === "income" &&
+    (transaction.category?.trim().toLowerCase() === "friend returns" ||
+      transaction.category?.trim().toLowerCase() === "friend return" ||
+      Boolean(transaction.linkedExpenseId));
+
+  if (isFriendReturn) {
+    return { label: "Friend Return", className: badgeGreen };
+  }
+
   // A friend split is standalone — it never carries an outingId.
   if (friendSplitTransactionIds.has(transaction.id)) {
     return { label: "Friend Split", className: badgeGreen };

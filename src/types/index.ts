@@ -107,6 +107,7 @@ export type Transaction = {
   note?: string;
   description?: string;
   outingId?: string | null;
+  linkedExpenseId?: string | null;
   /**
    * Display-only (never persisted): every account the current user paid from
    * on this outing, set on the Transactions-page rollup row so the account

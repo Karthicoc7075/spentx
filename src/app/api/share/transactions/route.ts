@@ -39,7 +39,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 2. Fetch shared transactions via RPC (handles soft-deletes and cancelled outings in 1 query)
+    // 2. Mark active if pending and update last_viewed_at
+    void admin
+      .from("purpose_shares")
+      .update({
+        status: "active",
+        last_viewed_at: new Date().toISOString(),
+      })
+      .or(`link_token.eq.${token},id.eq.${token}`)
+      .eq("status", "pending");
+
+    // 3. Fetch shared transactions via RPC (handles soft-deletes and cancelled outings in 1 query)
     const { data: rows, error: rpcError } = await admin.rpc("get_shared_transactions", {
       p_token: token,
     });

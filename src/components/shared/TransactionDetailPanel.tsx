@@ -18,6 +18,7 @@ import {
   Tag,
   Target,
   Trash2,
+  UserCheck,
   UserRound,
   Users,
   Wallet,
@@ -126,6 +127,11 @@ export function TransactionDetailPanel({
     void onUnlinkOuting?.(transaction!, choice);
   }
   const isInvestment = isInvestmentTransaction(transaction, categories);
+  const isFriendReturn =
+    transaction.type === "income" &&
+    (transaction.category?.trim().toLowerCase() === "friend returns" ||
+      transaction.category?.trim().toLowerCase() === "friend return" ||
+      Boolean(transaction.linkedExpenseId));
   const typeMeta = getTransactionTypeMeta(transaction.type);
   const TypeIcon = typeMeta.icon;
   const CategoryIcon = getCategoryIcon(transaction.category);
@@ -469,46 +475,163 @@ export function TransactionDetailPanel({
             </div>
           ) : null}
 
+          {isFriendReturn ? (
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3.5 space-y-2">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-semibold text-sm">
+                <UserCheck className="size-4 text-emerald-600 dark:text-emerald-400" />
+                Friend Repayment Received
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                This repayment reduces your net personal spend. It is not counted as earned or taxable income.
+              </p>
+              <div className="flex items-center justify-between border-t border-emerald-500/20 pt-2 text-xs">
+                <span className="text-muted-foreground">Repaid by</span>
+                <span className="font-semibold text-foreground">
+                  {transaction.merchant?.startsWith("From ")
+                    ? transaction.merchant
+                    : `From ${transaction.merchant || "Friend"}`}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Amount returned</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                  +{formatCurrency(amount)}
+                </span>
+              </div>
+            </div>
+          ) : null}
+
           {friendSplit ? (
-            <div className="rounded-lg border bg-card px-3 py-3">
-              <div className="mb-2 inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <Users className="size-3.5" />
-                Friend split
+            <div className="rounded-lg border bg-card p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="inline-flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Users className="size-4 text-emerald-600 dark:text-emerald-400" />
+                  Friend Split Details
+                </div>
+                <Badge
+                  variant="outline"
+                  className="text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                >
+                  {friendSplit.members.length} People
+                </Badge>
               </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                {friendSplit.members.map((member) => (
-                  <span
-                    key={member.id}
-                    className="rounded-full border px-2.5 py-0.5 text-xs font-medium"
-                  >
-                    {member.name}
-                  </span>
-                ))}
-              </div>
-
-              <dl className="mt-3 space-y-2 text-sm">
-                <div className="flex items-center justify-between gap-3">
+              <dl className="grid grid-cols-2 gap-2 text-xs rounded-md bg-muted/40 p-2.5">
+                <div>
+                  <dt className="text-muted-foreground">Total Bill</dt>
+                  <dd className="font-semibold tabular-nums text-foreground mt-0.5">
+                    {formatCurrency(friendSplit.amount || amount)}
+                  </dd>
+                </div>
+                <div>
                   <dt className="text-muted-foreground">Paid by</dt>
-                  <dd className="font-medium">
+                  <dd className="font-semibold text-foreground mt-0.5">
                     {friendSplitPayer?.name ?? "You"}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-muted-foreground">Your share</dt>
-                  <dd className="font-medium tabular-nums">
+                <div className="mt-1">
+                  <dt className="text-muted-foreground">Your Share</dt>
+                  <dd className="font-semibold tabular-nums text-foreground mt-0.5">
                     {formatCurrency(friendSplitYourShare)}
                   </dd>
                 </div>
-                <div className="flex items-center justify-between gap-3">
-                  <dt className="text-muted-foreground">Settlements</dt>
-                  <dd className="font-medium tabular-nums">
-                    {friendSplitSettlements.length === 0
-                      ? "None yet"
-                      : `${formatCurrency(friendSplitSettled)} settled`}
+                <div className="mt-1">
+                  <dt className="text-muted-foreground">Total Repaid</dt>
+                  <dd className="font-semibold tabular-nums text-emerald-600 dark:text-emerald-400 mt-0.5">
+                    {formatCurrency(friendSplitSettled)} settled
                   </dd>
                 </div>
               </dl>
+
+              {/* Members & Repayment status */}
+              <div className="space-y-1.5">
+                <div className="text-xs font-semibold text-muted-foreground">
+                  Members & Repayment Status
+                </div>
+                <div className="space-y-1.5">
+                  {friendSplit.members.map((member) => {
+                    const memberShare =
+                      friendSplit.splits.find((s) => s.memberId === member.id)
+                        ?.amount ?? 0;
+                    const isPayer = member.id === friendSplit.paidByMemberId;
+                    const settledFromMember = friendSplitSettlements
+                      .filter((s) => s.fromMemberId === member.id)
+                      .reduce((sum, s) => sum + s.amount, 0);
+                    const pending = Math.max(0, memberShare - settledFromMember);
+                    const isFullySettled = !isPayer && pending <= 0;
+
+                    return (
+                      <div
+                        key={member.id}
+                        className="flex items-center justify-between rounded-md border bg-muted/20 px-2.5 py-1.5 text-xs"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-foreground">
+                            {member.name}
+                          </span>
+                          {isPayer ? (
+                            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                              Payer
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground tabular-nums">
+                            Share: {formatCurrency(memberShare)}
+                          </span>
+                          {!isPayer &&
+                            (isFullySettled ? (
+                              <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                                Settled ✓
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:text-amber-400">
+                                Owes {formatCurrency(pending)}
+                              </span>
+                            ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Repayments Received History */}
+              {friendSplitSettlements.length > 0 ? (
+                <div className="border-t pt-2 space-y-1.5">
+                  <div className="text-xs font-semibold text-muted-foreground">
+                    Repayments Received
+                  </div>
+                  <div className="space-y-1">
+                    {friendSplitSettlements.map((item) => {
+                      const fromName =
+                        friendSplit.members.find(
+                          (m) => m.id === item.fromMemberId,
+                        )?.name ?? "Friend";
+                      const toName =
+                        friendSplit.members.find(
+                          (m) => m.id === item.toMemberId,
+                        )?.name ?? "You";
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between rounded bg-muted/40 px-2.5 py-1 text-xs"
+                        >
+                          <span className="text-muted-foreground">
+                            {fromName} → {toName}
+                            {item.date
+                              ? ` · ${new Date(item.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
+                              : ""}
+                          </span>
+                          <span className="font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                            +{formatCurrency(item.amount)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
