@@ -1037,16 +1037,26 @@ export function AddTransactionSlideOver({
         await removeFriendSplit(linkedFriendSplit.id);
       }
 
+      const resolvedAccount = accounts.find(
+        (a) => a.id === accountName || a.name === accountName,
+      );
+      const resolvedPurpose = purposes.find(
+        (p) => p.id === values.purpose || p.name === values.purpose,
+      );
+      const resolvedContributor = contributors.find(
+        (c) => c.name === values.contributorSource || c.id === values.contributorSource,
+      );
+
       const submitPromise = submitFn({
         type: values.type,
         merchant: values.merchant.trim(),
         title: values.title?.trim() || undefined,
         category: values.category,
-        account: accountName,
-        accountName,
-        accountId: initialValues?.accountId,
-        purpose: values.purpose,
-        purposeId: values.purpose,
+        account: resolvedAccount?.name ?? accountName,
+        accountName: resolvedAccount?.name ?? accountName,
+        accountId: resolvedAccount?.id ?? initialValues?.accountId,
+        purpose: resolvedPurpose?.name ?? values.purpose,
+        purposeId: resolvedPurpose?.id ?? values.purpose,
         amount: amountNumber,
         totalAmount: amountNumber,
         date: isoDate,

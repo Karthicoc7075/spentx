@@ -393,10 +393,19 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       assertCanMutate(isReadOnlyViewer);
       const tempId = `temp-${crypto.randomUUID()}`;
       const now = new Date().toISOString();
+      const rawDate = newTxData.date ?? (newTxData as any).transactionDate ?? now;
+      const amount = Number(newTxData.amount ?? newTxData.totalAmount ?? 0);
       const optimisticTx: Transaction = {
         ...newTxData,
         id: tempId,
         userId: user?.id,
+        amount,
+        totalAmount: Number(newTxData.totalAmount ?? amount),
+        date: rawDate,
+        transactionDate: (newTxData as any).transactionDate ?? rawDate,
+        status: newTxData.status ?? "completed",
+        isActive: true,
+        deletedAt: null,
         createdAt: now,
         updatedAt: now,
       };
@@ -433,11 +442,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         if (user?.id) {
           queryClient.setQueryData(queryKeys.transactions(user.id), finalNext);
           writeQueryCache(user.id, cacheKeys.transactions, finalNext);
-          void invalidateFinancialData(queryClient, user.id);
         }
         return finalNext;
       });
       setTransactionsLoading(false);
+      if (user?.id) {
+        void invalidateFinancialData(queryClient, user.id);
+      }
     },
     onError: (err, _variables, context) => {
       if (context?.tempId) {

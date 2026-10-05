@@ -128,6 +128,7 @@ export type Transaction = {
   updatedAt?: string;
   /** Who contributed income — Home/Family income only */
   contributorSource?: ContributorSource;
+  contributorId?: string;
   /** When represented as an individual split (e.g. from shared purpose views) */
   splitId?: string;
   /** Parent transaction ID if this row represents an uncollapsed split */

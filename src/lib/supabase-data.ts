@@ -792,6 +792,26 @@ export function subscribeToTransactions(
     }, 100);
   };
 
+  // Fast broadcast channel: sub-100ms relay between Web and Mobile app
+  const syncChannel = supabase
+    .channel(`user-sync:${userId}`)
+    .on(
+      "broadcast",
+      { event: "transaction-changed" },
+      (payload) => {
+        const data = payload.payload as { op?: string; id?: string; merchant?: string; amount?: number } | undefined;
+        if (data?.op === "delete" && data?.id) {
+          onTransactionDeleted?.({
+            id: String(data.id),
+            merchant: data.merchant,
+            amount: data.amount,
+          });
+        }
+        triggerRefresh();
+      },
+    )
+    .subscribe();
+
   const channel = supabase
     .channel(uniqueTopic(`transactions:${userId}`))
     .on(
@@ -840,6 +860,7 @@ export function subscribeToTransactions(
   return () => {
     if (refreshTimer) clearTimeout(refreshTimer);
     void supabase.removeChannel(channel);
+    void supabase.removeChannel(syncChannel);
   };
 }
 
@@ -911,21 +932,36 @@ export async function fetchTransaction(userId: string | undefined, transactionId
   }
 }
 
+export function broadcastUserSyncEvent(
+  userId: string | undefined,
+  event: string,
+  payload: Record<string, unknown>,
+) {
+  if (!userId) return;
+  try {
+    const supabase = client();
+    void supabase.channel(`user-sync:${userId}`).send({
+      type: "broadcast",
+      event,
+      payload: { ...payload, timestamp: Date.now() },
+    });
+  } catch (_) {}
+}
+
 async function resolveAccountId(
   userId: string,
   accountRef?: Pick<Transaction, "accountId" | "account"> | string,
 ) {
-  const accounts = await fetchAccounts(userId);
   const accountId =
     typeof accountRef === "string"
       ? accountRef
       : accountRef?.accountId ?? accountRef?.account;
 
   if (isUuid(accountId)) {
-    const byId = accounts.find((account) => account.id === accountId);
-    if (byId?.id) return byId.id;
+    return accountId;
   }
 
+  const accounts = await fetchAccounts(userId);
   const accountName =
     typeof accountRef === "string"
       ? undefined
@@ -947,12 +983,11 @@ async function resolveAccountId(
 }
 
 async function resolvePurposeId(userId: string, purposeId?: string) {
+  if (purposeId && isUuid(purposeId)) {
+    return purposeId;
+  }
   const purposes = await fetchPurposes(userId);
   if (purposeId) {
-    if (isUuid(purposeId)) {
-      const byId = purposes.find((p) => p.id === purposeId);
-      if (byId) return byId.id;
-    }
     const byName = purposes.find(
       (p) => p.name?.trim().toLowerCase() === purposeId.trim().toLowerCase(),
     );
@@ -985,11 +1020,12 @@ async function resolvePurposeId(userId: string, purposeId?: string) {
 
 async function resolveContributorId(userId: string, contributorRef?: string) {
   if (!contributorRef) return undefined;
-  const contributors = await fetchContributors(userId);
   if (isUuid(contributorRef)) {
-    const byId = contributors.find((contributor) => contributor.id === contributorRef);
-    return byId?.id;
+    return contributorRef;
   }
+  const contributors = await fetchContributors(userId);
+  const byId = contributors.find((contributor) => contributor.id === contributorRef);
+  if (byId) return byId.id;
   const byName = contributors.find((contributor) => contributor.name === contributorRef);
   return byName?.id;
 }
@@ -1115,38 +1151,35 @@ export async function addTransaction(
   transaction: Omit<Transaction, "id">,
 ) {
   if (!userId) throw new Error("Sign in before adding transactions.");
-  const accountId = await resolveAccountId(userId, transaction);
+
   let targetPurposeRef = transaction.purposeId ?? transaction.purpose;
-  if (transaction.outingId) {
+  if (transaction.outingId && !isUuid(targetPurposeRef)) {
     const outings = await fetchOutings(userId);
     const outing = outings.find((o) => o.id === transaction.outingId);
     if (outing?.purposeId) {
       targetPurposeRef = outing.purposeId;
     }
   }
-  const purposeId = await resolvePurposeId(
-    userId,
-    targetPurposeRef,
-  );
-  const contributorId = await resolveContributorId(
-    userId,
-    transaction.contributorSource,
-  );
+
+  // Parallel lookup if any is needed
+  const [accountId, purposeId, contributorId] = await Promise.all([
+    resolveAccountId(userId, transaction),
+    resolvePurposeId(userId, targetPurposeRef),
+    resolveContributorId(userId, transaction.contributorSource),
+  ]);
+
   const parent = transactionParentPayload({
     ...(transaction as any),
     accountId,
     purposeId,
   });
-  // Outing expenses never reach this function (they write outing_expenses
-  // via saveOutingExpense) — no outingId guard needed here for that case,
-  // but outing rollup/settlement rows do pass through, so skip those too.
+
   if (!parent.outingId) {
     resolveMerchant(userId, { name: parent.merchant, upi: parent.upi }).catch((error) => {
       console.error("Merchant save failed", error);
     });
   }
-  // Multi-row split (category or friend split on a normal transaction) —
-  // falls back to the single-row derived split when not provided.
+
   const providedSplits = (transaction.splits ?? []).filter(
     (item) => (item.amount ?? 0) > 0,
   );
@@ -1175,7 +1208,6 @@ export async function addTransaction(
           },
         ];
 
-  // Purchased line items — independent of splits, purely descriptive.
   const items = (transaction.items ?? [])
     .filter((item) => item.name?.trim() && (item.amount ?? 0) > 0)
     .map((item) => ({
@@ -1184,15 +1216,41 @@ export async function addTransaction(
       amount: item.amount,
     }));
 
-  const transactionId = await throwIfError(
+  const transactionId = (await throwIfError(
     client().rpc("create_transaction_with_splits", {
       p_transaction: parent,
       p_splits: splits,
       p_items: items,
     }),
-  );
-  const saved = await fetchTransaction(userId, transactionId as string);
-  return saved ?? ({ id: transactionId, ...transaction } as Transaction);
+  )) as string;
+
+  const now = nowIso();
+  const created: Transaction = {
+    ...transaction,
+    id: transactionId,
+    userId,
+    accountId,
+    accountName: transaction.accountName ?? transaction.account,
+    purposeId,
+    contributorId: contributorId ?? undefined,
+    isActive: true,
+    deletedAt: null,
+    createdAt: (transaction as any).createdAt ?? now,
+    updatedAt: now,
+    status: transaction.status ?? "completed",
+    totalAmount: transaction.totalAmount ?? transaction.amount ?? 0,
+    amount: transaction.amount ?? transaction.totalAmount ?? 0,
+    date: transaction.date ?? (transaction as any).transactionDate ?? now,
+    transactionDate: (transaction as any).transactionDate ?? transaction.date ?? now,
+  };
+
+  // Broadcast instantly to active mobile app & other tabs
+  broadcastUserSyncEvent(userId, "transaction-changed", {
+    op: "insert",
+    id: transactionId,
+  });
+
+  return created;
 }
 
 export async function updateTransaction(
@@ -1326,6 +1384,11 @@ export async function updateTransaction(
       await throwIfError(client().from("transaction_items").insert(itemRows));
     }
   }
+
+  broadcastUserSyncEvent(userId, "transaction-changed", {
+    op: "update",
+    id: transactionId,
+  });
 }
 
 export async function deleteTransaction(userId: string | undefined, transactionId: string) {
@@ -1354,6 +1417,11 @@ export async function deleteTransaction(userId: string | undefined, transactionI
       .eq("user_id", userId)
       .eq("id", transactionId),
   );
+
+  broadcastUserSyncEvent(userId, "transaction-changed", {
+    op: "delete",
+    id: transactionId,
+  });
 }
 
 /**
@@ -1374,6 +1442,11 @@ export async function verifyTransaction(userId: string | undefined, transactionI
       .eq("user_id", userId)
       .eq("id", transactionId),
   );
+
+  broadcastUserSyncEvent(userId, "transaction-changed", {
+    op: "update",
+    id: transactionId,
+  });
 }
 
 /**
@@ -1392,6 +1465,11 @@ export async function rejectTransaction(userId: string | undefined, transactionI
       .eq("user_id", userId)
       .eq("id", transactionId),
   );
+
+  broadcastUserSyncEvent(userId, "transaction-changed", {
+    op: "delete",
+    id: transactionId,
+  });
 }
 
 export async function fetchAccounts(userId?: string) {
