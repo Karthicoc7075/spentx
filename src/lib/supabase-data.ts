@@ -784,6 +784,14 @@ export function subscribeToTransactions(
   // A shared topic would hand the second caller the already-subscribed
   // channel, and attaching a postgres_changes handler to it throws
   // "cannot add `postgres_changes` callbacks ... after `subscribe()`".
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const triggerRefresh = () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      void fetchTransactions(userId).then(onData).catch(onError);
+    }, 100);
+  };
+
   const channel = supabase
     .channel(uniqueTopic(`transactions:${userId}`))
     .on(
@@ -815,21 +823,22 @@ export function subscribeToTransactions(
             });
           }
         }
-        void fetchTransactions(userId).then(onData).catch(onError);
+        triggerRefresh();
       },
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "transaction_splits", filter: `user_id=eq.${userId}` },
-      () => void fetchTransactions(userId).then(onData).catch(onError),
+      () => triggerRefresh(),
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "transaction_items", filter: `user_id=eq.${userId}` },
-      () => void fetchTransactions(userId).then(onData).catch(onError),
+      () => triggerRefresh(),
     )
     .subscribe();
   return () => {
+    if (refreshTimer) clearTimeout(refreshTimer);
     void supabase.removeChannel(channel);
   };
 }

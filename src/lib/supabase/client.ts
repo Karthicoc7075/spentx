@@ -73,18 +73,39 @@ function proxiedFetch(
 // them.
 const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 365;
 
+let browserClient: ReturnType<typeof createBrowserClient> | null = null;
+
 export function createClient() {
-  return createBrowserClient(getSupabaseUrl(), getSupabasePublishableKey(), {
-    global: { fetch: proxiedFetch },
-    cookieOptions: {
-      maxAge: SESSION_MAX_AGE_SEC,
-      path: "/",
-      sameSite: "lax",
-    },
-    auth: {
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: true,
-    },
-  });
+  if (typeof window === "undefined") {
+    return createBrowserClient(getSupabaseUrl(), getSupabasePublishableKey(), {
+      global: { fetch: proxiedFetch },
+      cookieOptions: {
+        maxAge: SESSION_MAX_AGE_SEC,
+        path: "/",
+        sameSite: "lax",
+      },
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+  }
+
+  if (!browserClient) {
+    browserClient = createBrowserClient(getSupabaseUrl(), getSupabasePublishableKey(), {
+      global: { fetch: proxiedFetch },
+      cookieOptions: {
+        maxAge: SESSION_MAX_AGE_SEC,
+        path: "/",
+        sameSite: "lax",
+      },
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
+    });
+  }
+
+  return browserClient;
 }
