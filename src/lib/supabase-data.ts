@@ -1310,20 +1310,22 @@ export async function deleteTransaction(userId: string | undefined, transactionI
   if (!userId) {
     throw new Error("Sign in before deleting transactions.");
   }
-  // Cascade related rows for THIS transaction only (not other friend data).
-  // friend_settlements cascade from friend_splits (FK). transaction_splits and
-  // transaction_items cascade from transactions (FK). Explicit friend_splits
-  // delete keeps Friends UI clean even if a client cache lags, and matches the
-  // mobile removeSplitByTransactionId path.
+  const now = nowIso();
+  // Soft delete matches mobile: is_active = false, deleted_at = now
+  // Related friend_splits are also soft-deleted so friend balance remains consistent.
   await throwIfError(
     client()
       .from("friend_splits")
-      .delete()
+      .update({ is_active: false, deleted_at: now, deleted_by: userId })
       .eq("user_id", userId)
       .eq("transaction_id", transactionId),
   );
   await throwIfError(
-    client().from("transactions").delete().eq("user_id", userId).eq("id", transactionId),
+    client()
+      .from("transactions")
+      .update({ is_active: false, deleted_at: now, deleted_by: userId })
+      .eq("user_id", userId)
+      .eq("id", transactionId),
   );
 }
 
