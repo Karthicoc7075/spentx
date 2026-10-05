@@ -24,7 +24,7 @@ function isPersonalSharePurpose(
   share: { purposeId: string; purposeName: string },
   purposes: Purpose[],
 ) {
-  if (share.purposeName.trim().toLowerCase() === "personal") return true;
+  if (share.purposeName?.trim().toLowerCase() === "personal") return true;
   const purpose = purposes.find((item) => item.id === share.purposeId);
   if (!purpose) return false;
   return (

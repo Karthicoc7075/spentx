@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, Eye, Link2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, Check, Copy, Eye, Link2, Loader2, Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,9 +41,16 @@ import type { PurposeShare } from "@/types";
 
 export function SharingTab() {
   const { user } = useAuthReady();
-  const { purposes } = usePurposes();
-  const { contributors } = useContributors();
-  const { shares, inviteViewer, removeShare } = usePurposeShares();
+  const { purposes, isLoading: purposesLoading } = usePurposes();
+  const { contributors, isLoading: contributorsLoading } = useContributors();
+  const {
+    shares,
+    isLoading: sharesLoading,
+    error: sharesError,
+    inviteViewer,
+    removeShare,
+    refresh,
+  } = usePurposeShares();
   const { notify } = useToast();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [shareMethod, setShareMethod] = useState<"link" | "email">("link");
@@ -76,6 +83,8 @@ export function SharingTab() {
   );
 
   const activePurposes = purposes.filter((purpose) => purpose.isActive !== false);
+  const isSharingDataLoading =
+    sharesLoading || purposesLoading || contributorsLoading;
 
   async function handleInvite() {
     if (!purposeId) {
@@ -305,6 +314,7 @@ export function SharingTab() {
             </div>
             <Button
               className="font-bold"
+              disabled={isSharingDataLoading}
               onClick={() => setInviteOpen(true)}
             >
               <Plus className="mr-1.5 size-3.5" />
@@ -321,7 +331,26 @@ export function SharingTab() {
             </p>
           </div>
 
-          {ownedShares.length === 0 ? (
+          {isSharingDataLoading ? (
+            <div
+              aria-live="polite"
+              className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"
+              role="status"
+            >
+              <Loader2 className="size-4 animate-spin" />
+              Loading sharing data…
+            </div>
+          ) : sharesError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <AlertCircle className="size-5 text-destructive" />
+              <p className="text-sm text-muted-foreground">
+                We couldn&apos;t load your shared links and viewers.
+              </p>
+              <Button size="sm" type="button" variant="outline" onClick={() => void refresh()}>
+                Try again
+              </Button>
+            </div>
+          ) : ownedShares.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               No viewers invited yet.
             </p>
@@ -343,7 +372,7 @@ export function SharingTab() {
                   {ownedShares.map((share) => (
                     <TableRow key={share.id}>
                       <TableCell className="font-medium">
-                        {share.kind === "link" || share.viewerEmail.startsWith("link-share-")
+                        {share.kind === "link" || share.viewerEmail?.startsWith("link-share-")
                           ? "View link"
                           : share.viewerEmail}
                       </TableCell>

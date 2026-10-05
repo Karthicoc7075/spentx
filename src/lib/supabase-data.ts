@@ -1465,7 +1465,7 @@ export async function fetchPurposeShares(
   const mapShareRow = (row: Row): PurposeShare => ({
     id: row.id,
     ownerId: row.owner_id,
-    viewerEmail: row.viewer_email,
+    viewerEmail: row.viewer_email ?? "",
     viewerUid: row.viewer_id ?? undefined,
     purposeId: row.purpose_id,
     role: row.role ?? "viewer",
@@ -1683,13 +1683,24 @@ export async function claimShareLink(token: string): Promise<ClaimedShareLink> {
   const link = await throwIfError(
     client().rpc("get_share_link", { p_token: token }),
   );
-  if (!link) throw new Error("This share link is invalid or has expired.");
-  const row = link as Row;
+  const row = (Array.isArray(link) ? link[0] : link) as Row | null;
+  const ownerId = typeof row?.owner_id === "string" ? row.owner_id.trim() : "";
+  const purposeId = typeof row?.purpose_id === "string" ? row.purpose_id.trim() : "";
+  const purposeName =
+    typeof row?.purpose_name === "string" ? row.purpose_name.trim() : "";
+
+  // Composite-returning PostgreSQL functions can return an object whose
+  // fields are all null when there is no active share row.
+  if (!ownerId || !purposeId || !purposeName) {
+    throw new Error("This sharing link has been revoked or has expired.");
+  }
+
   return {
-    ownerId: row.owner_id,
-    purposeId: row.purpose_id,
-    purposeName: row.purpose_name,
-    viewerEmail: row.viewer_email,
+    ownerId,
+    purposeId,
+    purposeName,
+    viewerEmail:
+      typeof row.viewer_email === "string" ? row.viewer_email.trim() : "",
   };
 }
 

@@ -61,7 +61,7 @@ export default function ShareLayout({
       <div className="flex min-h-screen items-center justify-center bg-page px-4">
         <div className="flex max-w-sm flex-col items-center gap-3 text-center">
           <ShieldX className="size-10 text-rose-500" />
-          <h1 className="text-lg font-semibold">This link is no longer valid</h1>
+          <h1 className="text-lg font-semibold">Link revoked or expired</h1>
           <p className="text-sm text-muted-foreground">{state.message}</p>
         </div>
       </div>

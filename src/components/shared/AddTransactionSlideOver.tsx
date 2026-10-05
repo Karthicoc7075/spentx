@@ -1451,7 +1451,7 @@ export function AddTransactionSlideOver({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         className={cn(
-          "w-full gap-0 overflow-y-auto p-0",
+          "w-full gap-0 overflow-x-hidden overflow-y-auto p-0",
           // Mobile view: Centered Modal Dialog
           "max-sm:!fixed max-sm:!inset-auto max-sm:!top-1/2 max-sm:!left-1/2 max-sm:!-translate-x-1/2 max-sm:!-translate-y-1/2 max-sm:!w-[calc(100%-2rem)] max-sm:!max-w-lg max-sm:!h-auto max-sm:!max-h-[88vh] max-sm:!rounded-2xl max-sm:!border max-sm:!border-border max-sm:!shadow-2xl max-sm:data-starting-style:!opacity-0 max-sm:data-starting-style:!scale-95 max-sm:data-ending-style:!opacity-0 max-sm:data-ending-style:!scale-95",
           // Laptop / Desktop view: Side Drawer
@@ -1478,7 +1478,7 @@ export function AddTransactionSlideOver({
         </div>
 
         <form
-          className="grid gap-5 px-6 py-5"
+          className="grid min-w-0 max-w-full gap-5 px-4 py-5 sm:px-6"
           onSubmit={(event) => {
             event.preventDefault();
             if (
@@ -1942,9 +1942,12 @@ export function AddTransactionSlideOver({
                   Purpose + Category rows
                 </Label>
                 {bothSplitRows.map((row) => (
-                  <div key={row.id} className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-2">
+                  <div
+                    key={row.id}
+                    className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
+                  >
                     <select
-                      className={fieldSelectClassName}
+                      className={cn(fieldSelectClassName, "col-span-3 min-w-0 sm:col-span-1")}
                       value={row.purposeId}
                       onChange={(event) =>
                         setBothSplitRows((rows) =>
@@ -1964,7 +1967,7 @@ export function AddTransactionSlideOver({
                       ))}
                     </select>
                     <select
-                      className={fieldSelectClassName}
+                      className={cn(fieldSelectClassName, "min-w-0")}
                       value={row.categoryId}
                       onChange={(event) =>
                         setBothSplitRows((rows) =>
@@ -1984,7 +1987,7 @@ export function AddTransactionSlideOver({
                       ))}
                     </select>
                     <Input
-                      className="h-9 w-24 shrink-0 text-right"
+                      className="h-9 w-20 shrink-0 text-right sm:w-24"
                       inputMode="decimal"
                       placeholder="0"
                       value={row.amount}
@@ -2057,9 +2060,9 @@ export function AddTransactionSlideOver({
                   Category rows
                 </Label>
                 {categorySplitRows.map((row) => (
-                  <div key={row.id} className="flex items-center gap-2">
+                  <div key={row.id} className="flex min-w-0 items-center gap-2">
                     <select
-                      className={fieldSelectClassName}
+                      className={cn(fieldSelectClassName, "min-w-0")}
                       value={row.categoryId}
                       onChange={(event) =>
                         setCategorySplitRows((rows) =>
@@ -2079,7 +2082,7 @@ export function AddTransactionSlideOver({
                       ))}
                     </select>
                     <Input
-                      className="h-9 w-24 shrink-0 text-right"
+                      className="h-9 w-20 shrink-0 text-right sm:w-24"
                       inputMode="decimal"
                       placeholder="0"
                       value={row.amount}
@@ -2177,9 +2180,9 @@ export function AddTransactionSlideOver({
                   Purpose rows
                 </Label>
                 {purposeSplitRows.map((row) => (
-                  <div key={row.id} className="flex items-center gap-2">
+                  <div key={row.id} className="flex min-w-0 items-center gap-2">
                     <select
-                      className={fieldSelectClassName}
+                      className={cn(fieldSelectClassName, "min-w-0")}
                       value={row.purposeId}
                       onChange={(event) =>
                         setPurposeSplitRows((rows) =>
@@ -2199,7 +2202,7 @@ export function AddTransactionSlideOver({
                       ))}
                     </select>
                     <Input
-                      className="h-9 w-24 shrink-0 text-right"
+                      className="h-9 w-20 shrink-0 text-right sm:w-24"
                       inputMode="decimal"
                       placeholder="0"
                       value={row.amount}
@@ -2410,7 +2413,7 @@ export function AddTransactionSlideOver({
             </div>
           ) : null}
 
-          <SheetFooter className="flex-row items-center justify-between gap-3 border-t border-border px-0 pt-5">
+          <SheetFooter className="min-w-0 flex-col items-stretch gap-3 border-t border-border px-0 pt-5 sm:flex-row sm:items-center sm:justify-between">
             {initialValues && onDelete ? (
               <Button
                 disabled={isSubmitting}
@@ -2426,10 +2429,10 @@ export function AddTransactionSlideOver({
             ) : (
               <span />
             )}
-            <div className="flex w-full sm:w-auto items-center justify-end gap-2">
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2 min-[430px]:grid-cols-2 sm:flex sm:w-auto sm:items-center sm:justify-end">
               {!initialValues && !initialExpense && ownerMode !== "trip" && !friendSplitEnabled ? (
                 <Button
-                  className="flex-1 sm:flex-none text-xs sm:text-sm px-3 sm:px-4"
+                  className="w-full px-3 text-xs sm:w-auto sm:px-4 sm:text-sm"
                   disabled={
                     isSaving ||
                     isSubmitting ||
@@ -2448,7 +2451,7 @@ export function AddTransactionSlideOver({
                 </Button>
               ) : null}
               <Button
-                className={cn("flex-1 sm:flex-none sm:px-8 text-xs sm:text-sm", typeMeta.accent.button)}
+                className={cn("w-full text-xs sm:w-auto sm:px-8 sm:text-sm", typeMeta.accent.button)}
                 disabled={
                   isSaving ||
                   isSubmitting ||
