@@ -793,9 +793,9 @@ export function subscribeToTransactions(
   };
 
   // Fast broadcast channel: sub-100ms relay between Web and Mobile app
-  const syncChannel = supabase
-    .channel(`user-sync:${userId}`)
-    .on(
+  const syncChannel = getUserSyncChannel(userId);
+  if (syncChannel) {
+    syncChannel.on(
       "broadcast",
       { event: "transaction-changed" },
       (payload) => {
@@ -809,8 +809,8 @@ export function subscribeToTransactions(
         }
         triggerRefresh();
       },
-    )
-    .subscribe();
+    );
+  }
 
   const channel = supabase
     .channel(uniqueTopic(`transactions:${userId}`))
@@ -860,7 +860,6 @@ export function subscribeToTransactions(
   return () => {
     if (refreshTimer) clearTimeout(refreshTimer);
     void supabase.removeChannel(channel);
-    void supabase.removeChannel(syncChannel);
   };
 }
 
@@ -932,6 +931,29 @@ export async function fetchTransaction(userId: string | undefined, transactionId
   }
 }
 
+let activeUserSyncChannel: RealtimeChannel | null = null;
+let activeUserSyncUserId: string | null = null;
+
+export function getUserSyncChannel(userId: string | undefined): RealtimeChannel | null {
+  if (!userId) return null;
+  const supabase = client();
+  if (activeUserSyncChannel && activeUserSyncUserId === userId) {
+    return activeUserSyncChannel;
+  }
+  if (activeUserSyncChannel) {
+    void supabase.removeChannel(activeUserSyncChannel);
+    activeUserSyncChannel = null;
+  }
+  activeUserSyncUserId = userId;
+  activeUserSyncChannel = supabase.channel(`user-sync:${userId}`, {
+    config: {
+      broadcast: { self: false },
+    },
+  });
+  activeUserSyncChannel.subscribe();
+  return activeUserSyncChannel;
+}
+
 export function broadcastUserSyncEvent(
   userId: string | undefined,
   event: string,
@@ -939,12 +961,14 @@ export function broadcastUserSyncEvent(
 ) {
   if (!userId) return;
   try {
-    const supabase = client();
-    void supabase.channel(`user-sync:${userId}`).send({
-      type: "broadcast",
-      event,
-      payload: { ...payload, timestamp: Date.now() },
-    });
+    const ch = getUserSyncChannel(userId);
+    if (ch) {
+      void ch.send({
+        type: "broadcast",
+        event,
+        payload: { ...payload, timestamp: Date.now() },
+      });
+    }
   } catch (_) {}
 }
 
