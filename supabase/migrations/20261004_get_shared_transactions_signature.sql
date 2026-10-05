@@ -1,9 +1,6 @@
--- Replaced in place: CREATE OR REPLACE cannot change the 13-column
--- return type from 20260930_p0_sharing_fixes.sql. This file had not
--- defined a compatible signature (it dropped split_id and returned
--- accounts.name). Drop and recreate the app's column list.
--- 20261004_get_shared_transactions_signature.sql repeats this so a
--- database that already recorded this filename still gets the fix.
+-- Idempotent fix for databases that already applied
+-- 20260930_shared_transactions_exclude_deleted_outings.sql
+-- (or failed it). Does not rewrite earlier migration history.
 
 -- Restore get_shared_transactions after the 12-column CREATE OR REPLACE.
 -- PostgreSQL rejects CREATE OR REPLACE when the return row type changes, so

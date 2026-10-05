@@ -58,14 +58,14 @@ export function useTransactions() {
         ? fetchSharedTransactions(share.token, share.purposeId)
         : withoutMockTransactions(await fetchTransactions(effectiveUserId)),
     enabled: Boolean(share) || Boolean(effectiveUserId && (isReady || !isConfigured)),
-    refetchOnMount: share ? "always" : false,
-    refetchOnWindowFocus: Boolean(share),
-    staleTime: share ? 0 : 10 * 60 * 1000,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   });
 
   const transactions = useMemo(
-    () => mergeTransactions(query.data ?? [], liveTransactions),
-    [liveTransactions, query.data],
+    () => (share ? (query.data ?? []) : liveTransactions),
+    [liveTransactions, query.data, share],
   );
 
   return {

@@ -746,10 +746,17 @@ function uniqueTopic(prefix: string) {
   return `${prefix}#${realtimeTopicSeq}`;
 }
 
+export type TransactionDeletedEvent = {
+  id: string;
+  merchant?: string;
+  amount?: number;
+};
+
 export function subscribeToTransactions(
   userId: string | undefined,
   onData: (transactions: Transaction[]) => void,
   onError?: (error: Error) => void,
+  onTransactionDeleted?: (event: TransactionDeletedEvent) => void,
 ) {
   if (!userId) {
     onData([]);
@@ -769,7 +776,34 @@ export function subscribeToTransactions(
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "transactions", filter: `user_id=eq.${userId}` },
-      () => void fetchTransactions(userId).then(onData).catch(onError),
+      (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldRow = payload.old as Row | undefined;
+          if (oldRow?.id) {
+            onTransactionDeleted?.({
+              id: String(oldRow.id),
+              merchant: oldRow.merchant ? String(oldRow.merchant) : undefined,
+              amount: Number(oldRow.total_amount ?? oldRow.amount ?? 0),
+            });
+          }
+        } else if (payload.eventType === "UPDATE") {
+          const newRow = payload.new as Row | undefined;
+          const oldRow = payload.old as Row | undefined;
+          if (
+            newRow &&
+            (newRow.is_active === false || newRow.deleted_at != null) &&
+            oldRow?.is_active !== false &&
+            oldRow?.deleted_at == null
+          ) {
+            onTransactionDeleted?.({
+              id: String(newRow.id ?? oldRow?.id ?? ""),
+              merchant: String(newRow.merchant ?? oldRow?.merchant ?? ""),
+              amount: Number(newRow.total_amount ?? newRow.amount ?? oldRow?.total_amount ?? 0),
+            });
+          }
+        }
+        void fetchTransactions(userId).then(onData).catch(onError);
+      },
     )
     .on(
       "postgres_changes",
@@ -2932,10 +2966,16 @@ export async function fetchOutings(userId?: string) {
   return outings.filter((outing) => outing.isActive !== false && !outing.deletedAt);
 }
 
+export type OutingDeletedEvent = {
+  id: string;
+  name?: string;
+};
+
 export function subscribeToOutings(
   userId: string | undefined,
   onData: (outings: Outing[]) => void,
   onError?: (error: Error) => void,
+  onOutingDeleted?: (event: OutingDeletedEvent) => void,
 ) {
   if (!userId) {
     onData([]);
@@ -2949,7 +2989,32 @@ export function subscribeToOutings(
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "outings", filter: `user_id=eq.${userId}` },
-      () => void fetchOutings(userId).then(onData).catch(onError),
+      (payload) => {
+        if (payload.eventType === "DELETE") {
+          const oldRow = payload.old as Row | undefined;
+          if (oldRow?.id) {
+            onOutingDeleted?.({
+              id: String(oldRow.id),
+              name: oldRow.name ? String(oldRow.name) : undefined,
+            });
+          }
+        } else if (payload.eventType === "UPDATE") {
+          const newRow = payload.new as Row | undefined;
+          const oldRow = payload.old as Row | undefined;
+          if (
+            newRow &&
+            (newRow.is_active === false || newRow.deleted_at != null) &&
+            oldRow?.is_active !== false &&
+            oldRow?.deleted_at == null
+          ) {
+            onOutingDeleted?.({
+              id: String(newRow.id ?? oldRow?.id ?? ""),
+              name: String(newRow.name ?? oldRow?.name ?? ""),
+            });
+          }
+        }
+        void fetchOutings(userId).then(onData).catch(onError);
+      },
     )
     .subscribe();
   return () => {
@@ -3188,15 +3253,31 @@ export async function restoreOuting(userId: string | undefined, outingId: string
   );
 }
 
-/** Outings soft-deleted via deleteOuting, for Settings > Data & Backups. */
+/**
+ * Permanently purge soft-deleted outings older than 7 days from the database.
+ */
+export async function purgeExpiredDeletedOutings() {
+  try {
+    await client().rpc("purge_expired_deleted_outings");
+  } catch (error) {
+    // Migration may not be applied yet, ignore safely
+    console.debug("purge_expired_deleted_outings call:", error);
+  }
+}
+
+/** Outings soft-deleted via deleteOuting within 7 days, for Settings > Data & Backups. */
 export async function fetchDeletedOutings(userId?: string) {
   if (!userId) return [];
+  // Clean up any outings older than 7 days first
+  void purgeExpiredDeletedOutings();
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const data = await throwIfError(
     client()
       .from("outings")
       .select("*")
       .eq("user_id", userId)
       .eq("is_active", false)
+      .gte("deleted_at", sevenDaysAgo)
       .order("deleted_at", { ascending: false }),
   );
   return ((data as Row[]) ?? []).map(toOuting);

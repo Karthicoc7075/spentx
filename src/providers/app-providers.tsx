@@ -19,11 +19,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
         <SupabaseProvider>
           <ViewerProvider>
             <RoleModeProvider>
-              <AppDataProvider>
-                <TooltipProvider>
-                  <ToastProvider>{children}</ToastProvider>
-                </TooltipProvider>
-              </AppDataProvider>
+              <ToastProvider>
+                <AppDataProvider>
+                  <TooltipProvider>{children}</TooltipProvider>
+                </AppDataProvider>
+              </ToastProvider>
             </RoleModeProvider>
           </ViewerProvider>
         </SupabaseProvider>

@@ -30,6 +30,7 @@ import { syncAllOutingRollups } from "@/lib/outing-ledger-sync";
 import { isOutingActive } from "@/lib/outing-display";
 import { useAutoBackup } from "@/hooks/useAutoBackup";
 import { useApplyUserPreferences } from "@/hooks/useApplyUserPreferences";
+import { useToast } from "@/providers/toast-provider";
 import {
   cacheKeys,
   hydrateQueryCaches,
@@ -93,6 +94,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   // the sole data source there instead.
   const effectiveUserId = share || isAdminRoute || isShareRoute ? undefined : (dataOwnerId ?? user?.id);
   const queryClient = useQueryClient();
+  const { notify } = useToast();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [transactionsError, setTransactionsError] = useState<Error | null>(null);
@@ -235,6 +237,25 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         setTransactionsError(error);
         setTransactionsLoading(false);
       },
+      (deletedTx) => {
+        const merchant = deletedTx.merchant?.trim() || "Transaction";
+        const amtStr = deletedTx.amount
+          ? ` (-₹${deletedTx.amount.toLocaleString("en-IN")})`
+          : "";
+        notify({
+          title: "Transaction deleted",
+          description: `You deleted ${merchant}${amtStr}`,
+        });
+
+        // Instantly purge from memory state, query client, and local storage cache
+        setTransactions((prev) => {
+          const next = prev.filter((t) => t.id !== deletedTx.id);
+          transactionsRef.current = next;
+          writeQueryCache(userId, cacheKeys.transactions, next);
+          queryClient.setQueryData(queryKeys.transactions(userId), next);
+          return next;
+        });
+      },
     );
 
     let unsubscribeOutings: () => void = () => {};
@@ -248,6 +269,18 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
           setOutingsLoading(false);
         },
         () => setOutingsLoading(false),
+        (deletedOuting) => {
+          const name = deletedOuting.name?.trim() || "Outing";
+          notify({
+            title: "Outing deleted",
+            description: `You deleted ${name}`,
+          });
+          setOutings((prev) => {
+            const next = prev.filter((o) => o.id !== deletedOuting.id);
+            queryClient.setQueryData(queryKeys.outings(user?.id), next);
+            return next;
+          });
+        },
       );
       // Mobile outing-expense edits: NW/Wealth already use expenses (correct);
       // Transactions shows a separate "Outing total" rollup row — rewrite it
