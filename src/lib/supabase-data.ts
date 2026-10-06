@@ -3206,6 +3206,9 @@ export async function fetchSavingsGoals(userId?: string) {
       row.monthly_contribution === null ? undefined : Number(row.monthly_contribution),
     isActive: row.is_active ?? true,
     deletedAt: row.deleted_at ?? undefined,
+    targetDate: row.target_date ?? undefined,
+    color: row.color ?? "indigo",
+    icon: row.icon ?? "target",
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }) as SavingsGoal);
@@ -3214,25 +3217,65 @@ export async function fetchSavingsGoals(userId?: string) {
 
 export async function saveSavingsGoal(userId: string | undefined, goal: SavingsGoal) {
   if (!userId) throw new Error("Sign in before saving savings goals.");
-  const data = await throwIfError(
-    client()
-      .from("savings_goals")
-      .upsert(
-        compact({
-          id: isUuid(goal.id) ? goal.id : undefined,
-          user_id: userId,
-          name: goal.name,
-          target_amount: goal.targetAmount,
-          saved_amount: goal.savedAmount,
-          monthly_contribution: goal.monthlyContribution,
-          is_active: goal.isActive ?? true,
-          updated_at: new Date().toISOString(),
-        }),
-      )
-      .select("*")
-      .single(),
-  );
+  let data;
+  try {
+    data = await throwIfError(
+      client()
+        .from("savings_goals")
+        .upsert(
+          compact({
+            id: isUuid(goal.id) ? goal.id : undefined,
+            user_id: userId,
+            name: goal.name,
+            target_amount: goal.targetAmount,
+            saved_amount: goal.savedAmount,
+            monthly_contribution: goal.monthlyContribution,
+            target_date: goal.targetDate || null,
+            color: goal.color ?? "indigo",
+            icon: goal.icon ?? "target",
+            is_active: goal.isActive ?? true,
+            updated_at: new Date().toISOString(),
+          }),
+        )
+        .select("*")
+        .single(),
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (
+      msg.includes("target_date") ||
+      msg.includes("color") ||
+      msg.includes("icon") ||
+      msg.includes("is_active")
+    ) {
+      data = await throwIfError(
+        client()
+          .from("savings_goals")
+          .upsert(
+            compact({
+              id: isUuid(goal.id) ? goal.id : undefined,
+              user_id: userId,
+              name: goal.name,
+              target_amount: goal.targetAmount,
+              saved_amount: goal.savedAmount,
+              monthly_contribution: goal.monthlyContribution,
+              updated_at: new Date().toISOString(),
+            }),
+          )
+          .select("*")
+          .single(),
+      );
+    } else {
+      throw err;
+    }
+  }
+
   const saved = (await fetchSavingsGoals(userId)).find((item) => item.id === (data as Row).id)!;
+  broadcastUserSyncEvent(userId, "savings-goal-changed", {
+    op: "upsert",
+    id: saved?.id,
+    source: "web",
+  });
   broadcastUserSyncEvent(userId, "investment-changed", {
     op: "upsert",
     id: saved?.id,
@@ -3253,6 +3296,11 @@ export async function deleteSavingsGoal(userId: string | undefined, goalId: stri
   } catch (_) {
     await throwIfError(client().from("savings_goals").delete().eq("user_id", userId).eq("id", goalId));
   }
+  broadcastUserSyncEvent(userId, "savings-goal-changed", {
+    op: "delete",
+    id: goalId,
+    source: "web",
+  });
   broadcastUserSyncEvent(userId, "investment-changed", {
     op: "delete",
     id: goalId,
@@ -3269,6 +3317,7 @@ export function subscribeToSavingsGoals(
   const syncChannel = getUserSyncChannel(userId);
   if (syncChannel) {
     syncChannel.on("broadcast", { event: "investment-changed" }, () => onChange());
+    syncChannel.on("broadcast", { event: "savings-goal-changed" }, () => onChange());
   }
   const channel = supabase
     .channel(uniqueTopic(`savings_goals:${userId}`))

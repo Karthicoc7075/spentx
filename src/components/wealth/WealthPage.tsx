@@ -8,9 +8,14 @@ import { WealthAccountsList } from "@/components/wealth/WealthAccountsList";
 import { DailySnapshotHistoryModal } from "@/components/wealth/DailySnapshotHistoryModal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { CalendarClock, Plus } from "lucide-react";
+import { CalendarClock, Landmark, Plus, Target, TrendingUp } from "lucide-react";
 import { NewAccountModal } from "@/components/wealth/NewAccountModal";
+import { NewSavingsGoalModal } from "@/components/wealth/NewSavingsGoalModal";
+import { NewInvestmentModal } from "@/components/wealth/NewInvestmentModal";
+import { SavingsGoalsSection } from "@/components/wealth/SavingsGoalsSection";
+import { InvestmentsSection } from "@/components/wealth/InvestmentsSection";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
@@ -19,7 +24,7 @@ import {
   computeNetWorthBreakdown,
   computeNetWorthByPurpose,
 } from "@/lib/wealth";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
 import { useOutings } from "@/hooks/useOutings";
 import { buildTransactionsListRows } from "@/lib/outings";
@@ -36,6 +41,10 @@ export function WealthPage() {
   const { expenses: outingExpenses } = useAllOutingExpenses();
   const { outings } = useOutings();
   const { accounts, isLoading: accountsLoading } = useAccounts();
+  const { goals: savingsGoals = [] } = useSavingsGoals();
+
+  // Tab state: "accounts" | "goals" | "investments"
+  const [activeTab, setActiveTab] = useState<"accounts" | "goals" | "investments">("accounts");
 
   // Default active segment is "bank" as requested
   const [filter, setFilter] = useState<WealthFilter>({
@@ -46,6 +55,8 @@ export function WealthPage() {
     "combined",
   );
   const [newAccountOpen, setNewAccountOpen] = useState(false);
+  const [newGoalOpen, setNewGoalOpen] = useState(false);
+  const [newInvestmentOpen, setNewInvestmentOpen] = useState(false);
   const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
   const [transferModalOpen, setTransferModalOpen] = useState(false);
   const [transferFromAccount, setTransferFromAccount] = useState<string | undefined>();
@@ -61,6 +72,22 @@ export function WealthPage() {
   const activeAccounts = useMemo(
     () => accounts.filter((account) => account.isActive !== false),
     [accounts],
+  );
+
+  const investmentAccounts = useMemo(
+    () =>
+      activeAccounts.filter(
+        (a) =>
+          a.type === "investment" ||
+          a.type === "mutual_fund" ||
+          a.type === "stocks",
+      ),
+    [activeAccounts],
+  );
+
+  const activeGoalsCount = useMemo(
+    () => savingsGoals.filter((g) => g.isActive !== false && !g.deletedAt).length,
+    [savingsGoals],
   );
 
   const unlinkedOutingExpenses = useMemo(
@@ -116,8 +143,6 @@ export function WealthPage() {
     date: string;
   }) {
     try {
-      // Same encoding as Flutter: category Settlements + tags transfer /
-      // transfer_to so both clients detect transfers without double-counting.
       const transferTags = ["transfer", `transfer_to:${toAccount}`];
       await addTransaction({
         type: "expense",
@@ -170,25 +195,46 @@ export function WealthPage() {
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-normal">Wealth</h1>
           <p className="mt-0.5 sm:mt-1 text-xs sm:text-sm text-muted-foreground">
-            Your available money across bank accounts, wallets, cash, and investments.
+            Your financial health across accounts, savings goals, and portfolio investments.
           </p>
         </div>
         <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full lg:w-auto">
-          <Button
-            onClick={() => setNewAccountOpen(true)}
-            className="gap-2 font-medium"
-          >
-            <Plus className="size-4" />
-            New Account
-          </Button>
-          <Button
-            onClick={() => setSnapshotModalOpen(true)}
-            variant="outline"
-            className="gap-2 font-medium"
-          >
-            <CalendarClock className="size-4 text-primary" />
-            Snapshot History
-          </Button>
+          {activeTab === "accounts" ? (
+            <>
+              <Button
+                onClick={() => setNewAccountOpen(true)}
+                className="gap-2 font-medium rounded-xl"
+              >
+                <Plus className="size-4" />
+                New Account
+              </Button>
+              <Button
+                onClick={() => setSnapshotModalOpen(true)}
+                variant="outline"
+                className="gap-2 font-medium rounded-xl"
+              >
+                <CalendarClock className="size-4 text-primary" />
+                Snapshot History
+              </Button>
+            </>
+          ) : activeTab === "goals" ? (
+            <Button
+              onClick={() => setNewGoalOpen(true)}
+              className="gap-2 font-medium col-span-2 sm:col-span-1 rounded-xl"
+            >
+              <Plus className="size-4" />
+              New Savings Goal
+            </Button>
+          ) : (
+            <Button
+              onClick={() => setNewInvestmentOpen(true)}
+              className="gap-2 font-medium col-span-2 sm:col-span-1 rounded-xl"
+            >
+              <Plus className="size-4" />
+              Add Investment
+            </Button>
+          )}
+
           <div className="col-span-2 sm:col-span-1 w-full sm:w-auto">
             <QuickAccountTransfer
               accounts={accounts}
@@ -219,6 +265,7 @@ export function WealthPage() {
         </div>
       ) : (
         <>
+          {/* Net Worth Hero Indicator */}
           <WealthNetWorthIndicator
             breakdown={netWorthBreakdown}
             isLoading={isLoading}
@@ -227,29 +274,124 @@ export function WealthPage() {
             onViewChange={setNetWorthView}
           />
 
-          <WealthSegmentCards
-            accounts={accounts}
-            activeFilter={filter}
-            breakdown={netWorthBreakdown}
-            onFilter={setFilter}
-          />
+          {/* Tab Switcher Navigation */}
+          <div className="flex items-center gap-1 sm:gap-2 border-b border-border/70 pb-px overflow-x-auto scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setActiveTab("accounts")}
+              className={cn(
+                "flex items-center gap-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer rounded-t-lg",
+                activeTab === "accounts"
+                  ? "border-primary text-primary bg-primary/[0.04]"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+              )}
+            >
+              <Landmark className="size-4" />
+              <span>Accounts & Balances</span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.2 text-[10px] font-semibold tabular-nums",
+                  activeTab === "accounts"
+                    ? "bg-primary/15 text-primary"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {activeAccounts.length}
+              </span>
+            </button>
 
-          {/* All Accounts, Wallets, Cash, and Investments List */}
-          <WealthAccountsList
-            accounts={activeAccounts}
-            transactions={transactions}
-            unlinkedOutingExpenses={unlinkedOutingExpenses}
-            activeFilter={filter}
-            onFilterChange={setFilter}
-            onNewAccount={() => setNewAccountOpen(true)}
-            onTransfer={(accountName) => {
-              setTransferFromAccount(accountName);
-              setTransferModalOpen(true);
-            }}
-          />
+            <button
+              type="button"
+              onClick={() => setActiveTab("goals")}
+              className={cn(
+                "flex items-center gap-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer rounded-t-lg",
+                activeTab === "goals"
+                  ? "border-primary text-primary bg-primary/[0.04]"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+              )}
+            >
+              <Target className="size-4" />
+              <span>Savings & Goals</span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.2 text-[10px] font-semibold tabular-nums",
+                  activeTab === "goals"
+                    ? "bg-primary/15 text-primary"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {activeGoalsCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("investments")}
+              className={cn(
+                "flex items-center gap-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold border-b-2 transition-all whitespace-nowrap cursor-pointer rounded-t-lg",
+                activeTab === "investments"
+                  ? "border-primary text-primary bg-primary/[0.04]"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+              )}
+            >
+              <TrendingUp className="size-4" />
+              <span>Portfolio Investments</span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.2 text-[10px] font-semibold tabular-nums",
+                  activeTab === "investments"
+                    ? "bg-primary/15 text-primary"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {investmentAccounts.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Tab 1: Accounts & Balances */}
+          {activeTab === "accounts" ? (
+            <div className="space-y-6">
+              <WealthSegmentCards
+                accounts={accounts}
+                activeFilter={filter}
+                breakdown={netWorthBreakdown}
+                onFilter={setFilter}
+              />
+
+              <WealthAccountsList
+                accounts={activeAccounts}
+                transactions={transactions}
+                unlinkedOutingExpenses={unlinkedOutingExpenses}
+                activeFilter={filter}
+                onFilterChange={setFilter}
+                onNewAccount={() => setNewAccountOpen(true)}
+                onTransfer={(accountName) => {
+                  setTransferFromAccount(accountName);
+                  setTransferModalOpen(true);
+                }}
+              />
+            </div>
+          ) : null}
+
+          {/* Tab 2: Savings & Goals */}
+          {activeTab === "goals" ? (
+            <SavingsGoalsSection onNewGoalClick={() => setNewGoalOpen(true)} />
+          ) : null}
+
+          {/* Tab 3: Portfolio Investments */}
+          {activeTab === "investments" ? (
+            <InvestmentsSection
+              accounts={activeAccounts}
+              transactions={transactions}
+              unlinkedOutingExpenses={unlinkedOutingExpenses}
+              onNewInvestmentClick={() => setNewInvestmentOpen(true)}
+            />
+          ) : null}
         </>
       )}
 
+      {/* Daily Snapshots Modal */}
       <DailySnapshotHistoryModal
         open={snapshotModalOpen}
         onOpenChange={setSnapshotModalOpen}
@@ -258,9 +400,22 @@ export function WealthPage() {
         onNewAccount={() => setNewAccountOpen(true)}
       />
 
+      {/* New Account Modal */}
       <NewAccountModal
         open={newAccountOpen}
         onOpenChange={setNewAccountOpen}
+      />
+
+      {/* New Savings Goal Modal */}
+      <NewSavingsGoalModal
+        open={newGoalOpen}
+        onOpenChange={setNewGoalOpen}
+      />
+
+      {/* New Investment Modal */}
+      <NewInvestmentModal
+        open={newInvestmentOpen}
+        onOpenChange={setNewInvestmentOpen}
       />
     </div>
   );
