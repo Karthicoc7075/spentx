@@ -25,6 +25,7 @@ import {
   computeNetWorthBreakdown,
   computeNetWorthByPurpose,
   isInvestmentAccount,
+  isLiquidAccount,
 } from "@/lib/wealth";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
@@ -78,7 +79,7 @@ export function WealthPage() {
   );
 
   const liquidAccounts = useMemo(
-    () => activeAccounts.filter((account) => !isInvestmentAccount(account)),
+    () => activeAccounts.filter((account) => isLiquidAccount(account)),
     [activeAccounts],
   );
 

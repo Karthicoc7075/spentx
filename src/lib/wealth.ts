@@ -327,7 +327,8 @@ export function computeNetWorthBreakdown(
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i];
     const balance = balanceMap.get(account.id) ?? 0;
-    switch (account.type) {
+    const accType = (account.type ?? "").toLowerCase();
+    switch (accType) {
       case "cash":
         cash += balance;
         break;
@@ -337,8 +338,13 @@ export function computeNetWorthBreakdown(
       case "credit":
         credit += balance;
         break;
-      default:
+      case "bank":
         bankAccounts += balance;
+        break;
+      default:
+        if (!isInvestmentAccount(account)) {
+          bankAccounts += balance;
+        }
         break;
     }
   }
@@ -628,6 +634,7 @@ export function computeNetWorthByPurpose(
   purposes: Purpose[],
   unlinkedOutingExpenses: OutingExpense[] = [],
 ): PurposeNetWorth[] {
+  const liquidAccounts = accounts.filter((account) => isLiquidAccount(account));
   return getActivePurposes(purposes).map((purpose) => {
     const purposeTransactions = narrowTransactionsToFilter(
       transactions,
@@ -635,8 +642,8 @@ export function computeNetWorthByPurpose(
       purposes,
     );
     const scopedAccounts = isPersonalPurposeRef(purpose.id, purposes)
-      ? accounts
-      : accounts.map((account) => ({ ...account, openingBalance: 0 }));
+      ? liquidAccounts
+      : liquidAccounts.map((account) => ({ ...account, openingBalance: 0 }));
     const outingAdj = isPersonalPurposeRef(purpose.id, purposes)
       ? unlinkedOutingExpenses
       : [];

@@ -122,11 +122,11 @@ export function DashboardKpiRow({
     () =>
       computeNetWorthByPurpose(
         accounts,
-        transactions,
+        balanceLedger,
         purposes,
         unlinkedOutingExpenses,
       ),
-    [accounts, purposes, transactions, unlinkedOutingExpenses],
+    [accounts, purposes, balanceLedger, unlinkedOutingExpenses],
   );
 
   const cashBalance = useMemo(

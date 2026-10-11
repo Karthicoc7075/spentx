@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { format } from "date-fns";
 import {
   Dialog,
   DialogContent,
@@ -132,6 +133,12 @@ function InvestmentForm({
   const [sourceChoice, setSourceChoice] = useState("");
   const [deductFromBank, setDeductFromBank] = useState(!initialInvestment);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [time, setTime] = useState(() => {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2, "0");
+    const m = String(now.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+  });
   const [notes, setNotes] = useState(initialInvestment?.notes ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -173,6 +180,17 @@ function InvestmentForm({
           activePurposes.find((p) => p.name === purposeName)?.id ??
           getDefaultPersonalPurpose(activePurposes)?.id ??
           "personal";
+
+        const [hours, minutes] = (time || "12:00").split(":").map(Number);
+        const txDateTime = new Date();
+        if (date) {
+          const [year, month, day] = date.split("-").map(Number);
+          txDateTime.setFullYear(year, month - 1, day);
+        }
+        txDateTime.setHours(hours || 0, minutes || 0, 0, 0);
+        const isoDate = txDateTime.toISOString();
+        const timeString = format(txDateTime, "hh:mm a");
+
         const tx = await addTransaction({
           type: "expense",
           amount: investedAmount,
@@ -182,7 +200,9 @@ function InvestmentForm({
           account: sourceAccount,
           purpose: purposeId,
           source: "manual",
-          date: new Date(`${date}T12:00:00`).toISOString(),
+          date: isoDate,
+          transactionDate: isoDate,
+          time: timeString,
           note: notes.trim()
             ? `Investment in ${trimmedName}: ${notes.trim()}`
             : `Capital invested in ${trimmedName}`,
@@ -375,7 +395,7 @@ function InvestmentForm({
                   </div>
                 </label>
                 {deductFromBank && bankAccounts.length > 0 ? (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-3">
                     <div className="space-y-1.5">
                       <Label className="text-xs font-semibold">Paid from</Label>
                       <select
@@ -390,14 +410,25 @@ function InvestmentForm({
                         ))}
                       </select>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold">Date</Label>
-                      <Input
-                        type="date"
-                        value={date}
-                        onChange={(e) => setDate(e.target.value)}
-                        className="h-10 text-xs rounded-xl"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold">Date</Label>
+                        <Input
+                          type="date"
+                          value={date}
+                          onChange={(e) => setDate(e.target.value)}
+                          className="h-10 text-xs rounded-xl"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold">Time</Label>
+                        <Input
+                          type="time"
+                          value={time}
+                          onChange={(e) => setTime(e.target.value)}
+                          className="h-10 text-xs rounded-xl"
+                        />
+                      </div>
                     </div>
                   </div>
                 ) : null}
