@@ -13,6 +13,7 @@ import {
   MessageSquareText,
   PencilLine,
   ReceiptText,
+  RotateCcw,
   ScrollText,
   ShieldCheck,
   Smartphone,
@@ -37,6 +38,7 @@ import {
   adminForceVerifyEmail,
   adminResendVerification,
   adminResetPassword,
+  adminResetUserData,
   adminSetSuspended,
   fetchAdminUserOverview,
 } from "@/lib/admin-api";
@@ -52,6 +54,7 @@ type DialogKind =
   | "verify"
   | "suspend"
   | "unsuspend"
+  | "reset-data"
   | "delete"
   | "write";
 
@@ -192,9 +195,19 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
               )
             ) : null}
             {!isAdminTarget ? (
-              <Button size="sm" variant="destructive" onClick={() => setDialog("delete")}>
-                <Trash2 className="size-3.5" /> Delete
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                  onClick={() => setDialog("reset-data")}
+                >
+                  <RotateCcw className="size-3.5" /> Reset to Onboarding
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => setDialog("delete")}>
+                  <Trash2 className="size-3.5" /> Delete Account
+                </Button>
+              </>
             ) : null}
           </div>
         </div>
@@ -578,13 +591,34 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
         }}
       />
       <AdminConfirmDialog
-        open={dialog === "delete"}
+        open={dialog === "reset-data"}
         onOpenChange={(open) => !open && setDialog(null)}
-        title="Delete this account permanently?"
+        title="Reset user data to fresh onboarding?"
         description={
           <>
-            Deletes <strong className="text-foreground">{profile.email}</strong> and all of their data (cascade).
-            This cannot be undone — consider suspending instead.
+            Wipes all transactions, accounts, outings, budgets, and investments for{" "}
+            <strong className="text-foreground">{profile.email}</strong>.
+            <br className="mt-1" />
+            Their <strong className="text-foreground">login credentials (email & password) are preserved</strong>. When they next open the app or log in, they will start fresh from the first-time onboarding screen.
+          </>
+        }
+        confirmLabel="Reset to onboarding"
+        destructive
+        requirePhrase={profile.email}
+        onConfirm={async () => {
+          await adminResetUserData(userId);
+          notify({ title: "User data reset", description: `Reset ${profile.email} to onboarding.` });
+          await refresh();
+        }}
+      />
+      <AdminConfirmDialog
+        open={dialog === "delete"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title="Delete this account permanently (including credentials)?"
+        description={
+          <>
+            Permanently deletes the login credentials for <strong className="text-foreground">{profile.email}</strong> and all of their data across all tables.
+            They will no longer be able to log in.
           </>
         }
         confirmLabel="Delete permanently"

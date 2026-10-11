@@ -10,12 +10,13 @@ export const DASHBOARD_KPI_OPTIONS: Array<{
   key: DashboardKpiKey;
   label: string;
 }> = [
-  { key: "net-worth", label: "Net Worth" },
+  { key: "net-worth", label: "Liquid Amount" },
   { key: "total-income", label: "Total Income" },
   { key: "total-expense", label: "Total Expense" },
   { key: "net-savings", label: "Net Savings" },
   { key: "cash-in-hand", label: "Cash in Hand" },
   { key: "bank-balance", label: "Bank Balance" },
+  { key: "wallet-balance", label: "Wallet Balance" },
   // "investment-value" removed: investments only show on the Wealth page.
   { key: "outing-spend", label: "Outings Spend" },
   { key: "month-rollover", label: "Last Month Rollover" },

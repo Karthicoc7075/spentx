@@ -68,6 +68,13 @@ async function handleDelete(
       );
     }
 
+    // Pre-emptively unlink default_account_id and clear transaction/account dependencies
+    // to prevent any ON DELETE RESTRICT FK blocks during the user deletion cascade.
+    await admin.from("users").update({ default_account_id: null }).eq("id", targetUserId);
+    await admin.from("transaction_splits").delete().eq("user_id", targetUserId);
+    await admin.from("transactions").delete().eq("user_id", targetUserId);
+    await admin.from("accounts").delete().eq("user_id", targetUserId);
+
     // Deleting auth.users cascades to public.users and every user-owned
     // table via the existing on delete cascade FKs.
     const { error: deleteError } = await admin.auth.admin.deleteUser(targetUserId);

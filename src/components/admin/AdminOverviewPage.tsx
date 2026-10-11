@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   DatabaseBackup,
   HardDrive,
+  RotateCcw,
   Trash2,
   Users,
   Wallet,
@@ -17,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { KpiCard } from "@/components/shared/KpiCard";
 import { AdminResetAllModal } from "@/components/admin/AdminResetAllModal";
+import { AdminResetUsersDataModal } from "@/components/admin/AdminResetUsersDataModal";
 import { AdminMetricsCharts } from "@/components/admin/AdminMetricsCharts";
 import {
   AdminCard,
@@ -52,6 +54,7 @@ export function AdminOverviewPage() {
   const { notify } = useToast();
   const queryClient = useQueryClient();
   const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetUsersModalOpen, setResetUsersModalOpen] = useState(false);
   const [maintenanceTarget, setMaintenanceTarget] = useState<boolean | null>(null);
 
   const { data: overview, isLoading, error, refetch } = useQuery({
@@ -168,11 +171,33 @@ export function AdminOverviewPage() {
         </AdminCard>
       </div>
 
+      <AdminCard className="border-amber-500/30">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-600 dark:text-amber-400">
+              <RotateCcw className="size-4" /> Reset all users to onboarding
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Clears all transaction and account data for all non-admin users and restarts their first-time onboarding flow.
+              Preserves their login credentials (email & password). Requires <code className="font-mono">ADMIN_RESET_PASSWORD</code>.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+            onClick={() => setResetUsersModalOpen(true)}
+          >
+            <RotateCcw className="size-4" /> Reset users to onboarding
+          </Button>
+        </div>
+      </AdminCard>
+
       <AdminCard className="border-destructive/30">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-destructive">
-              <Trash2 className="size-4" /> Reset all data
+              <Trash2 className="size-4" /> Reset all data (Nuclear)
             </h3>
             <p className="text-xs text-muted-foreground">
               Deletes every non-admin account and all app data (transactions, outings, accounts,
@@ -190,6 +215,7 @@ export function AdminOverviewPage() {
         Need a specific user? <Link className="text-primary hover:underline" href="/admin/users">Search users</Link>.
       </p>
 
+      <AdminResetUsersDataModal open={resetUsersModalOpen} onOpenChange={setResetUsersModalOpen} />
       <AdminResetAllModal open={resetModalOpen} onOpenChange={setResetModalOpen} />
 
       <AdminConfirmDialog

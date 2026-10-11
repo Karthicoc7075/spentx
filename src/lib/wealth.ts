@@ -290,13 +290,19 @@ export function isInvestmentAccount(account: Pick<Account, "type">) {
   return INVESTMENT_ACCOUNT_TYPES.has(String(account.type ?? "").toLowerCase());
 }
 
+const LIQUID_ACCOUNT_TYPES = new Set(["bank", "wallet", "cash"]);
+
+/** Liquid spending accounts: bank accounts, digital wallets, and cash only. */
+export function isLiquidAccount(account: Pick<Account, "type">) {
+  return LIQUID_ACCOUNT_TYPES.has(String(account.type ?? "").toLowerCase());
+}
+
 /**
- * Accounts that count toward the Net Worth card outside the Wealth page:
- * bank + cash + wallet balances minus credit card dues. Investments and goals
- * only show on the Wealth page.
+ * Accounts that count toward the Liquid Amount card outside the Wealth page:
+ * strictly bank accounts, digital wallets, and cash.
  */
 export function netWorthCardAccounts<T extends Pick<Account, "type">>(accounts: T[]): T[] {
-  return accounts.filter((account) => !isInvestmentAccount(account));
+  return accounts.filter((account) => isLiquidAccount(account));
 }
 
 export function computeNetWorthBreakdown(

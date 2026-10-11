@@ -28,12 +28,13 @@ import {
 import { cn } from "@/lib/utils";
 
 const KPI_DESCRIPTIONS: Record<DashboardKpiKey, string> = {
-  "net-worth": "Total liquid assets across bank & cash accounts",
+  "net-worth": "Total liquid amount across bank, wallet & cash accounts",
   "total-income": "All real earnings & inflow in period",
   "total-expense": "All spending including outing trip costs",
   "net-savings": "Net savings amount & savings rate % yield",
   "cash-in-hand": "Physical currency in cash accounts",
   "bank-balance": "Total balance across active bank accounts",
+  "wallet-balance": "Total balance across active digital wallets",
   "investment-value": "Total value of investment portfolio",
   "outing-spend": "Vacations & group trip expenses in period",
   "month-rollover": "Surplus or deficit carried from previous month",

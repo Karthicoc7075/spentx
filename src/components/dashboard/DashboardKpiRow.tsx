@@ -155,6 +155,19 @@ export function DashboardKpiRow({
     [accounts, balanceLedger, unlinkedOutingExpenses],
   );
 
+  const walletBalance = useMemo(
+    () =>
+      accounts
+        .filter((account) => account.type === "wallet" && account.isActive !== false)
+        .reduce(
+          (sum, account) =>
+            sum +
+            getAccountBalance(account, balanceLedger, unlinkedOutingExpenses),
+          0,
+        ),
+    [accounts, balanceLedger, unlinkedOutingExpenses],
+  );
+
   function renderCard(key: DashboardKpiKey, index: number) {
     if (!kpis) return null;
 
@@ -168,9 +181,9 @@ export function DashboardKpiRow({
       if (netWorthLoading) {
         return <Skeleton key={key} className="h-[132px] rounded-2xl" />;
       }
-      const netWorthTitle = isReadOnlyViewer
-        ? `${purposes[0]?.name ? `${purposes[0].name} Net Worth` : "Purpose Net Worth"}`
-        : "Net Worth";
+      const liquidTitle = isReadOnlyViewer
+        ? `${purposes[0]?.name ? `${purposes[0].name} Liquid Amount` : "Purpose Liquid Amount"}`
+        : "Liquid Amount";
 
       return (
         <div
@@ -180,7 +193,7 @@ export function DashboardKpiRow({
         >
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium text-muted-foreground">
-              {netWorthTitle}
+              {liquidTitle}
             </span>
             {
               !isReadOnlyViewer && (<div className="inline-flex rounded-lg bg-muted p-0.5 text-[10px] ring-1 ring-inset ring-border">
@@ -286,10 +299,15 @@ export function DashboardKpiRow({
         value: bankBalance,
         meta: "Across all bank accounts",
       },
+      "wallet-balance": {
+        label: "Wallet Balance",
+        value: walletBalance,
+        meta: "Across all digital wallets",
+      },
       "investment-value": {
         label: "Investment Value",
         value: investmentsTotal,
-        meta: "Not included in net worth",
+        meta: "Not included in liquid amount",
       },
       "outing-spend": {
         label: "Outings Spend",

@@ -8,6 +8,7 @@ import {
   LineChart,
   PiggyBank,
   Tent,
+  Wallet,
 } from "lucide-react";
 import type { DashboardKpiKey } from "@/hooks/useDashboardKpiConfig";
 
@@ -18,6 +19,7 @@ export const kpiIcons = {
   "net-savings": PiggyBank,
   "cash-in-hand": Banknote,
   "bank-balance": Landmark,
+  "wallet-balance": Wallet,
   "investment-value": LineChart,
   "outing-spend": Tent,
   "month-rollover": History,
@@ -57,6 +59,10 @@ export const kpiAccent: Record<
     icon: "bg-muted text-muted-foreground ring-border/60",
   },
   "bank-balance": {
+    tone: "neutral",
+    icon: "bg-muted text-muted-foreground ring-border/60",
+  },
+  "wallet-balance": {
     tone: "neutral",
     icon: "bg-muted text-muted-foreground ring-border/60",
   },

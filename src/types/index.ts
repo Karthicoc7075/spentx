@@ -284,6 +284,7 @@ export type DashboardKpiKey =
   | "net-savings"
   | "cash-in-hand"
   | "bank-balance"
+  | "wallet-balance"
   | "investment-value"
   | "outing-spend"
   | "month-rollover";

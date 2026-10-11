@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { cn, formatCurrency } from "@/lib/utils";
 import { computeAccountBalancesMap } from "@/lib/wealth";
 import { WealthFilteredTransactions } from "@/components/wealth/WealthFilteredTransactions";
-import { InvestmentHistoryPanel } from "@/components/wealth/InvestmentHistoryPanel";
 import type { Account, OutingExpense, Transaction, WealthFilter } from "@/types";
 
 type WealthAccountsListProps = {
@@ -49,7 +48,7 @@ export function WealthAccountsList({
   // Determine active segment (defaults to "bank")
   const activeSegmentKey = useMemo(() => {
     if (activeFilter.type === "segment") {
-      return activeFilter.segment;
+      return activeFilter.segment === "investment" ? "bank" : activeFilter.segment;
     }
     if (activeFilter.type === "account") {
       const match = accounts.find(
@@ -60,13 +59,6 @@ export function WealthAccountsList({
       if (match?.type === "bank") return "bank";
       if (match?.type === "wallet") return "wallet";
       if (match?.type === "cash") return "cash";
-      if (
-        match?.type === "investment" ||
-        match?.type === "mutual_fund" ||
-        match?.type === "stocks"
-      ) {
-        return "investment";
-      }
       return "bank";
     }
     return "bank";
@@ -114,16 +106,7 @@ export function WealthAccountsList({
     );
   }
 
-  // 2. INVESTMENT: User specified "investment . click all transaction for investment all show."
-  if (activeSegmentKey === "investment") {
-    return (
-      <div className="space-y-4">
-        <InvestmentHistoryPanel transactions={transactions} />
-      </div>
-    );
-  }
-
-  // 3. BANK OR WALLET: Show account list cards, and below show transaction account
+  // 2. BANK OR WALLET: Show account list cards, and below show transaction account
   const segmentTitle =
     activeSegmentKey === "bank" ? "Bank Accounts" : "Digital Wallets";
   const SegmentIcon = activeSegmentKey === "bank" ? Landmark : Wallet;

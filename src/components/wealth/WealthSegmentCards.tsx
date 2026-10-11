@@ -1,6 +1,6 @@
 "use client";
 
-import { Banknote, Landmark, TrendingUp, Wallet } from "lucide-react";
+import { Banknote, Landmark, Wallet } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Account, NetWorthBreakdown, WealthFilter } from "@/types";
 
@@ -9,7 +9,7 @@ type WealthSegmentCardsProps = {
   accounts: Account[];
   activeFilter: WealthFilter;
   onFilter: (filter: WealthFilter) => void;
-  /** Number of holdings in public.investments. */
+  /** Number of holdings in public.investments (optional for backwards-compatibility). */
   investmentCount?: number;
 };
 
@@ -38,14 +38,6 @@ const segments = [
     countLabel: (count: number) =>
       count === 1 ? "1 account" : `${count} accounts`,
   },
-  {
-    segment: "investment" as const,
-    label: "Investments",
-    key: "investmentValue" as const,
-    icon: TrendingUp,
-    countLabel: (count: number) =>
-      count > 0 ? `${count} accounts` : "Invested capital",
-  },
 ];
 
 export function WealthSegmentCards({
@@ -53,13 +45,11 @@ export function WealthSegmentCards({
   accounts,
   activeFilter,
   onFilter,
-  investmentCount = 0,
 }: WealthSegmentCardsProps) {
   const accountCounts = {
     bank: accounts.filter((account) => account.type === "bank").length,
     wallet: accounts.filter((account) => account.type === "wallet").length,
     cash: accounts.filter((account) => account.type === "cash").length,
-    investment: investmentCount,
   };
 
   // If wallet count is 0, hide the Wallets card completely
@@ -73,7 +63,7 @@ export function WealthSegmentCards({
   // Determine active segment even if an individual account is selected
   const activeSegmentKey = (() => {
     if (activeFilter.type === "segment") {
-      return activeFilter.segment;
+      return activeFilter.segment === "investment" ? "bank" : activeFilter.segment;
     }
     if (activeFilter.type === "account") {
       const match = accounts.find(
@@ -84,13 +74,6 @@ export function WealthSegmentCards({
       if (match?.type === "bank") return "bank";
       if (match?.type === "wallet") return "wallet";
       if (match?.type === "cash") return "cash";
-      if (
-        match?.type === "investment" ||
-        match?.type === "mutual_fund" ||
-        match?.type === "stocks"
-      ) {
-        return "investment";
-      }
       return "bank";
     }
     return "bank"; // Default to bank
@@ -100,9 +83,9 @@ export function WealthSegmentCards({
     <div
       className={cn(
         "grid gap-3 sm:gap-3.5",
-        visibleSegments.length === 3
-          ? "grid-cols-2 sm:grid-cols-3"
-          : "grid-cols-2 lg:grid-cols-4",
+        visibleSegments.length === 2
+          ? "grid-cols-2"
+          : "grid-cols-2 sm:grid-cols-3",
       )}
     >
       {visibleSegments.map((card, index) => {

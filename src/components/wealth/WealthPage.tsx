@@ -24,6 +24,7 @@ import {
   computeDailyFinancialSnapshots,
   computeNetWorthBreakdown,
   computeNetWorthByPurpose,
+  isInvestmentAccount,
 } from "@/lib/wealth";
 import { cn, formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
@@ -74,6 +75,11 @@ export function WealthPage() {
   const activeAccounts = useMemo(
     () => accounts.filter((account) => account.isActive !== false),
     [accounts],
+  );
+
+  const liquidAccounts = useMemo(
+    () => activeAccounts.filter((account) => !isInvestmentAccount(account)),
+    [activeAccounts],
   );
 
   const activeGoalsCount = useMemo(
@@ -288,7 +294,7 @@ export function WealthPage() {
                     : "bg-muted text-muted-foreground",
                 )}
               >
-                {activeAccounts.length}
+                {liquidAccounts.length}
               </span>
             </button>
 
@@ -345,15 +351,14 @@ export function WealthPage() {
           {activeTab === "accounts" ? (
             <div className="space-y-6">
               <WealthSegmentCards
-                accounts={accounts}
-                investmentCount={investments.length}
+                accounts={liquidAccounts}
                 activeFilter={filter}
                 breakdown={netWorthBreakdown}
                 onFilter={setFilter}
               />
 
               <WealthAccountsList
-                accounts={activeAccounts}
+                accounts={liquidAccounts}
                 transactions={transactions}
                 unlinkedOutingExpenses={unlinkedOutingExpenses}
                 activeFilter={filter}

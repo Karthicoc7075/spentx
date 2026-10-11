@@ -582,11 +582,19 @@ export async function adminSetSuspended(
   await postJson(`/api/admin/users/${userId}/suspend`, { suspend, reason });
 }
 
-// User deletion goes through the dedicated service-role Route Handler, not
-// a generic RPC — deleting auth.users requires the service role key, which
-// must never reach the browser.
 export async function adminDeleteUser(userId: string): Promise<void> {
   await postJson(`/api/admin/users/${userId}`, undefined, "DELETE");
+}
+
+export async function adminResetUserData(userId: string): Promise<void> {
+  await postJson(`/api/admin/users/${userId}/reset-data`, {});
+}
+
+export async function adminResetAllUsersData(password: string): Promise<void> {
+  await postJson(`/api/admin/reset-data-all`, {
+    password: password.trim(),
+    confirm: "RESET ALL USERS DATA",
+  });
 }
 
 /** Audited insert through the admin_insert_row RPC (allow-listed tables only). */
