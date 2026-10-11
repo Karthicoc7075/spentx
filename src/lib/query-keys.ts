@@ -28,6 +28,7 @@ export const queryKeys = {
   incomeTargets: (userId?: string) => ["incomeTargets", userId] as const,
   investmentTotal: (userId?: string) => ["investmentTotal", userId] as const,
   savingsGoals: (userId?: string) => ["savingsGoals", userId] as const,
+  investments: (userId?: string) => ["investments", userId] as const,
   projectorSettings: (userId?: string) => ["projectorSettings", userId] as const,
   outings: (userId?: string) => ["outings", userId] as const,
   deletedOutings: (userId?: string) => ["deletedOutings", userId] as const,

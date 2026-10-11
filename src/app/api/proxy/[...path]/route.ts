@@ -8,10 +8,14 @@ import {
 } from "@/lib/server/api-log";
 import {
   classifyImpersonatedTable,
+  embeddedTables,
+  isEmbeddableDuringImpersonation,
   logImpersonatedMutation,
   validateImpersonationSession,
   type ImpersonationSession,
 } from "@/lib/server/impersonation";
+import { bearerToken, verifyAccessToken } from "@/lib/server/admin-auth";
+import { isAdminEmail } from "@/lib/admin";
 import { getServiceRoleKey } from "@/lib/supabase/admin";
 import { getSupabaseUrl } from "@/lib/supabase/env";
 
@@ -92,7 +96,44 @@ type ImpersonationRewrite = {
   search: URLSearchParams;
   body: ArrayBuffer | null;
   mutation: { action: "create" | "update" | "delete"; table: string } | null;
+  upsertIdCheck?: { table: string; owner: string };
 };
+
+// RPCs a write-mode session may call. Each maps to the function actually
+// executed with the service role, with the session's target injected as
+// p_user_id — the caller can never pick the user.
+const IMPERSONATION_WRITE_RPCS: Record<string, { fn: string; table: string; action: "create" | "update" | "delete" }> = {
+  create_transaction_with_splits: {
+    fn: "impersonation_create_transaction_with_splits",
+    table: "transactions",
+    action: "create",
+  },
+  // These already accept p_user_id and allow the service role
+  // (spentx_caller_may_act_for).
+  cascade_delete_friend: { fn: "cascade_delete_friend", table: "friends", action: "delete" },
+  cascade_delete_outing: { fn: "cascade_delete_outing", table: "outings", action: "delete" },
+  restore_deleted_outing: { fn: "restore_deleted_outing", table: "outings", action: "update" },
+  add_goal_contribution: {
+    fn: "impersonation_add_goal_contribution",
+    table: "goal_contributions",
+    action: "create",
+  },
+};
+
+// Housekeeping RPCs pages fire on load that act on auth.uid(); during
+// impersonation they are answered as a no-op instead of erroring.
+const IMPERSONATION_NOOP_RPCS = new Set(["purge_expired_deleted_outings"]);
+
+function decodeJson(body: ArrayBuffer | null): unknown {
+  const text = new TextDecoder().decode(body ?? new ArrayBuffer(0));
+  return text.trim() ? JSON.parse(text) : null;
+}
+
+function encodeJson(value: unknown): ArrayBuffer {
+  return new TextEncoder().encode(JSON.stringify(value)).buffer as ArrayBuffer;
+}
+
+type RewriteResult = ImpersonationRewrite | Response | { noop: true };
 
 function rewriteForImpersonation(
   path: string[],
@@ -100,7 +141,8 @@ function rewriteForImpersonation(
   method: string,
   requestBody: ArrayBuffer | null,
   session: ImpersonationSession,
-): ImpersonationRewrite | Response {
+  preferHeader: string | null,
+): RewriteResult {
   const [root, version, ...rest] = path;
   if (root !== "rest") {
     return Response.json(
@@ -109,28 +151,36 @@ function rewriteForImpersonation(
     );
   }
 
-  // RPCs: only the transaction-create path is supported, via a dedicated
-  // service-role-only function with the target id injected server-side.
+  const isRead = method === "GET" || method === "HEAD";
+
   if (rest[0] === "rpc") {
     const fn = rest[1] ?? "";
-    if (fn !== "create_transaction_with_splits" || method !== "POST") {
+    if (IMPERSONATION_NOOP_RPCS.has(fn)) return { noop: true };
+    const mapped = IMPERSONATION_WRITE_RPCS[fn];
+    if (!mapped || method !== "POST") {
       return Response.json(
         { error: `RPC ${fn} is not available during impersonation` },
         { status: 403 },
       );
     }
+    if (session.mode !== "write") {
+      return Response.json(
+        { error: "This impersonation session is read-only. Restart it in write mode (with a reason) to make changes." },
+        { status: 403 },
+      );
+    }
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(new TextDecoder().decode(requestBody ?? new ArrayBuffer(0)));
+      parsed = (decodeJson(requestBody) as Record<string, unknown> | null) ?? {};
     } catch {
       return Response.json({ error: "invalid RPC body" }, { status: 400 });
     }
     parsed.p_user_id = session.targetUserId;
     return {
-      path: [root, version, "rpc", "impersonation_create_transaction_with_splits"],
+      path: [root, version, "rpc", mapped.fn],
       search,
-      body: new TextEncoder().encode(JSON.stringify(parsed)).buffer as ArrayBuffer,
-      mutation: { action: "create", table: "transactions" },
+      body: encodeJson(parsed),
+      mutation: { action: mapped.action, table: mapped.table },
     };
   }
 
@@ -140,7 +190,25 @@ function rewriteForImpersonation(
     return Response.json({ error: decision.reason }, { status: 403 });
   }
 
-  const isRead = method === "GET" || method === "HEAD";
+  // Embedded resources in `select` run with the service role too — refuse
+  // anything that is blocked during impersonation.
+  const blockedEmbed = embeddedTables(search.get("select")).find(
+    (name) => !isEmbeddableDuringImpersonation(name),
+  );
+  if (blockedEmbed) {
+    return Response.json(
+      { error: `embedding ${blockedEmbed} is not available during impersonation` },
+      { status: 403 },
+    );
+  }
+
+  if (!isRead && session.mode !== "write") {
+    return Response.json(
+      { error: "This impersonation session is read-only. Restart it in write mode (with a reason) to make changes." },
+      { status: 403 },
+    );
+  }
+
   if (decision.kind === "global_read_only") {
     if (!isRead) {
       return Response.json(
@@ -168,18 +236,36 @@ function rewriteForImpersonation(
     newSearch.append(owner, `eq.${session.targetUserId}`);
   }
 
+  // Upserts: with the service role, ON CONFLICT could land on (and re-own)
+  // another user's row. Only allow conflict targets that include the owner
+  // column, or the primary key "id" — in which case the proxy verifies the
+  // existing rows (if any) already belong to the target; see verifyUpsertOwnership.
+  const prefer = (preferHeader ?? "").toLowerCase();
+  const isUpsert = method === "POST" && prefer.includes("resolution=");
+  if (isUpsert) {
+    const conflictCols = (search.get("on_conflict") ?? "id")
+      .split(",")
+      .map((col) => col.trim())
+      .filter(Boolean);
+    if (!conflictCols.includes(owner) && !(conflictCols.length === 1 && conflictCols[0] === "id")) {
+      return Response.json(
+        { error: `upsert on (${conflictCols.join(",")}) is not allowed during impersonation` },
+        { status: 403 },
+      );
+    }
+  }
+
   let body = requestBody;
   if ((method === "POST" || method === "PATCH" || method === "PUT") && requestBody) {
     try {
-      const text = new TextDecoder().decode(requestBody);
-      if (text.trim()) {
-        const parsed = JSON.parse(text) as unknown;
+      const parsed = decodeJson(requestBody);
+      if (parsed !== null) {
         const force = (row: Record<string, unknown>) => {
           row[owner] = session.targetUserId;
         };
         if (Array.isArray(parsed)) parsed.forEach((row) => force(row as Record<string, unknown>));
         else if (parsed && typeof parsed === "object") force(parsed as Record<string, unknown>);
-        body = new TextEncoder().encode(JSON.stringify(parsed)).buffer as ArrayBuffer;
+        body = encodeJson(parsed);
       }
     } catch {
       return Response.json(
@@ -196,7 +282,45 @@ function rewriteForImpersonation(
         table,
       } as const);
 
-  return { path, search: newSearch, body, mutation };
+  return { path, search: newSearch, body, mutation, upsertIdCheck: isUpsert ? { table, owner } : undefined };
+}
+
+// For an upsert keyed on "id": every id in the body that already exists must
+// belong to the session's target, otherwise the conflict would overwrite
+// someone else's row.
+async function verifyUpsertOwnership(
+  check: { table: string; owner: string },
+  body: ArrayBuffer | null,
+  session: ImpersonationSession,
+  serviceKey: string,
+  search: URLSearchParams,
+): Promise<boolean> {
+  const conflictCols = (search.get("on_conflict") ?? "id").split(",").map((col) => col.trim());
+  if (conflictCols.includes(check.owner)) return true; // owner is forced, conflict stays in-scope
+  let rows: unknown;
+  try {
+    rows = decodeJson(body);
+  } catch {
+    return false;
+  }
+  const list = (Array.isArray(rows) ? rows : [rows]) as Array<Record<string, unknown> | null>;
+  const ids = list
+    .map((row) => (row && typeof row.id === "string" ? row.id : null))
+    .filter((id): id is string => Boolean(id));
+  if (ids.length === 0) return true;
+  if (ids.some((id) => !/^[A-Za-z0-9_-]+$/.test(id))) return false;
+  try {
+    const url = `${getSupabaseUrl()}/rest/v1/${check.table}?select=id,${check.owner}&id=in.(${ids.join(",")})`;
+    const response = await fetch(url, {
+      headers: { apikey: serviceKey, authorization: `Bearer ${serviceKey}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return false;
+    const existing = (await response.json()) as Array<Record<string, unknown>>;
+    return existing.every((row) => row[check.owner] === session.targetUserId);
+  } catch {
+    return false;
+  }
 }
 
 // Small before-image for the audit log: what the mutation is about to touch.
@@ -250,11 +374,21 @@ async function handle(
     null;
 
   if (impersonationHeader && originalPath[0] !== "auth") {
-    const caller = await resolveCallerIdentity(request.headers.get("authorization"));
-    if (caller.actorRole !== "admin" || !caller.userId) {
+    // The bearer token is VERIFIED with Supabase Auth here (signature,
+    // expiry, revocation) — a decoded-but-unverified JWT must never unlock
+    // the service-role path below.
+    const verifiedUser = await verifyAccessToken(bearerToken(request.headers.get("authorization")));
+    if (!verifiedUser) {
       return Response.json({ error: "admin access required" }, { status: 403 });
     }
-    const session = await validateImpersonationSession(impersonationHeader, caller.userId);
+    const brief = await lookupUserBrief(verifiedUser.id);
+    const isAdmin =
+      brief.role === "admin" ||
+      (Boolean(verifiedUser.email_confirmed_at) && isAdminEmail(verifiedUser.email));
+    if (!isAdmin) {
+      return Response.json({ error: "admin access required" }, { status: 403 });
+    }
+    const session = await validateImpersonationSession(impersonationHeader, verifiedUser.id);
     if (!session) {
       // Stale/ended/foreign session ids are rejected, never silently allowed.
       return Response.json(
@@ -268,8 +402,10 @@ async function handle(
       request.method,
       requestBody,
       session,
+      request.headers.get("prefer"),
     );
     if (rewritten instanceof Response) return rewritten;
+    if ("noop" in rewritten) return Response.json(null, { status: 200 });
 
     impersonation = session;
     impersonatedMutation = rewritten.mutation;
@@ -289,22 +425,35 @@ async function handle(
     forwardHeaders.set("apikey", serviceKey);
     forwardHeaders.set("authorization", `Bearer ${serviceKey}`);
 
-    // Audit before-image for updates/deletes, captured before executing.
-    if (impersonatedMutation && impersonatedMutation.action !== "create") {
-      const before = await fetchBeforeSnapshot(path, search, serviceKey);
-      await logImpersonatedMutation({
+    if (
+      rewritten.upsertIdCheck &&
+      !(await verifyUpsertOwnership(rewritten.upsertIdCheck, requestBody, session, serviceKey, search))
+    ) {
+      return Response.json(
+        { error: "upsert would touch a row owned by another user" },
+        { status: 403 },
+      );
+    }
+
+    // Audit FIRST (with a before-image for updates/deletes); refuse the
+    // mutation if the audit row cannot be written.
+    if (impersonatedMutation) {
+      const before =
+        impersonatedMutation.action !== "create" && !path.includes("rpc")
+          ? await fetchBeforeSnapshot(path, search, serviceKey)
+          : null;
+      const logged = await logImpersonatedMutation({
         session,
         action: impersonatedMutation.action,
         table: impersonatedMutation.table,
         before,
       });
-    } else if (impersonatedMutation) {
-      await logImpersonatedMutation({
-        session,
-        action: "create",
-        table: impersonatedMutation.table,
-        before: null,
-      });
+      if (!logged) {
+        return Response.json(
+          { error: "Refusing to write without an audit log entry." },
+          { status: 500 },
+        );
+      }
     }
   }
 

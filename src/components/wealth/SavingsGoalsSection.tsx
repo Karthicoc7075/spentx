@@ -106,7 +106,9 @@ export function SavingsGoalsSection({ onNewGoalClick }: SavingsGoalsSectionProps
   function formatDeadline(dateStr?: string) {
     if (!dateStr) return "Any time · Flexible";
     try {
-      const d = new Date(dateStr);
+      // Date-only values ("2026-12-31") must be read as local dates, not UTC.
+      const d = new Date(`${dateStr.slice(0, 10)}T00:00:00`);
+      if (Number.isNaN(d.getTime())) return `Target: ${dateStr}`;
       return `Target: ${d.toLocaleString("default", { month: "short", year: "numeric" })}`;
     } catch {
       return `Target: ${dateStr}`;

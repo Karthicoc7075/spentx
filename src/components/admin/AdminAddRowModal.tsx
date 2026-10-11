@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Loader2, Code2, FormInput } from "lucide-react";
+import { Code2, FormInput, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,226 +14,184 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { adminInsertRow } from "@/lib/admin-api";
+import { adminInsertRow, type AdminColumnMeta } from "@/lib/admin-api";
 import { useToast } from "@/providers/toast-provider";
 
+const SKIP = new Set(["created_at", "updated_at", "deleted_at"]);
+
+function isJsonType(column: AdminColumnMeta) {
+  return column.udt === "jsonb" || column.udt === "json" || column.type === "ARRAY";
+}
+function isNumberType(column: AdminColumnMeta) {
+  return ["int2", "int4", "int8", "numeric", "float4", "float8"].includes(column.udt);
+}
+
+/** Converts a form string to the column's type; "" = omit (use DB default / null). */
+function coerce(column: AdminColumnMeta, raw: string): unknown {
+  if (raw === "") return undefined;
+  if (column.udt === "bool") return raw === "true";
+  if (isNumberType(column)) {
+    const value = Number(raw);
+    if (Number.isNaN(value)) throw new Error(`"${column.name}" must be a number.`);
+    return value;
+  }
+  if (isJsonType(column)) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`"${column.name}" must be valid JSON.`);
+    }
+  }
+  return raw;
+}
+
+/**
+ * Insert form generated from the table's real columns (admin_table_meta),
+ * so it works for empty tables too. The RPC re-validates the allow-list and
+ * columns and writes the audit entry.
+ */
 export function AdminAddRowModal({
   open,
   onOpenChange,
   table,
-  sampleRow,
+  columns,
   onSuccess,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   table: string;
-  sampleRow?: Record<string, unknown> | null;
+  columns: AdminColumnMeta[];
   onSuccess: () => void;
 }) {
   const { notify } = useToast();
+  // The parent mounts this only while open (keyed by table), so state is
+  // fresh for every open without a reset effect.
+  const editable = columns.filter((column) => !SKIP.has(column.name));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [jsonMode, setJsonMode] = useState(false);
-  const [jsonText, setJsonText] = useState("");
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [jsonText, setJsonText] = useState(() => {
+    const template: Record<string, unknown> = {};
+    editable.forEach((column) => {
+      if (!column.hasDefault && !column.nullable) template[column.name] = null;
+    });
+    return JSON.stringify(template, null, 2);
+  });
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
 
-  // Initialize template when modal opens
-  const handleOpen = (nextOpen: boolean) => {
-    if (nextOpen && sampleRow) {
-      const initial: Record<string, string> = {};
-      const initialJson: Record<string, unknown> = {};
-
-      Object.entries(sampleRow).forEach(([key, val]) => {
-        if (key === "id" || key === "created_at" || key === "updated_at") return;
-        if (typeof val === "boolean") {
-          initial[key] = String(val);
-          initialJson[key] = val;
-        } else if (typeof val === "number") {
-          initial[key] = String(val);
-          initialJson[key] = val;
-        } else if (typeof val === "object" && val !== null) {
-          initial[key] = JSON.stringify(val);
-          initialJson[key] = val;
-        } else {
-          initial[key] = typeof val === "string" ? "" : "";
-          initialJson[key] = typeof val === "string" ? "" : null;
-        }
-      });
-
-      setFieldValues(initial);
-      setJsonText(JSON.stringify(initialJson, null, 2));
-    }
-    onOpenChange(nextOpen);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setIsSubmitting(true);
-
+    setError(null);
     try {
-      let recordToInsert: Record<string, unknown> = {};
-
+      let record: Record<string, unknown> = {};
       if (jsonMode) {
         try {
-          recordToInsert = JSON.parse(jsonText);
+          record = JSON.parse(jsonText);
         } catch {
-          throw new Error("Invalid JSON format. Please verify your JSON payload.");
+          throw new Error("The JSON is not valid.");
+        }
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          throw new Error("The JSON must be an object of column: value.");
         }
       } else {
-        Object.entries(fieldValues).forEach(([k, v]) => {
-          if (v === "" || v === undefined) return;
-          // Parse boolean or numbers if applicable
-          if (v.toLowerCase() === "true") recordToInsert[k] = true;
-          else if (v.toLowerCase() === "false") recordToInsert[k] = false;
-          else if (!Number.isNaN(Number(v)) && !v.includes("-") && v.trim() !== "") {
-            recordToInsert[k] = Number(v);
-          } else if (v.startsWith("{") || v.startsWith("[")) {
-            try {
-              recordToInsert[k] = JSON.parse(v);
-            } catch {
-              recordToInsert[k] = v;
-            }
-          } else {
-            recordToInsert[k] = v;
-          }
-        });
+        for (const column of editable) {
+          const value = coerce(column, values[column.name] ?? "");
+          if (value !== undefined) record[column.name] = value;
+        }
       }
-
-      if (Object.keys(recordToInsert).length === 0) {
-        throw new Error("Record cannot be empty. Please provide field values.");
-      }
-
-      await adminInsertRow(table, recordToInsert);
-      notify({
-        title: "Record added successfully",
-        description: `New row inserted into '${table}' table.`,
-      });
-
+      if (!Object.keys(record).length) throw new Error("Fill in at least one field.");
+      await adminInsertRow(table, record);
+      notify({ title: "Row added", description: `Inserted into ${table} (audited).` });
       onSuccess();
       onOpenChange(false);
-    } catch (error) {
-      notify({
-        title: "Insert failed",
-        description: error instanceof Error ? error.message : "Failed to add record.",
-        variant: "destructive",
-      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Insert failed.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const fields = sampleRow
-    ? Object.keys(sampleRow).filter(
-        (k) => k !== "id" && k !== "created_at" && k !== "updated_at",
-      )
-    : [];
-
   return (
-    <Dialog open={open} onOpenChange={handleOpen}>
-      <DialogContent className="max-w-xl sm:max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={(next) => !isSubmitting && onOpenChange(next)}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <div className="flex items-center justify-between gap-2">
-            <DialogTitle className="flex items-center gap-2 text-base font-bold">
-              <Plus className="size-4 text-primary" />
-              Add Record to <span className="font-mono text-primary">{table}</span>
-            </DialogTitle>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs gap-1.5"
-              onClick={() => setJsonMode(!jsonMode)}
-            >
-              {jsonMode ? (
-                <>
-                  <FormInput className="size-3.5" />
-                  <span>Form Mode</span>
-                </>
-              ) : (
-                <>
-                  <Code2 className="size-3.5" />
-                  <span>JSON Mode</span>
-                </>
-              )}
-            </Button>
-          </div>
-          <DialogDescription className="text-xs">
-            Insert a new row into the database. System will auto-generate primary
-            keys and timestamps.
+          <DialogTitle>Add row to {table}</DialogTitle>
+          <DialogDescription>
+            Leave a field empty to use its database default. Required fields are marked *.
           </DialogDescription>
         </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="space-y-4 py-2">
+        <div className="flex gap-1 rounded-lg border border-border bg-muted/40 p-1 text-xs">
+          <Button type="button" size="xs" variant={jsonMode ? "ghost" : "default"} onClick={() => setJsonMode(false)}>
+            <FormInput className="size-3" /> Form
+          </Button>
+          <Button type="button" size="xs" variant={jsonMode ? "default" : "ghost"} onClick={() => setJsonMode(true)}>
+            <Code2 className="size-3" /> JSON
+          </Button>
+        </div>
+        <form onSubmit={handleSubmit} className="grid gap-3">
           {jsonMode ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="json-input" className="text-xs font-semibold">
-                JSON Record Payload
-              </Label>
-              <Textarea
-                id="json-input"
-                className="font-mono text-xs h-64 resize-y"
-                placeholder='{\n  "name": "Example",\n  "is_active": true\n}'
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-              />
-            </div>
-          ) : fields.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 max-h-[50vh] overflow-y-auto px-1">
-              {fields.map((field) => (
-                <div key={field} className="space-y-1">
-                  <Label htmlFor={`field-${field}`} className="text-xs font-mono">
-                    {field}
-                  </Label>
-                  <Input
-                    id={`field-${field}`}
-                    className="h-8 text-xs font-mono"
-                    placeholder={`Enter ${field}…`}
-                    value={fieldValues[field] ?? ""}
-                    onChange={(e) =>
-                      setFieldValues((prev) => ({
-                        ...prev,
-                        [field]: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              ))}
-            </div>
+            <Textarea
+              className="min-h-56 font-mono text-xs"
+              value={jsonText}
+              onChange={(event) => setJsonText(event.target.value)}
+            />
           ) : (
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">
-                No column schema detected. Please input JSON fields for this table.
-              </p>
-              <Textarea
-                className="font-mono text-xs h-48"
-                placeholder='{\n  "key": "value"\n}'
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-              />
-            </div>
+            editable.map((column) => {
+              const required = !column.nullable && !column.hasDefault;
+              const id = `add-${table}-${column.name}`;
+              return (
+                <div key={column.name} className="grid gap-1">
+                  <Label htmlFor={id} className="flex items-center gap-1 text-xs">
+                    <span className="font-mono">{column.name}</span>
+                    {required ? <span className="text-destructive">*</span> : null}
+                    <span className="ml-auto text-[10px] font-normal text-muted-foreground">{column.udt}</span>
+                  </Label>
+                  {column.udt === "bool" ? (
+                    <select
+                      id={id}
+                      className="h-9 rounded-lg border border-border bg-card px-2 text-sm"
+                      value={values[column.name] ?? ""}
+                      onChange={(event) => setValues((prev) => ({ ...prev, [column.name]: event.target.value }))}
+                    >
+                      <option value="">(default)</option>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : isJsonType(column) ? (
+                    <Textarea
+                      id={id}
+                      className="font-mono text-xs"
+                      rows={3}
+                      placeholder={column.type === "ARRAY" ? "[]" : "{}"}
+                      value={values[column.name] ?? ""}
+                      onChange={(event) => setValues((prev) => ({ ...prev, [column.name]: event.target.value }))}
+                    />
+                  ) : (
+                    <Input
+                      id={id}
+                      inputMode={isNumberType(column) ? "decimal" : undefined}
+                      placeholder={column.hasDefault ? "(default)" : ""}
+                      value={values[column.name] ?? ""}
+                      onChange={(event) => setValues((prev) => ({ ...prev, [column.name]: event.target.value }))}
+                    />
+                  )}
+                </div>
+              );
+            })
           )}
-
-          <DialogFooter className="gap-2 pt-2 border-t">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isSubmitting}
-              onClick={() => onOpenChange(false)}
-            >
+          {error ? (
+            <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                  <span>Adding…</span>
-                </>
-              ) : (
-                <>
-                  <Plus className="size-3.5 mr-1" />
-                  <span>Insert Record</span>
-                </>
-              )}
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+              Insert
             </Button>
           </DialogFooter>
         </form>

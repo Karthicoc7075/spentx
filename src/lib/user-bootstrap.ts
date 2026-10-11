@@ -173,7 +173,6 @@ export async function bootstrapUserWorkspace(
 
   const userEmail = (profileHint?.email ?? existingUser?.email ?? "").trim().toLowerCase();
   const shouldBeAdmin = isAdminEmail(userEmail);
-  const expectedRole = shouldBeAdmin ? "admin" : "user";
 
   if (!existingUser) {
     createdUser = true;
@@ -181,7 +180,9 @@ export async function bootstrapUserWorkspace(
       id: userId,
       name: profileHint?.name ?? (shouldBeAdmin ? "Administrator" : "SpentX User"),
       email: profileHint?.email ?? "",
-      role: expectedRole,
+      // Roles are assigned server-side only (protect_user_role trigger);
+      // a client insert with role='admin' would be rejected outright.
+      role: "user",
       photo_url: profileHint?.photoURL ?? null,
       currency: "INR",
       timezone: "Asia/Kolkata",
@@ -200,9 +201,9 @@ export async function bootstrapUserWorkspace(
   } else {
     // Check if role, name, email, or photoURL needs updating
     const patch: Record<string, unknown> = {};
-    if (existingUser.role !== expectedRole) {
-      patch.role = expectedRole;
-    }
+    // Role is never patched from the client: the protect_user_role trigger
+    // rejects it, which used to fail the whole profile update. Admin role
+    // sync happens server-side (lib/server/admin-auth.ts).
     if (profileHint?.name && profileHint.name !== existingUser.name) {
       patch.name = profileHint.name;
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +15,9 @@ import { Label } from "@/components/ui/label";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useTransactions } from "@/hooks/useTransactions";
 import { useAccounts } from "@/hooks/useAccounts";
+import { usePurposes } from "@/hooks/usePurposes";
+import { getDefaultPersonalPurpose } from "@/lib/purposes";
+import { parseAmountInput } from "@/lib/investments";
 import { useToast } from "@/providers/toast-provider";
 import { formatCurrency } from "@/lib/utils";
 import { Check, Coins, Landmark, Loader2, Sparkles } from "lucide-react";
@@ -36,28 +39,38 @@ export function QuickDepositModal({
   onSuccess,
 }: QuickDepositModalProps) {
   const { addFunds } = useSavingsGoals();
-  const { addTransaction } = useTransactions();
+  const { addTransaction, deleteTransaction } = useTransactions();
   const { accounts } = useAccounts();
+  const { purposes } = usePurposes();
   const { notify } = useToast();
 
   const [amount, setAmount] = useState("1000");
-  const [sourceAccount, setSourceAccount] = useState<string>(
-    accounts.find((a) => a.type === "bank")?.name || "",
-  );
+  const [sourceChoice, setSourceAccount] = useState<string>("");
   const [deductFromBank, setDeductFromBank] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const bankAccounts = accounts.filter(
-    (a) => a.type === "bank" || a.type === "wallet",
+  const bankAccounts = useMemo(
+    () =>
+      accounts.filter(
+        (a) => a.isActive !== false && (a.type === "bank" || a.type === "wallet"),
+      ),
+    [accounts],
   );
+
+  // Accounts usually load after the first render; derive the default from the
+  // loaded list instead of freezing an empty value into state at mount time.
+  const sourceAccount =
+    sourceChoice && bankAccounts.some((a) => a.name === sourceChoice)
+      ? sourceChoice
+      : (bankAccounts.find((a) => a.type === "bank")?.name ?? bankAccounts[0]?.name ?? "");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!goal) return;
 
-    const depositAmount = parseFloat(amount.replace(/[^0-9.]/g, ""));
-    if (isNaN(depositAmount) || depositAmount <= 0) {
+    const depositAmount = parseAmountInput(amount);
+    if (depositAmount === null || depositAmount <= 0) {
       setError("Please enter a valid deposit amount.");
       return;
     }
@@ -65,26 +78,34 @@ export function QuickDepositModal({
     setIsSubmitting(true);
     setError(null);
 
+    let txId: string | undefined;
     try {
-      // 1. Update savings goal savedAmount
-      await addFunds(goal.id, depositAmount);
-
-      // 2. Optionally record expense/transfer transaction from bank account
+      // 1. Optionally record the bank debit first so the contribution can link
+      //    to it (deleting that transaction later reverses the deposit).
       if (deductFromBank && sourceAccount) {
-        await addTransaction({
+        const tx = await addTransaction({
           type: "expense",
           amount: depositAmount,
           totalAmount: depositAmount,
           merchant: `Savings: ${goal.name}`,
           category: "Settlements",
           account: sourceAccount,
-          purpose: "personal",
+          purpose: getDefaultPersonalPurpose(purposes)?.id ?? "personal",
           source: "manual",
           date: new Date().toISOString(),
           note: `Quick deposit into savings goal "${goal.name}"`,
           tags: ["savings", "transfer", `goal:${goal.id}`],
           paymentMethod: "UPI",
         });
+        txId = tx.id;
+      }
+
+      // 2. Atomic server-side increment (same RPC as the mobile app).
+      try {
+        await addFunds(goal.id, depositAmount, { transactionId: txId });
+      } catch (rpcError) {
+        if (txId) await deleteTransaction(txId).catch(() => undefined);
+        throw rpcError;
       }
 
       notify({
@@ -107,7 +128,13 @@ export function QuickDepositModal({
   const remaining = Math.max(0, goal.targetAmount - (goal.savedAmount || 0));
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setError(null);
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="sm:max-w-[420px] p-0 overflow-hidden rounded-2xl border bg-card">
         <form onSubmit={handleSubmit}>
           <DialogHeader className="p-5 pb-4 border-b">

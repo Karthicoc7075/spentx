@@ -557,10 +557,10 @@ export function SettingsPage() {
       return;
     }
     const bankCount = accounts.filter((a) => a.type === "bank").length;
-    if (bankCount >= (appConfig.maxAccountsLimit ?? 10)) {
+    if (bankCount >= (appConfig.maxAccountsLimit ?? 8)) {
       notify({
         title: "Limit reached",
-        description: `Maximum of ${appConfig.maxAccountsLimit ?? 10} bank accounts allowed.`,
+        description: `Maximum of ${appConfig.maxAccountsLimit ?? 8} bank accounts allowed.`,
       });
       return;
     }
@@ -675,10 +675,10 @@ export function SettingsPage() {
     const name = purposeModal.name.trim();
 
     if (purposeModal.mode === "create") {
-      if (purposes.filter((p) => p.isActive !== false).length >= (appConfig.maxPurposesLimit ?? 5)) {
+      if (purposes.filter((p) => p.isActive !== false).length >= (appConfig.maxPurposesLimit ?? 10)) {
         notify({
           title: "Limit reached",
-          description: `Maximum of ${appConfig.maxPurposesLimit ?? 5} purposes allowed.`,
+          description: `Maximum of ${appConfig.maxPurposesLimit ?? 10} purposes allowed.`,
         });
         return;
       }
@@ -1212,10 +1212,10 @@ export function SettingsPage() {
                 <Button 
                   onClick={() => {
                     const bankCount = accounts.filter((a) => a.type === "bank").length;
-                    if (bankCount >= (appConfig.maxAccountsLimit ?? 10)) {
+                    if (bankCount >= (appConfig.maxAccountsLimit ?? 8)) {
                       notify({
                         title: "Limit reached",
-                        description: `You can only have up to ${appConfig.maxAccountsLimit ?? 10} bank accounts.`,
+                        description: `You can only have up to ${appConfig.maxAccountsLimit ?? 8} bank accounts.`,
                       });
                       return;
                     }
@@ -1387,7 +1387,7 @@ export function SettingsPage() {
                   <Button
                     disabled={
                       purposes.filter((p) => p.isActive !== false).length >=
-                      (appConfig.maxPurposesLimit ?? 5)
+                      (appConfig.maxPurposesLimit ?? 10)
                     }
                     onClick={() => {
                       setPurposeModal({
@@ -2282,7 +2282,7 @@ export function SettingsPage() {
                       type="number"
                       min={1}
                       className="h-10 text-xs"
-                      value={appConfig.maxPurposesLimit ?? 5}
+                      value={appConfig.maxPurposesLimit ?? 10}
                       onChange={(event) =>
                         setAppConfig((current) => ({
                           ...current,
@@ -2296,7 +2296,7 @@ export function SettingsPage() {
                       type="number"
                       min={1}
                       className="h-10 text-xs"
-                      value={appConfig.maxAccountsLimit ?? 10}
+                      value={appConfig.maxAccountsLimit ?? 8}
                       onChange={(event) =>
                         setAppConfig((current) => ({
                           ...current,

@@ -16,7 +16,7 @@ import {
   defaultUserSettings,
   defaultNotificationPreferences,
 } from "@/lib/mock-data";
-import { deriveMonthKey } from "@/lib/data-schema";
+import { deriveMonthKey, istCalendarDate } from "@/lib/data-schema";
 import { clearBrowserUserCache } from "@/lib/query-cache";
 import { getTodayCalendarDate } from "@/lib/date-filters";
 import { buildOpeningBalanceTransaction } from "@/lib/wealth";
@@ -55,6 +55,8 @@ import type {
   PurposeShare,
   Reflection,
   SavingsGoal,
+  Investment,
+  InvestmentAssetType,
   SmartAlert,
   SmartView,
   SmsBlockRule,
@@ -395,7 +397,8 @@ function transactionParentPayload(transaction: Partial<Transaction> & Row): Row 
       transaction.entrySource ??
       (transaction.source === "mobile" ? "mobile-manual" : "manual"),
     transactionDate,
-    monthKey: transaction.monthKey ?? deriveMonthKey(transactionDate),
+    // Always the India month of the date (the database enforces the same).
+    monthKey: transactionDate ? deriveMonthKey(transactionDate) : transaction.monthKey,
     description: transaction.description,
     note: transaction.note,
     reference: transaction.reference,
@@ -1417,94 +1420,134 @@ export async function updateTransaction(
   });
 }
 
+const SETTLEMENT_ID_TAG = "settlement-id:";
+const FRIEND_RETURN_CATEGORIES = new Set([
+  "friend returns",
+  "friend return",
+  "friend repayment",
+  "repayment",
+  "settlements",
+  "settlement",
+]);
+
+/** Tag that links a ledger row to the settlement row it records. */
+export function settlementLinkTag(settlementId: string) {
+  return `${SETTLEMENT_ID_TAG}${settlementId}`;
+}
+
+function sameCalendarDay(a: string | null | undefined, b: string | null | undefined) {
+  if (!a || !b) return false;
+  return istCalendarDate(a) === istCalendarDate(b);
+}
+
+/**
+ * Removes the settlement a friend-return / settlement transaction recorded.
+ * 1. Rows linked by the `settlement-id:<id>` tag (written since 2026-10-11).
+ * 2. Older rows: exactly one settlement for the same friend (or outing),
+ *    same amount and same day. Ambiguous matches are left alone.
+ */
+async function revertSettlementsForTransaction(userId: string, transactionId: string) {
+  const { data: tx, error } = await client()
+    .from("transactions")
+    .select("id, type, merchant, total_amount, outing_id, tags, transaction_date")
+    .eq("id", transactionId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error || !tx) return;
+
+  const tags: string[] = Array.isArray(tx.tags) ? tx.tags.map(String) : [];
+  const { data: splitRows } = await client()
+    .from("transaction_splits")
+    .select("category_id")
+    .eq("transaction_id", transactionId)
+    .eq("user_id", userId);
+  const categories = ((splitRows as Row[] | null) ?? []).map((r) =>
+    String(r.category_id ?? "").trim().toLowerCase(),
+  );
+  const isSettlementTx =
+    tags.includes("settlement") ||
+    tags.includes("reimbursement") ||
+    tags.some((t) => t.startsWith("settlement:") || t.startsWith(SETTLEMENT_ID_TAG)) ||
+    categories.some((c) => FRIEND_RETURN_CATEGORIES.has(c));
+  if (!isSettlementTx) return;
+
+  const linkedIds = tags
+    .filter((t) => t.startsWith(SETTLEMENT_ID_TAG))
+    .map((t) => t.slice(SETTLEMENT_ID_TAG.length))
+    .filter(isUuid);
+  if (linkedIds.length > 0) {
+    await throwIfError(
+      client().from("friend_settlements").delete().eq("user_id", userId).in("id", linkedIds),
+    );
+    await throwIfError(
+      client().from("settlements").delete().eq("user_id", userId).in("id", linkedIds),
+    );
+    return;
+  }
+
+  const amount = Number(tx.total_amount ?? 0);
+  if (!amount) return;
+
+  if (tx.outing_id) {
+    const { data: rows } = await client()
+      .from("settlements")
+      .select("id, amount, settled_date")
+      .eq("user_id", userId)
+      .eq("outing_id", tx.outing_id)
+      .eq("amount", amount);
+    const matches = ((rows as Row[] | null) ?? []).filter((r) =>
+      sameCalendarDay(r.settled_date, tx.transaction_date),
+    );
+    if (matches.length === 1) {
+      await throwIfError(
+        client().from("settlements").delete().eq("user_id", userId).eq("id", matches[0].id),
+      );
+    }
+    return;
+  }
+
+  const friendTag = tags.find((t) => t.startsWith("friend:"));
+  let friendIds: string[] = friendTag ? [friendTag.slice("friend:".length)] : [];
+  if (friendIds.length === 0 && tx.merchant) {
+    const cleanName = String(tx.merchant).replace(/^(From|To)\s+/i, "").trim();
+    if (cleanName) {
+      const { data: friendRows } = await client()
+        .from("friends")
+        .select("id")
+        .eq("user_id", userId)
+        .ilike("name", cleanName);
+      friendIds = ((friendRows as Row[] | null) ?? []).map((f) => String(f.id));
+    }
+  }
+  if (friendIds.length !== 1) return;
+
+  const { data: rows } = await client()
+    .from("friend_settlements")
+    .select("id, amount, settled_date, from_member_id, to_member_id")
+    .eq("user_id", userId)
+    .eq("amount", amount)
+    .or(`from_member_id.eq.${friendIds[0]},to_member_id.eq.${friendIds[0]}`);
+  const matches = ((rows as Row[] | null) ?? []).filter((r) =>
+    sameCalendarDay(r.settled_date, tx.transaction_date),
+  );
+  if (matches.length === 1) {
+    await throwIfError(
+      client().from("friend_settlements").delete().eq("user_id", userId).eq("id", matches[0].id),
+    );
+  }
+}
+
 export async function deleteTransaction(userId: string | undefined, transactionId: string) {
   if (!userId) {
     throw new Error("Sign in before deleting transactions.");
   }
   const now = nowIso();
 
-  // 1. If deleting a friend repayment/return transaction:
-  // Revert/delete linked settlements so the friend's debt card reopens!
+  // 1. Deleting a friend repayment / settlement transaction reopens the debt:
+  //    remove the settlement row it recorded (friend_settlements for friend
+  //    splits, settlements for outings).
   try {
-    const { data: tx } = await client()
-      .from("transactions")
-      .select("category, type, linked_expense_id, merchant, amount, outing_id")
-      .eq("id", transactionId)
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    const isFriendReturn =
-      tx?.type === "income" &&
-      (tx?.category?.trim().toLowerCase() === "friend returns" ||
-        tx?.category?.trim().toLowerCase() === "friend return" ||
-        Boolean(tx?.linked_expense_id));
-
-    if (isFriendReturn) {
-      // Revert in friend_settlements: match by direct note or transactionId
-      await client()
-        .from("friend_settlements")
-        .delete()
-        .eq("user_id", userId)
-        .or(`note.ilike.%${transactionId}%,note.eq.${transactionId}`);
-
-      // Fallback: match by friend name and amount if unlinked
-      if (tx?.merchant && tx?.amount) {
-        const cleanName = tx.merchant.replace(/^From\s+/i, "").trim();
-        const { data: friendRows } = await client()
-          .from("friends")
-          .select("id")
-          .eq("user_id", userId)
-          .ilike("name", cleanName);
-
-        if (friendRows && friendRows.length > 0) {
-          const friendIds = friendRows.map((f: any) => f.id);
-          const { data: recentSettlements } = await client()
-            .from("friend_settlements")
-            .select("id")
-            .eq("user_id", userId)
-            .in("from_member_id", friendIds)
-            .eq("amount", tx.amount)
-            .order("created_at", { ascending: false })
-            .limit(1);
-
-          if (recentSettlements && recentSettlements.length > 0) {
-            await client()
-              .from("friend_settlements")
-              .delete()
-              .eq("user_id", userId)
-              .eq("id", recentSettlements[0].id);
-          }
-        }
-      }
-
-      // If linked to an outing, also remove from outing_settlements
-      if (tx?.outing_id) {
-        try {
-          await client()
-            .from("outing_settlements")
-            .delete()
-            .eq("outing_id", tx.outing_id)
-            .or(`note.ilike.%${transactionId}%,amount.eq.${tx.amount}`);
-        } catch (_) {}
-      } else if (tx?.merchant && tx?.amount) {
-        // Fallback: match by friend member name in trip_members
-        try {
-          const cleanName = tx.merchant.replace(/^From\s+/i, "").trim();
-          const { data: memberRows } = await client()
-            .from("trip_members")
-            .select("id, outing_id")
-            .ilike("name", cleanName);
-          if (memberRows && memberRows.length > 0) {
-            const memberIds = memberRows.map((m: any) => m.id);
-            await client()
-              .from("outing_settlements")
-              .delete()
-              .in("from_member_id", memberIds)
-              .eq("amount", tx.amount);
-          }
-        } catch (_) {}
-      }
-    }
+    await revertSettlementsForTransaction(userId, transactionId);
   } catch (err) {
     console.warn("Could not check/revert friend settlements on delete:", err);
   }
@@ -2908,17 +2951,42 @@ export async function fetchAllMonthlyPlanActuals(userId: string | undefined) {
   return ((data as Row[]) ?? []).map(toPlanActuals);
 }
 
+/**
+ * Soft delete (deleted_at) for tables that gained the column in
+ * 20261011_security_audit_fixes.sql; falls back to the old hard delete when
+ * that migration has not been run yet.
+ */
+async function softDeleteOwnRow(table: string, userId: string, id: string) {
+  const { error } = await client()
+    .from(table)
+    .update({ deleted_at: nowIso() })
+    .eq("user_id", userId)
+    .eq("id", id);
+  if (!error) return;
+  const missingColumn =
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    /deleted_at/i.test(error.message ?? "");
+  if (!missingColumn) throw error;
+  await throwIfError(client().from(table).delete().eq("user_id", userId).eq("id", id));
+}
+
+const notSoftDeleted = (row: Row) => row.deleted_at == null;
+
 export async function fetchPlanTemplates(userId: string | undefined) {
-  const rows = await selectByUser("budget_templates", userId, (row) => ({
-    id: row.id,
-    userId: row.user_id,
-    name: row.template_name,
-    expectedIncome: Number(row.expected_income ?? 0),
-    allocations: row.allocations ?? [],
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }) as PlanTemplate);
-  return rows;
+  const rows = await selectByUser("budget_templates", userId, (row) => row);
+  return rows.filter(notSoftDeleted).map(
+    (row) =>
+      ({
+        id: row.id,
+        userId: row.user_id,
+        name: row.template_name,
+        expectedIncome: Number(row.expected_income ?? 0),
+        allocations: row.allocations ?? [],
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      }) as PlanTemplate,
+  );
 }
 
 export async function savePlanTemplate(userId: string | undefined, template: PlanTemplate) {
@@ -2943,9 +3011,7 @@ export async function savePlanTemplate(userId: string | undefined, template: Pla
 
 export async function deletePlanTemplate(userId: string | undefined, templateId: string) {
   if (!userId) return;
-  await throwIfError(
-    client().from("budget_templates").delete().eq("user_id", userId).eq("id", templateId),
-  );
+  await softDeleteOwnRow("budget_templates", userId, templateId);
 }
 
 function isMissingMonthlyPlanTitleColumn(message: string) {
@@ -3180,8 +3246,8 @@ export async function saveIncomeTargets(userId: string | undefined, targets: Inc
   return targets;
 }
 
-/** Total of expense transactions in investment-flagged categories, via the
- * investment_totals view — the "Total Investment" number on Wealth. */
+/** Holdings (invested) + investment-category spends not linked to a holding,
+ * via the investment_totals view (RLS-scoped to the signed-in user). */
 export async function fetchInvestmentTotal(userId?: string) {
   if (!userId) return 0;
   const data = await throwIfError(
@@ -3194,118 +3260,179 @@ export async function fetchInvestmentTotal(userId?: string) {
   return Number((data as Row | null)?.total_invested ?? 0);
 }
 
-export async function fetchSavingsGoals(userId?: string) {
-  if (!userId) return [];
-  const rows = await selectByUser("savings_goals", userId, (row) => ({
+// ---------------------------------------------------------------------------
+// Broadcast listeners on the shared user-sync channel, with real cleanup.
+// supabase-js has no per-handler `off`, so each event is bound once per
+// channel and fans out to a listener set that unsubscribe() edits.
+// ---------------------------------------------------------------------------
+const syncBroadcastBindings = new WeakMap<RealtimeChannel, Map<string, Set<() => void>>>();
+
+function onUserSyncBroadcast(userId: string, events: string[], listener: () => void) {
+  const channel = getUserSyncChannel(userId);
+  if (!channel) return () => undefined;
+  let byEvent = syncBroadcastBindings.get(channel);
+  if (!byEvent) {
+    byEvent = new Map();
+    syncBroadcastBindings.set(channel, byEvent);
+  }
+  const bindings = byEvent;
+  for (const event of events) {
+    let listeners = bindings.get(event);
+    if (!listeners) {
+      const created = new Set<() => void>();
+      bindings.set(event, created);
+      channel.on("broadcast", { event }, () => {
+        for (const fn of [...created]) fn();
+      });
+      listeners = created;
+    }
+    listeners.add(listener);
+  }
+  return () => {
+    for (const event of events) bindings.get(event)?.delete(listener);
+  };
+}
+
+const STALE_EDIT_MESSAGE =
+  "This was changed or deleted on another device. The latest version has been loaded — please try again.";
+
+function toSavingsGoal(row: Row): SavingsGoal {
+  const rawIcon = typeof row.icon === "string" ? row.icon.trim() : "";
+  return {
     id: row.id,
     userId: row.user_id,
     name: row.name,
     targetAmount: Number(row.target_amount ?? 0),
     savedAmount: Number(row.saved_amount ?? 0),
     monthlyContribution:
-      row.monthly_contribution === null ? undefined : Number(row.monthly_contribution),
+      row.monthly_contribution === null || row.monthly_contribution === undefined
+        ? undefined
+        : Number(row.monthly_contribution),
     isActive: row.is_active ?? true,
     deletedAt: row.deleted_at ?? undefined,
-    targetDate: row.target_date ?? undefined,
+    // Date-only value; never run through new Date() (timezone shift).
+    targetDate: row.target_date ? String(row.target_date).slice(0, 10) : undefined,
     color: row.color ?? "indigo",
-    icon: row.icon ?? "target",
+    icon: !rawIcon || rawIcon.toLowerCase() === "target" ? "🎯" : rawIcon,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  }) as SavingsGoal);
-  return rows.filter((goal) => goal.isActive !== false && !goal.deletedAt);
+  };
 }
 
+/** Oldest first — same order as the mobile app. */
+export async function fetchSavingsGoals(userId?: string) {
+  if (!userId) return [];
+  const data = await throwIfError(
+    client()
+      .from("savings_goals")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: true }),
+  );
+  return ((data as Row[]) ?? [])
+    .map(toSavingsGoal)
+    .filter((goal) => goal.isActive !== false && !goal.deletedAt);
+}
+
+/**
+ * Insert (no updatedAt yet) or conditional update: the row is only written
+ * when the server's updated_at still matches the version the user edited,
+ * so an edit never overwrites a newer change from the phone.
+ * Deposits do NOT go through here — use addGoalContribution().
+ */
 export async function saveSavingsGoal(userId: string | undefined, goal: SavingsGoal) {
   if (!userId) throw new Error("Sign in before saving savings goals.");
-  let data;
-  try {
-    data = await throwIfError(
+  const payload = {
+    name: goal.name,
+    target_amount: goal.targetAmount,
+    saved_amount: goal.savedAmount,
+    monthly_contribution:
+      goal.monthlyContribution === undefined || goal.monthlyContribution === null
+        ? null
+        : goal.monthlyContribution,
+    target_date: goal.targetDate ? goal.targetDate.slice(0, 10) : null,
+    color: goal.color ?? "indigo",
+    icon: goal.icon || "🎯",
+    is_active: goal.isActive ?? true,
+  };
+  let row: Row;
+  if (!goal.updatedAt) {
+    row = (await throwIfError(
       client()
         .from("savings_goals")
-        .upsert(
-          compact({
-            id: isUuid(goal.id) ? goal.id : undefined,
-            user_id: userId,
-            name: goal.name,
-            target_amount: goal.targetAmount,
-            saved_amount: goal.savedAmount,
-            monthly_contribution: goal.monthlyContribution,
-            target_date: goal.targetDate || null,
-            color: goal.color ?? "indigo",
-            icon: goal.icon ?? "target",
-            is_active: goal.isActive ?? true,
-            updated_at: new Date().toISOString(),
-          }),
-        )
+        .insert({ id: goal.id, user_id: userId, ...payload })
         .select("*")
         .single(),
-    );
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (
-      msg.includes("target_date") ||
-      msg.includes("color") ||
-      msg.includes("icon") ||
-      msg.includes("is_active")
-    ) {
-      data = await throwIfError(
-        client()
-          .from("savings_goals")
-          .upsert(
-            compact({
-              id: isUuid(goal.id) ? goal.id : undefined,
-              user_id: userId,
-              name: goal.name,
-              target_amount: goal.targetAmount,
-              saved_amount: goal.savedAmount,
-              monthly_contribution: goal.monthlyContribution,
-              updated_at: new Date().toISOString(),
-            }),
-          )
-          .select("*")
-          .single(),
-      );
-    } else {
-      throw err;
-    }
+    )) as Row;
+  } else {
+    const { data, error } = await client()
+      .from("savings_goals")
+      .update(payload)
+      .eq("user_id", userId)
+      .eq("id", goal.id)
+      .eq("updated_at", goal.updatedAt)
+      .is("deleted_at", null)
+      .select("*");
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) throw new Error(STALE_EDIT_MESSAGE);
+    row = data[0] as Row;
   }
-
-  const saved = (await fetchSavingsGoals(userId)).find((item) => item.id === (data as Row).id)!;
+  const saved = toSavingsGoal(row);
   broadcastUserSyncEvent(userId, "savings-goal-changed", {
     op: "upsert",
-    id: saved?.id,
-    source: "web",
-  });
-  broadcastUserSyncEvent(userId, "investment-changed", {
-    op: "upsert",
-    id: saved?.id,
+    id: saved.id,
     source: "web",
   });
   return saved;
 }
 
+/** Soft delete only. Errors are thrown (never a silent hard delete). */
 export async function deleteSavingsGoal(userId: string | undefined, goalId: string) {
-  if (!userId) return;
-  const now = nowIso();
-  try {
-    await client()
+  if (!userId) throw new Error("Sign in before deleting savings goals.");
+  await throwIfError(
+    client()
       .from("savings_goals")
-      .update({ is_active: false, deleted_at: now })
+      .update({ is_active: false, deleted_at: nowIso() })
       .eq("user_id", userId)
-      .eq("id", goalId);
-  } catch (_) {
-    await throwIfError(client().from("savings_goals").delete().eq("user_id", userId).eq("id", goalId));
-  }
+      .eq("id", goalId),
+  );
   broadcastUserSyncEvent(userId, "savings-goal-changed", {
     op: "delete",
     id: goalId,
     source: "web",
   });
-  broadcastUserSyncEvent(userId, "investment-changed", {
-    op: "delete",
+}
+
+/**
+ * Atomic deposit (or negative withdrawal) via the add_goal_contribution RPC —
+ * the same call the mobile app makes. `transactionId` links the bank
+ * transaction that funded it; deleting that transaction reverses the deposit.
+ */
+export async function addGoalContribution(
+  userId: string | undefined,
+  goalId: string,
+  amount: number,
+  options: { transactionId?: string; note?: string; contributionId?: string } = {},
+) {
+  if (!userId) throw new Error("Sign in before adding to a savings goal.");
+  const data = await throwIfError(
+    client().rpc("add_goal_contribution", {
+      p_goal_id: goalId,
+      p_amount: Number(amount.toFixed(2)),
+      p_contribution_id: options.contributionId ?? crypto.randomUUID(),
+      p_transaction_id: options.transactionId ?? null,
+      p_note: options.note ?? null,
+      p_source: "web",
+    }),
+  );
+  const row = (Array.isArray(data) ? data[0] : data) as Row | null;
+  broadcastUserSyncEvent(userId, "savings-goal-changed", {
+    op: "upsert",
     id: goalId,
     source: "web",
   });
+  return row ? toSavingsGoal(row) : null;
 }
 
 export function subscribeToSavingsGoals(
@@ -3314,11 +3441,7 @@ export function subscribeToSavingsGoals(
 ) {
   if (!userId) return () => undefined;
   const supabase = client();
-  const syncChannel = getUserSyncChannel(userId);
-  if (syncChannel) {
-    syncChannel.on("broadcast", { event: "investment-changed" }, () => onChange());
-    syncChannel.on("broadcast", { event: "savings-goal-changed" }, () => onChange());
-  }
+  const offBroadcast = onUserSyncBroadcast(userId, ["savings-goal-changed"], onChange);
   const channel = supabase
     .channel(uniqueTopic(`savings_goals:${userId}`))
     .on(
@@ -3326,14 +3449,118 @@ export function subscribeToSavingsGoals(
       { event: "*", schema: "public", table: "savings_goals", filter: `user_id=eq.${userId}` },
       () => onChange(),
     )
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "projector_settings", filter: `user_id=eq.${userId}` },
-      () => onChange(),
-    )
     .subscribe();
 
   return () => {
+    offBroadcast();
+    void supabase.removeChannel(channel);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Investments (public.investments) — one row per holding, shared with mobile.
+// ---------------------------------------------------------------------------
+function toInvestment(row: Row): Investment {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name ?? "Investment",
+    type: (row.type ?? "other") as InvestmentAssetType,
+    investedAmount: Number(row.invested_amount ?? 0),
+    currentValue: Number(row.current_value ?? 0),
+    accountId: row.account_id ?? null,
+    purpose: row.purpose ?? null,
+    notes: row.notes ?? null,
+    sourceTransactionIds: Array.isArray(row.source_transaction_ids)
+      ? row.source_transaction_ids.map(String)
+      : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    deletedAt: row.deleted_at ?? null,
+  };
+}
+
+/** Oldest first — same order as the mobile app. */
+export async function fetchInvestments(userId?: string) {
+  if (!userId) return [];
+  const data = await throwIfError(
+    client()
+      .from("investments")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: true }),
+  );
+  return ((data as Row[]) ?? []).map(toInvestment);
+}
+
+/** Insert when new (no updatedAt), otherwise a conditional update. */
+export async function saveInvestment(userId: string | undefined, investment: Investment) {
+  if (!userId) throw new Error("Sign in before saving investments.");
+  const payload = {
+    name: investment.name.trim(),
+    type: investment.type,
+    invested_amount: Number(investment.investedAmount.toFixed(2)),
+    current_value: Number(investment.currentValue.toFixed(2)),
+    account_id: investment.accountId ?? null,
+    purpose: investment.purpose ?? null,
+    notes: investment.notes?.trim() ? investment.notes.trim() : null,
+    source_transaction_ids: investment.sourceTransactionIds ?? [],
+  };
+  let row: Row;
+  if (!investment.updatedAt) {
+    row = (await throwIfError(
+      client()
+        .from("investments")
+        .insert({ id: investment.id, user_id: userId, ...payload })
+        .select("*")
+        .single(),
+    )) as Row;
+  } else {
+    const { data, error } = await client()
+      .from("investments")
+      .update(payload)
+      .eq("user_id", userId)
+      .eq("id", investment.id)
+      .eq("updated_at", investment.updatedAt)
+      .is("deleted_at", null)
+      .select("*");
+    if (error) throw new Error(error.message);
+    if (!data || data.length === 0) throw new Error(STALE_EDIT_MESSAGE);
+    row = data[0] as Row;
+  }
+  const saved = toInvestment(row);
+  broadcastUserSyncEvent(userId, "investment-changed", { op: "upsert", id: saved.id, source: "web" });
+  return saved;
+}
+
+/** Soft delete (deleted_at). Linked bank transactions are kept. */
+export async function deleteInvestment(userId: string | undefined, investmentId: string) {
+  if (!userId) throw new Error("Sign in before deleting investments.");
+  await throwIfError(
+    client()
+      .from("investments")
+      .update({ deleted_at: nowIso() })
+      .eq("user_id", userId)
+      .eq("id", investmentId),
+  );
+  broadcastUserSyncEvent(userId, "investment-changed", { op: "delete", id: investmentId, source: "web" });
+}
+
+export function subscribeToInvestments(userId: string | undefined, onChange: () => void) {
+  if (!userId) return () => undefined;
+  const supabase = client();
+  const offBroadcast = onUserSyncBroadcast(userId, ["investment-changed"], onChange);
+  const channel = supabase
+    .channel(uniqueTopic(`investments:${userId}`))
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "investments", filter: `user_id=eq.${userId}` },
+      () => onChange(),
+    )
+    .subscribe();
+  return () => {
+    offBroadcast();
     void supabase.removeChannel(channel);
   };
 }
@@ -4330,7 +4557,8 @@ function toSmartView(row: Row): SmartView {
 }
 
 export async function fetchSmartViews(userId?: string) {
-  return selectByUser("smart_views", userId, toSmartView, "created_at");
+  const rows = await selectByUser("smart_views", userId, (row) => row, "created_at");
+  return rows.filter(notSoftDeleted).map(toSmartView);
 }
 
 export async function saveSmartView(
@@ -4364,9 +4592,7 @@ export async function saveSmartView(
 
 export async function deleteSmartView(userId: string | undefined, viewId: string) {
   if (!userId) return;
-  await throwIfError(
-    client().from("smart_views").delete().eq("user_id", userId).eq("id", viewId),
-  );
+  await softDeleteOwnRow("smart_views", userId, viewId);
 }
 
 export async function fetchAiChatHistory(userId: string | undefined) {
@@ -4695,6 +4921,8 @@ const backupTables = [
   "income_streams",
   "income_targets",
   "savings_goals",
+  "goal_contributions",
+  "investments",
   "projector_settings",
   "ai_chat_messages",
   "ai_insights",

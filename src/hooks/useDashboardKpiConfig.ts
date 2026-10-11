@@ -16,7 +16,7 @@ export const DASHBOARD_KPI_OPTIONS: Array<{
   { key: "net-savings", label: "Net Savings" },
   { key: "cash-in-hand", label: "Cash in Hand" },
   { key: "bank-balance", label: "Bank Balance" },
-  { key: "investment-value", label: "Investment Value" },
+  // "investment-value" removed: investments only show on the Wealth page.
   { key: "outing-spend", label: "Outings Spend" },
   { key: "month-rollover", label: "Last Month Rollover" },
 ];

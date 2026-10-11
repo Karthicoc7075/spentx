@@ -12,10 +12,13 @@ export type ImpersonationSession = {
   id: string;
   adminId: string;
   targetUserId: string;
+  /** 'read' (default) blocks every write; 'write' was started with a reason. */
+  mode: "read" | "write";
 };
 
 const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
-const CACHE_TTL_MS = 30 * 1000;
+// Short, so a session ended from another server instance stops working fast.
+const CACHE_TTL_MS = 5 * 1000;
 const TOUCH_INTERVAL_MS = 60 * 1000;
 
 type CachedSession = {
@@ -48,7 +51,7 @@ export async function validateImpersonationSession(
     const admin = createAdminClient();
     const { data } = await admin
       .from("admin_impersonation_sessions")
-      .select("id, admin_id, target_user_id, ended_at, last_active_at")
+      .select("id, admin_id, target_user_id, ended_at, last_active_at, mode")
       .eq("id", sessionId)
       .maybeSingle();
 
@@ -64,6 +67,7 @@ export async function validateImpersonationSession(
         id: data.id as string,
         adminId: data.admin_id as string,
         targetUserId: data.target_user_id as string,
+        mode: data.mode === "write" ? "write" : "read",
       };
     } else if (
       data &&
@@ -137,6 +141,21 @@ const OWNER_COLUMNS: Record<string, string> = {
   projector_settings: "user_id",
   ai_chat_messages: "user_id",
   ai_insights: "user_id",
+  // Newer per-user tables used by Friends / Outings / Wealth / Transactions.
+  account_purposes: "user_id",
+  transaction_items: "user_id",
+  friend_splits: "user_id",
+  friend_settlements: "user_id",
+  outing_categories: "user_id",
+  investments: "user_id",
+  goal_contributions: "user_id",
+  net_worth_history: "user_id",
+  recurring_bills: "user_id",
+  user_merchants: "user_id",
+  user_merchant_category: "user_id",
+  user_devices: "user_id",
+  login_history: "user_id",
+  share_invite_deliveries: "owner_id",
 };
 
 // Shared config: readable during impersonation, never writable through it.
@@ -146,6 +165,13 @@ const GLOBAL_READ_ONLY = new Set([
   "sms_template_rules",
   "sms_detection_rules",
   "sms_block_rules",
+  // Merchant/category rules (20261011_merchant_category_rules.sql)
+  "category_catalog",
+  "merchant_brands",
+  "merchant_brand_keys",
+  "merchant_keyword_rules",
+  "mcc_category_map",
+  "rules_version",
 ]);
 
 // Per-user but append-only history — readable (scoped), not writable
@@ -156,6 +182,11 @@ const SCOPED_READ_ONLY = new Set([
   "share_access_logs",
   "backup_history",
   "account_balance_history",
+  "login_history",
+  "user_devices",
+  "share_invite_deliveries",
+  // Writes go through add_goal_contribution (direct DML is revoked).
+  "goal_contributions",
 ]);
 
 // Never reachable during impersonation, in any direction.
@@ -184,14 +215,34 @@ export function classifyImpersonatedTable(table: string): TableScopeDecision {
 
 // --- Audit trail for impersonated mutations --------------------------------
 
+/**
+ * Names of tables embedded in a PostgREST `select` (e.g.
+ * `*,transaction_splits(*),owner:users!fk(name)`), so the proxy can refuse
+ * embeds of tables that are blocked or unscoped during impersonation.
+ */
+export function embeddedTables(select: string | null): string[] {
+  if (!select) return [];
+  const names: string[] = [];
+  const pattern = /([A-Za-z0-9_]+)(?:![A-Za-z0-9_]+)?\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(select)) !== null) {
+    names.push(match[1]);
+  }
+  return names;
+}
+
+export function isEmbeddableDuringImpersonation(table: string): boolean {
+  return !BLOCKED.has(table);
+}
+
 export async function logImpersonatedMutation(params: {
   session: ImpersonationSession;
   action: "create" | "update" | "delete";
   table: string;
   before: unknown | null;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
-    await createAdminClient().from("admin_action_logs").insert({
+    const { error } = await createAdminClient().from("admin_action_logs").insert({
       admin_id: params.session.adminId,
       action: params.action,
       table_name: params.table,
@@ -200,7 +251,13 @@ export async function logImpersonatedMutation(params: {
       target_user_id: params.session.targetUserId,
       impersonation_session_id: params.session.id,
     });
+    if (error) {
+      console.error("impersonation mutation log failed:", error);
+      return false;
+    }
+    return true;
   } catch (error) {
     console.error("impersonation mutation log failed:", error);
+    return false;
   }
 }

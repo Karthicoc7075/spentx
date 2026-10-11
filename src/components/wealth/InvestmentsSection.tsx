@@ -1,105 +1,64 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  BriefcaseBusiness,
-  Building,
-  Coins,
-  Edit2,
-  Gem,
-  Landmark,
-  LineChart,
-  Plus,
-  Trash2,
-  TrendingUp,
-} from "lucide-react";
+import { BriefcaseBusiness, Edit2, Plus, Trash2, TrendingDown, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatCurrency, cn } from "@/lib/utils";
-import { computeAccountBalancesMap } from "@/lib/wealth";
 import { InvestmentHistoryPanel } from "@/components/wealth/InvestmentHistoryPanel";
-import { NewInvestmentModal } from "@/components/wealth/NewInvestmentModal";
-import { useAuthReady } from "@/hooks/useAuthReady";
-import { deleteAccount } from "@/lib/supabase-data";
-import { queryKeys } from "@/lib/query-keys";
-import { useQueryClient } from "@tanstack/react-query";
+import { INVESTMENT_TYPE_ICONS, NewInvestmentModal } from "@/components/wealth/NewInvestmentModal";
+import { useCategories } from "@/hooks/useCategories";
+import { useInvestments } from "@/hooks/useInvestments";
 import { useToast } from "@/providers/toast-provider";
-import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
-import type { Account, OutingExpense, Transaction } from "@/types";
+import { computePortfolio, gainPercentOf, INVESTMENT_TYPE_LABELS } from "@/lib/investments";
+import type { Investment, Transaction } from "@/types";
 
 type InvestmentsSectionProps = {
-  accounts: Account[];
   transactions: Transaction[];
-  unlinkedOutingExpenses?: OutingExpense[];
   onNewInvestmentClick?: () => void;
 };
 
-export function InvestmentsSection({
-  accounts,
-  transactions,
-  unlinkedOutingExpenses = [],
-  onNewInvestmentClick,
-}: InvestmentsSectionProps) {
-  const { user } = useAuthReady();
-  const queryClient = useQueryClient();
+function formatGain(gain: number, pct: number) {
+  const sign = gain >= 0 ? "+" : "−";
+  return `${sign}${formatCurrency(Math.abs(gain))} (${gain >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(1)}%)`;
+}
+
+export function InvestmentsSection({ transactions, onNewInvestmentClick }: InvestmentsSectionProps) {
   const { notify } = useToast();
+  const { categories } = useCategories();
+  const { investments, isLoading, error, remove } = useInvestments();
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editing, setEditing] = useState<Investment | null>(null);
 
-  // Compute live balances for all accounts
-  const balances = useMemo(
-    () => computeAccountBalancesMap(accounts, transactions, unlinkedOutingExpenses),
-    [accounts, transactions, unlinkedOutingExpenses],
+  const portfolio = useMemo(
+    () => computePortfolio(investments, transactions, categories),
+    [investments, transactions, categories],
   );
 
-  // Filter accounts belonging to investment types
-  const investmentAccounts = useMemo(
-    () =>
-      accounts.filter(
-        (a) =>
-          a.isActive !== false &&
-          (a.type === "investment" ||
-            a.type === "mutual_fund" ||
-            a.type === "stocks"),
-      ),
-    [accounts],
-  );
-
-  // Calculate total capital invested across accounts
-  const totalInvestedInAccounts = useMemo(
-    () =>
-      investmentAccounts.reduce((sum, a) => {
-        const bal = balances.get(a.id) ?? a.openingBalance ?? 0;
-        return sum + Math.max(0, bal);
-      }, 0),
-    [investmentAccounts, balances],
-  );
-
-  async function handleDelete(acc: Account) {
-    if (!confirm(`Delete investment holding "${acc.name}"?`)) return;
+  async function handleDelete(item: Investment) {
+    if (!confirm(`Delete investment "${item.name}"? Linked bank transactions are kept.`)) return;
     try {
-      await deleteAccount(user?.id, acc.id);
-      if (user?.id) {
-        await queryClient.invalidateQueries({ queryKey: queryKeys.accounts(user.id) });
-        await queryClient.invalidateQueries({ queryKey: queryKeys.investmentTotal(user.id) });
-        await invalidateFinancialData(queryClient, user.id);
-      }
-      notify({
-        title: "Investment deleted",
-        description: `"${acc.name}" was removed from your portfolio.`,
-      });
-    } catch {
+      await remove(item.id);
+      notify({ title: "Investment deleted", description: `"${item.name}" was removed from your portfolio.` });
+    } catch (err) {
       notify({
         title: "Could not delete",
-        description: "Please try again.",
+        description: err instanceof Error ? err.message : "Please try again.",
         variant: "destructive",
       });
     }
   }
 
+  function openNew() {
+    setEditing(null);
+    if (onNewInvestmentClick) onNewInvestmentClick();
+    else setModalOpen(true);
+  }
+
+  const gainPositive = portfolio.gain >= 0;
+
   return (
     <div className="space-y-6">
-      {/* 1. Investment Overview Banner (Parity with Mobile reference) */}
       <div className="sx-surface rounded-2xl p-4 sm:p-5 border bg-card/60 backdrop-blur">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="space-y-1">
@@ -108,35 +67,33 @@ export function InvestmentsSection({
                 <TrendingUp className="size-4" />
               </span>
               <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                TOTAL CAPITAL INVESTED
+                Current Value
               </span>
               <span className="rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 text-[10px] font-semibold">
                 ● Portfolio
               </span>
             </div>
-            <div className="flex items-baseline gap-2 pt-1">
+            <div className="flex items-baseline gap-2 pt-1 flex-wrap">
               <span className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
-                {formatCurrency(totalInvestedInAccounts)}
+                {formatCurrency(portfolio.current)}
               </span>
               <span className="text-xs text-muted-foreground font-normal">
-                across {investmentAccounts.length} asset accounts
+                across {portfolio.holdingCount} {portfolio.holdingCount === 1 ? "holding" : "holdings"}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground max-w-xl">
-              Capital deployed directly into mutual funds, equities, fixed deposits, and precious metals.
+            <p className="text-xs text-muted-foreground">
+              Invested {formatCurrency(portfolio.invested)} ·{" "}
+              <span className={cn("font-semibold", gainPositive ? "text-emerald-600 dark:text-emerald-400" : "text-destructive")}>
+                {formatGain(portfolio.gain, portfolio.gainPercent)}
+              </span>
+              {portfolio.unlinkedSpend > 0 ? (
+                <> · includes {formatCurrency(portfolio.unlinkedSpend)} of Investment-category spends not linked to a holding</>
+              ) : null}
             </p>
           </div>
 
           <div className="flex items-center gap-2 sm:self-center">
-            <Button
-              onClick={() => {
-                setEditingAccount(null);
-                if (onNewInvestmentClick) onNewInvestmentClick();
-                else setModalOpen(true);
-              }}
-              size="sm"
-              className="gap-1.5 font-medium rounded-xl"
-            >
+            <Button onClick={openNew} size="sm" className="gap-1.5 font-medium rounded-xl">
               <Plus className="size-4" />
               Add Investment
             </Button>
@@ -144,32 +101,37 @@ export function InvestmentsSection({
         </div>
       </div>
 
-      {/* 2. Holdings & Assets Grid */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm sm:text-base font-semibold tracking-tight text-foreground flex items-center gap-2">
             <span>Portfolio Holdings</span>
             <span className="rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs font-medium">
-              {investmentAccounts.length}
+              {investments.length}
             </span>
           </h3>
         </div>
 
-        {investmentAccounts.length === 0 ? (
+        {error ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+            Could not load investments: {error.message}
+          </div>
+        ) : null}
+
+        {isLoading ? (
+          <div className="rounded-2xl border py-10 text-center text-xs text-muted-foreground">Loading…</div>
+        ) : investments.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border py-10 px-4 text-center bg-card/40">
             <BriefcaseBusiness className="mx-auto size-9 text-muted-foreground/40" />
-            <h4 className="mt-3 text-sm font-semibold text-foreground">
-              No investment accounts added yet
-            </h4>
+            <h4 className="mt-3 text-sm font-semibold text-foreground">No investments added yet</h4>
             <p className="mt-1 text-xs text-muted-foreground max-w-sm mx-auto">
-              Add mutual funds, demat accounts, or fixed deposits to track your asset distribution.
+              Add mutual funds, stocks, fixed deposits or gold to track what you put in and what it is worth.
             </p>
             <Button
               size="sm"
               variant="outline"
               className="mt-4 text-xs gap-1.5 rounded-xl"
               onClick={() => {
-                setEditingAccount(null);
+                setEditing(null);
                 setModalOpen(true);
               }}
             >
@@ -179,15 +141,14 @@ export function InvestmentsSection({
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {investmentAccounts.map((acc) => {
-              const bal = balances.get(acc.id) ?? acc.openingBalance ?? 0;
-              const isFund = acc.type === "mutual_fund";
-              const isStock = acc.type === "stocks";
-              const Icon = isFund ? TrendingUp : isStock ? LineChart : Landmark;
-
+            {investments.map((item) => {
+              const Icon = INVESTMENT_TYPE_ICONS[item.type] ?? TrendingUp;
+              const gain = item.currentValue - item.investedAmount;
+              const pct = gainPercentOf(item.investedAmount, item.currentValue);
+              const up = gain >= 0;
               return (
                 <div
-                  key={acc.id}
+                  key={item.id}
                   className="sx-surface rounded-2xl p-4 border bg-card hover:shadow-fintech-hover transition-all duration-200 flex flex-col justify-between group"
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -196,11 +157,10 @@ export function InvestmentsSection({
                         <Icon className="size-5" />
                       </span>
                       <div className="min-w-0">
-                        <h4 className="font-bold text-sm text-foreground truncate">
-                          {acc.name}
-                        </h4>
+                        <h4 className="font-bold text-sm text-foreground truncate">{item.name}</h4>
                         <span className="inline-block mt-0.5 text-[11px] text-muted-foreground uppercase tracking-wider font-semibold">
-                          {acc.type.replace("_", " ")}
+                          {INVESTMENT_TYPE_LABELS[item.type] ?? item.type}
+                          {item.purpose ? ` · ${item.purpose}` : ""}
                         </span>
                       </div>
                     </div>
@@ -209,7 +169,7 @@ export function InvestmentsSection({
                       <button
                         type="button"
                         onClick={() => {
-                          setEditingAccount(acc);
+                          setEditing(item);
                           setModalOpen(true);
                         }}
                         title="Edit holding"
@@ -219,7 +179,7 @@ export function InvestmentsSection({
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(acc)}
+                        onClick={() => handleDelete(item)}
                         title="Delete holding"
                         className="p-1 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                       >
@@ -228,14 +188,33 @@ export function InvestmentsSection({
                     </div>
                   </div>
 
-                  <div className="mt-4 flex items-baseline justify-between pt-2 border-t border-border/60">
+                  <div className="mt-4 flex items-end justify-between gap-2 pt-2 border-t border-border/60">
                     <div>
                       <span className="text-base sm:text-lg font-bold text-foreground tabular-nums">
-                        {formatCurrency(bal)}
+                        {formatCurrency(item.currentValue)}
                       </span>
-                      <span className="text-[11px] text-muted-foreground ml-1">invested</span>
+                      <p className="text-[11px] text-muted-foreground">
+                        invested {formatCurrency(item.investedAmount)}
+                      </p>
                     </div>
+                    {item.investedAmount > 0 ? (
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums",
+                          up
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "bg-destructive/10 text-destructive",
+                        )}
+                      >
+                        {up ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
+                        {up ? "+" : "−"}
+                        {Math.abs(pct).toFixed(1)}%
+                      </span>
+                    ) : null}
                   </div>
+                  {item.notes ? (
+                    <p className="mt-2 text-[11px] text-muted-foreground line-clamp-2">{item.notes}</p>
+                  ) : null}
                 </div>
               );
             })}
@@ -243,19 +222,17 @@ export function InvestmentsSection({
         )}
       </div>
 
-      {/* 3. Investment Activity Ledger */}
       <div className="pt-2">
         <InvestmentHistoryPanel transactions={transactions} />
       </div>
 
-      {/* New / Edit Investment Modal */}
       <NewInvestmentModal
         open={modalOpen}
         onOpenChange={(open) => {
           setModalOpen(open);
-          if (!open) setEditingAccount(null);
+          if (!open) setEditing(null);
         }}
-        initialAccount={editingAccount}
+        initialInvestment={editing}
       />
     </div>
   );

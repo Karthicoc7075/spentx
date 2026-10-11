@@ -46,3 +46,10 @@ export function formatKb(bytes: number | null | undefined): string {
   if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
   return `${kb.toFixed(1)} KB`;
 }
+
+/** True when the timestamp is in the future (e.g. auth banned_until). */
+export function isInFuture(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const time = new Date(value).getTime();
+  return !Number.isNaN(time) && time > Date.now();
+}

@@ -1,5 +1,5 @@
 import { isOutingRollupTransaction } from "@/lib/outings";
-import type { Category, Transaction } from "@/types";
+import type { Category, Investment, InvestmentAssetType, Transaction } from "@/types";
 
 const LEGACY_INVESTMENT_CATEGORY_NAME = "investment";
 
@@ -162,4 +162,86 @@ export function sumSpendingExpenses(
   return transactions
     .filter((transaction) => isSpendingExpense(transaction, categories))
     .reduce((sum, transaction) => sum + money(transaction), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Holdings (public.investments) — shared maths with the mobile app
+// (lib/features/investments/data/investment_math.dart) and the
+// investment_totals view, so every screen shows the same numbers.
+// ---------------------------------------------------------------------------
+
+export const INVESTMENT_TYPE_LABELS: Record<InvestmentAssetType, string> = {
+  mutual_fund: "Mutual Fund",
+  stocks: "Stocks & Equity",
+  fixed_deposit: "Fixed Deposit",
+  gold: "Gold / Commodities",
+  bonds: "Bonds / Debt",
+  crypto: "Cryptocurrency",
+  real_estate: "Real Estate",
+  liquid: "Liquid / Cash Fund",
+  other: "Other Investment",
+};
+
+export const INVESTMENT_TYPES = Object.keys(INVESTMENT_TYPE_LABELS) as InvestmentAssetType[];
+
+/** Expense category for money moved into a holding (same name on mobile). */
+export const INVESTMENT_TX_CATEGORY = "Investment";
+
+export function gainPercentOf(invested: number, current: number) {
+  return invested > 0 ? ((current - invested) / invested) * 100 : 0;
+}
+
+export type PortfolioTotals = {
+  invested: number;
+  current: number;
+  gain: number;
+  gainPercent: number;
+  /** Investment-category spends not linked to any holding. */
+  unlinkedSpend: number;
+  holdingCount: number;
+};
+
+/**
+ * Holdings count once. An investment-category expense is added only when it
+ * is NOT linked to a holding (otherwise "add investment + deduct from bank"
+ * would be counted twice).
+ */
+export function computePortfolio(
+  investments: Investment[],
+  transactions: Transaction[],
+  categories: Category[] = [],
+): PortfolioTotals {
+  let invested = 0;
+  let current = 0;
+  const linked = new Set<string>();
+  const live = investments.filter((item) => !item.deletedAt);
+  for (const item of live) {
+    invested += Number(item.investedAmount) || 0;
+    current += Number(item.currentValue) || 0;
+    for (const id of item.sourceTransactionIds ?? []) linked.add(id);
+  }
+  let unlinked = 0;
+  for (const tx of transactions) {
+    if (!isInvestmentTransaction(tx, categories)) continue;
+    if (linked.has(tx.id)) continue;
+    unlinked += money(tx);
+  }
+  const totalInvested = invested + unlinked;
+  const totalCurrent = current + unlinked;
+  return {
+    invested: totalInvested,
+    current: totalCurrent,
+    gain: totalCurrent - totalInvested,
+    gainPercent: gainPercentOf(totalInvested, totalCurrent),
+    unlinkedSpend: unlinked,
+    holdingCount: live.length,
+  };
+}
+
+/** "25,000", "₹ 1,20,000.50" -> number; null when empty or not a number. */
+export function parseAmountInput(raw: string): number | null {
+  const cleaned = raw.replace(/[₹,\s]/g, "");
+  if (!cleaned) return null;
+  const value = Number(cleaned);
+  return Number.isFinite(value) ? value : null;
 }

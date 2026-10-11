@@ -11,6 +11,7 @@ import {
 import {
   computeNetWorthByPurpose,
   getAccountBalance,
+  netWorthCardAccounts,
 } from "@/lib/wealth";
 import { kpiIcons } from "@/lib/dashboard-kpi-meta";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -96,7 +97,7 @@ function DeltaPill({
 export function DashboardKpiRow({
   isReadOnlyViewer,
   kpis,
-  accounts,
+  accounts: allAccounts,
   transactions,
   balanceTransactions,
   purposes,
@@ -110,6 +111,8 @@ export function DashboardKpiRow({
   unlinkedOutingExpenses = [],
 }: DashboardKpiRowProps) {
   const balanceLedger = balanceTransactions ?? transactions;
+  // Net worth outside the Wealth page excludes investment accounts and goals.
+  const accounts = useMemo(() => netWorthCardAccounts(allAccounts), [allAccounts]);
   const { activeKeys, setActiveKeys, resetToDefault } = useDashboardKpiConfig();
   const [netWorthView, setNetWorthView] = useState<"combined" | "per-purpose">(
     "combined",

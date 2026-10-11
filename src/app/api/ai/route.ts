@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
+import { requireAiCaller } from "@/lib/server/ai-guard";
 
 async function handler(request: Request) {
+  const caller = await requireAiCaller("ai");
+  if ("response" in caller) return caller.response;
   try {
-    const { messages, financialContext } = await request.json();
+    const { messages: rawMessages, financialContext } = await request.json();
+    const messages = Array.isArray(rawMessages) ? rawMessages.slice(-20) : [];
     
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) {
@@ -57,10 +61,10 @@ Rules:
     );
 
     if (!response.ok) {
-      const errorText = await response.text();
+      console.error("Gemini API error:", response.status, await response.text());
       return NextResponse.json(
-        { error: `Gemini API returned error: ${errorText}` },
-        { status: response.status }
+        { error: "The AI coach is unavailable right now. Try again later." },
+        { status: 502 }
       );
     }
 
@@ -68,10 +72,10 @@ Rules:
     const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "I apologize, I could not compute a response.";
 
     return NextResponse.json({ reply });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("AI Coach API error:", error);
     return NextResponse.json(
-      { error: error?.message || "An unexpected error occurred." },
+      { error: "An unexpected error occurred." },
       { status: 500 }
     );
   }

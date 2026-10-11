@@ -3,14 +3,14 @@ import { getServerAuthCallbackUrl } from "@/lib/auth-redirect";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
-import { isAdminUser } from "@/lib/admin";
+import { adminCheckResponse, rejectCrossSite, requireAdmin } from "@/lib/server/admin-auth";
 
 // Admin-triggered resend of the signup verification email for a user stuck
 // unverified. Mirrors reset-password: the admin only re-triggers the email,
 // never sees a token, and every call is attributed in admin_action_logs.
 // Server-only because the audit insert uses the service role.
 async function handlePost(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -19,28 +19,12 @@ async function handlePost(
       return NextResponse.json({ error: "User id is required." }, { status: 400 });
     }
 
-    // Verify the CALLER is a signed-in admin — same gate as user deletion.
+    const csrf = rejectCrossSite(request);
+    if (csrf) return csrf;
+    const check = await requireAdmin();
+    if (!check.ok) return adminCheckResponse(check);
+    const user = check.user;
     const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
-    }
-
-    const { data: callerProfile } = await supabase
-      .from("users")
-      .select("role, email")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (!isAdminUser(user, callerProfile)) {
-      return NextResponse.json(
-        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
-        { status: 403 },
-      );
-    }
 
     // Look up the TARGET user's email via the service-role client.
     const admin = createAdminClient();

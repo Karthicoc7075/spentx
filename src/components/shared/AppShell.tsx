@@ -19,6 +19,7 @@ import {
   ScrollText,
   Settings,
   Smartphone,
+  Store,
   Users,
   WalletCards,
   Wrench,
@@ -71,14 +72,16 @@ const bottomNavItems: NavItem[] = [
 ];
 
 // Rendered in Admin View for authorized admins
+// The ONLY admin navigation (sidebar on desktop, drawer on mobile).
 const adminNavItems: NavItem[] = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/categories", label: "Content & Categories", icon: Layers },
-  { href: "/admin/database", label: "Database Data", icon: Database },
-  { href: "/admin/settings", label: "Website Settings", icon: Settings },
+  { href: "/admin/categories", label: "Default Categories", icon: Layers },
+  { href: "/admin/merchant-rules", label: "Merchant Rules", icon: Store },
   { href: "/admin/sms-rules", label: "SMS Rules", icon: Smartphone },
-  { href: "/admin/logs", label: "System & Logs", icon: ScrollText },
+  { href: "/admin/database", label: "Database", icon: Database },
+  { href: "/admin/settings", label: "App Settings", icon: Settings },
+  { href: "/admin/logs", label: "Audit Log", icon: ScrollText },
   { href: "/admin/api-logs", label: "API Logs", icon: Activity },
   { href: "/admin/backups", label: "Backups", icon: DatabaseBackup },
 ];
@@ -112,7 +115,16 @@ const pageTitles: Array<[string, string]> = [
   ["/friends", "Friends"],
   ["/alerts", "Alerts"],
   ["/settings", "Settings"],
-  ["/admin", "Admin"],
+  ["/admin/users", "Admin · Users"],
+  ["/admin/categories", "Admin · Default Categories"],
+  ["/admin/merchant-rules", "Admin · Merchant Rules"],
+  ["/admin/sms-rules", "Admin · SMS Rules"],
+  ["/admin/database", "Admin · Database"],
+  ["/admin/settings", "Admin · App Settings"],
+  ["/admin/logs", "Admin · Audit Log"],
+  ["/admin/api-logs", "Admin · API Logs"],
+  ["/admin/backups", "Admin · Backups"],
+  ["/admin", "Admin · Overview"],
 ];
 
 function getPageTitle(pathname: string) {

@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
 import { useToast } from "@/providers/toast-provider";
 import { cn } from "@/lib/utils";
+import { parseAmountInput } from "@/lib/investments";
 import { Calendar, Check, Infinity as InfinityIcon, Loader2, Sparkles, Target } from "lucide-react";
 import type { SavingsGoal } from "@/types";
 
@@ -61,6 +62,7 @@ export function NewSavingsGoalModal({
   const [name, setName] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
   const [savedAmount, setSavedAmount] = useState("0");
+  const [monthlyContribution, setMonthlyContribution] = useState("");
   const [hasDeadline, setHasDeadline] = useState(true);
   const [targetDate, setTargetDate] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("🎯");
@@ -73,6 +75,9 @@ export function NewSavingsGoalModal({
       setName(initialGoal.name);
       setTargetAmount(initialGoal.targetAmount.toString());
       setSavedAmount((initialGoal.savedAmount || 0).toString());
+      setMonthlyContribution(
+        initialGoal.monthlyContribution ? initialGoal.monthlyContribution.toString() : "",
+      );
       setSelectedIcon(initialGoal.icon || "🎯");
       setSelectedColor(initialGoal.color || "indigo");
       if (initialGoal.targetDate) {
@@ -86,6 +91,7 @@ export function NewSavingsGoalModal({
       setName("");
       setTargetAmount("");
       setSavedAmount("0");
+      setMonthlyContribution("");
       setHasDeadline(false);
       setTargetDate("");
       setSelectedIcon("🎯");
@@ -102,13 +108,31 @@ export function NewSavingsGoalModal({
       return;
     }
 
-    const targetVal = parseFloat(targetAmount.replace(/[^0-9.]/g, ""));
-    if (isNaN(targetVal) || targetVal <= 0) {
+    const targetVal = parseAmountInput(targetAmount);
+    if (targetVal === null || targetVal <= 0) {
       setError("Target amount must be greater than zero.");
       return;
     }
 
-    const savedVal = parseFloat(savedAmount.replace(/[^0-9.]/g, "")) || 0;
+    const savedParsed = savedAmount.trim() ? parseAmountInput(savedAmount) : 0;
+    if (savedParsed === null || savedParsed < 0) {
+      setError("Current saved must be 0 or more.");
+      return;
+    }
+    const savedVal = savedParsed;
+
+    // Empty or 0 clears the monthly contribution (sent as NULL).
+    const monthlyParsed = monthlyContribution.trim() ? parseAmountInput(monthlyContribution) : null;
+    if (monthlyContribution.trim() && (monthlyParsed === null || monthlyParsed < 0)) {
+      setError("Monthly contribution must be a positive number, or leave it empty.");
+      return;
+    }
+    const monthlyVal = monthlyParsed && monthlyParsed > 0 ? monthlyParsed : undefined;
+
+    if (hasDeadline && !targetDate) {
+      setError("Pick a target date or switch the timeline to Any time.");
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);
@@ -120,6 +144,7 @@ export function NewSavingsGoalModal({
           name: trimmedName,
           targetAmount: targetVal,
           savedAmount: savedVal,
+          monthlyContribution: monthlyVal,
           targetDate: hasDeadline && targetDate ? targetDate : undefined,
           icon: selectedIcon,
           color: selectedColor,
@@ -134,6 +159,7 @@ export function NewSavingsGoalModal({
           name: trimmedName,
           targetAmount: targetVal,
           savedAmount: savedVal,
+          monthlyContribution: monthlyVal,
           targetDate: hasDeadline && targetDate ? targetDate : undefined,
           icon: selectedIcon,
           color: selectedColor,
@@ -198,10 +224,8 @@ export function NewSavingsGoalModal({
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Target Amount (₹) *</Label>
                 <Input
-                  type="number"
-                  min="1"
-                  step="any"
-                  placeholder="e.g. 80000"
+                  inputMode="decimal"
+                  placeholder="e.g. 80,000"
                   value={targetAmount}
                   onChange={(e) => setTargetAmount(e.target.value)}
                   className="h-10 text-sm font-semibold rounded-xl"
@@ -210,15 +234,24 @@ export function NewSavingsGoalModal({
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Current Saved (₹)</Label>
                 <Input
-                  type="number"
-                  min="0"
-                  step="any"
+                  inputMode="decimal"
                   placeholder="0"
                   value={savedAmount}
                   onChange={(e) => setSavedAmount(e.target.value)}
                   className="h-10 text-sm rounded-xl"
                 />
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Monthly Contribution (₹, optional)</Label>
+              <Input
+                inputMode="decimal"
+                placeholder="e.g. 5,000 — leave empty to clear"
+                value={monthlyContribution}
+                onChange={(e) => setMonthlyContribution(e.target.value)}
+                className="h-10 text-sm rounded-xl"
+              />
             </div>
 
             {/* Target Date vs Any Time */}

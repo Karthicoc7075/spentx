@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
-import { isAdminUser } from "@/lib/admin";
+import { adminCheckResponse, rejectCrossSite, requireAdmin } from "@/lib/server/admin-auth";
 
 // Admin-forced email verification. Unlike resend-verification (which sends
 // the target another confirmation link to click), this marks the auth.users
@@ -11,7 +10,7 @@ import { isAdminUser } from "@/lib/admin";
 // the inbox but the confirmation email never arrived/was lost. Server-only:
 // email_confirm can only be set via the service-role Admin API.
 async function handlePost(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -20,28 +19,11 @@ async function handlePost(
       return NextResponse.json({ error: "User id is required." }, { status: 400 });
     }
 
-    // Verify the CALLER is a signed-in admin — same gate as user deletion.
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
-    }
-
-    const { data: callerProfile } = await supabase
-      .from("users")
-      .select("role, email")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (!isAdminUser(user, callerProfile)) {
-      return NextResponse.json(
-        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
-        { status: 403 },
-      );
-    }
+    const csrf = rejectCrossSite(request);
+    if (csrf) return csrf;
+    const check = await requireAdmin();
+    if (!check.ok) return adminCheckResponse(check);
+    const user = check.user;
 
     // Look up the TARGET auth user via the service-role client — need
     // email_confirmed_at, which only exists on auth.users, not public.users.

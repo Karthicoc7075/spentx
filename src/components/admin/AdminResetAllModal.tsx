@@ -1,13 +1,23 @@
 "use client";
 
-import { AlertTriangle, Loader2, ShieldAlert, Trash2, X } from "lucide-react";
+import { AlertTriangle, Loader2, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { clearBootstrapSessionCache } from "@/lib/user-bootstrap";
 import { useToast } from "@/providers/toast-provider";
+
+const CONFIRM_PHRASE = "RESET ALL DATA";
 
 type AdminResetAllModalProps = {
   open: boolean;
@@ -15,64 +25,50 @@ type AdminResetAllModalProps = {
   onSuccess?: () => void;
 };
 
-export function AdminResetAllModal({
-  open,
-  onOpenChange,
-  onSuccess,
-}: AdminResetAllModalProps) {
+/**
+ * Server-checked: the route requires an admin session, this exact phrase and
+ * ADMIN_RESET_PASSWORD (no default — the reset is disabled until it is set).
+ */
+export function AdminResetAllModal({ open, onOpenChange, onSuccess }: AdminResetAllModalProps) {
   const { notify } = useToast();
   const queryClient = useQueryClient();
   const [password, setPassword] = useState("");
+  const [phrase, setPhrase] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  if (!open) return null;
-
-  const handleReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!password.trim()) {
-      setErrorMsg("Admin password is required.");
-      return;
+  const close = (next: boolean) => {
+    if (isSubmitting) return;
+    if (!next) {
+      setPassword("");
+      setPhrase("");
+      setErrorMsg("");
     }
+    onOpenChange(next);
+  };
 
+  const handleReset = async (event: React.FormEvent) => {
+    event.preventDefault();
     setIsSubmitting(true);
     setErrorMsg("");
-
     try {
       const response = await fetch("/api/admin/reset-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: password.trim() }),
+        body: JSON.stringify({ password: password.trim(), confirm: phrase.trim() }),
       });
-
       const resData = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(resData.error || `Reset failed (${response.status}).`);
 
-      if (!response.ok) {
-        throw new Error(resData.error || "Reset failed. Incorrect password.");
-      }
-
-      // Invalidate all query caches
       queryClient.invalidateQueries();
-
-      // The purge emptied this admin's own workspace too (accounts, purposes,
-      // categories). bootstrapUserWorkspace re-seeds it on the next data load,
-      // but it short-circuits on a sessionStorage "already bootstrapped" flag
-      // that survives the reload below — so clear the flag or the admin lands
-      // on a dashboard with no default account.
+      // The purge emptied this admin's own workspace too; clear the
+      // "already bootstrapped" flag so it is re-seeded on reload.
       clearBootstrapSessionCache();
-
-      notify({
-        title: "Database Reset Complete",
-        description:
-          resData.message ||
-          "All user accounts and data have been deleted. Admin accounts were preserved.",
-      });
-
+      notify({ title: "Database reset complete", description: resData.message });
       setPassword("");
+      setPhrase("");
       onOpenChange(false);
-      if (onSuccess) onSuccess();
-
-      // Trigger full UI refresh
+      onSuccess?.();
       window.location.reload();
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Reset failed.");
@@ -82,102 +78,64 @@ export function AdminResetAllModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md rounded-2xl border border-destructive/30 bg-card p-6 shadow-2xl space-y-5">
-        <button
-          type="button"
-          onClick={() => {
-            setPassword("");
-            setErrorMsg("");
-            onOpenChange(false);
-          }}
-          className="absolute right-4 top-4 rounded-full p-1.5 text-muted-foreground hover:bg-muted"
-        >
-          <X className="size-4" />
-        </button>
-
-        <div className="flex items-center gap-3">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-destructive/15 text-destructive">
-            <ShieldAlert className="size-6" />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-foreground">
-              Reset All Database Data
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Permanent system reset
-            </p>
-          </div>
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Reset all data?</DialogTitle>
+          <DialogDescription>
+            Permanently deletes every non-admin account (they are signed out immediately) and all
+            remaining app data, including your own transactions. Admin accounts, global settings,
+            mail templates and the admin audit log are kept.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <span>This cannot be undone. Take a database backup in Supabase first.</span>
         </div>
-
-        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive leading-relaxed space-y-1">
-          <p className="font-semibold flex items-center gap-1.5">
-            <AlertTriangle className="size-4 shrink-0" />
-            Warning: Irreversible Action
-          </p>
-          <p>
-            This permanently deletes <strong>every non-admin user account</strong> and signs
-            those users out immediately, along with all transactions, outings, expenses,
-            settlements, accounts, categories and logs — including your own.
-          </p>
-          <p className="pt-1">
-            Admin accounts and the admin audit log are preserved. Nothing else is.
-          </p>
-        </div>
-
-        <form onSubmit={handleReset} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="admin-reset-password" className="text-xs font-semibold">
-              Enter Admin Password to confirm:
+        <form onSubmit={handleReset} className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="admin-reset-phrase" className="text-xs">
+              Type <code className="rounded bg-muted px-1 font-mono">{CONFIRM_PHRASE}</code>
+            </Label>
+            <Input
+              id="admin-reset-phrase"
+              value={phrase}
+              onChange={(event) => setPhrase(event.target.value)}
+              autoComplete="off"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="admin-reset-password" className="text-xs">
+              Reset password (server env ADMIN_RESET_PASSWORD)
             </Label>
             <Input
               id="admin-reset-password"
               type="password"
-              placeholder="Enter password..."
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="h-10 text-sm"
-              autoFocus
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="off"
             />
-            {errorMsg ? (
-              <p className="text-xs font-medium text-destructive pt-1">{errorMsg}</p>
-            ) : null}
           </div>
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setPassword("");
-                setErrorMsg("");
-                onOpenChange(false);
-              }}
-              disabled={isSubmitting}
-            >
+          {errorMsg ? (
+            <p role="alert" className="text-xs font-medium text-destructive">
+              {errorMsg}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => close(false)} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button
               type="submit"
               variant="destructive"
-              disabled={isSubmitting}
-              className="gap-2 font-semibold"
+              disabled={isSubmitting || phrase.trim() !== CONFIRM_PHRASE || !password.trim()}
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Resetting System...
-                </>
-              ) : (
-                <>
-                  <Trash2 className="size-4" />
-                  Confirm Reset All Data
-                </>
-              )}
+              {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              Reset everything
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

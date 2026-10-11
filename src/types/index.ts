@@ -730,6 +730,37 @@ export type SavingsGoal = {
   updatedAt?: string;
 };
 
+/** Same list as public.investments.type and the mobile InvestmentType. */
+export type InvestmentAssetType =
+  | "mutual_fund"
+  | "stocks"
+  | "fixed_deposit"
+  | "bonds"
+  | "gold"
+  | "crypto"
+  | "real_estate"
+  | "liquid"
+  | "other";
+
+/** One holding (public.investments). Shared with the mobile app. */
+export type Investment = {
+  id: string;
+  userId?: string;
+  name: string;
+  type: InvestmentAssetType;
+  investedAmount: number;
+  currentValue: number;
+  accountId?: string | null;
+  purpose?: string | null;
+  notes?: string | null;
+  /** Transactions that funded this holding (never counted twice). */
+  sourceTransactionIds: string[];
+  createdAt?: string;
+  /** Server time of the last change — used for conflict checks. */
+  updatedAt?: string;
+  deletedAt?: string | null;
+};
+
 export type NetWorthBreakdown = {
   total: number;
   bankAccounts: number;

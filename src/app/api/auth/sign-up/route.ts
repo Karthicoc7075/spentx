@@ -6,6 +6,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { bootstrapUserWorkspace } from "@/lib/user-bootstrap";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
 
+function checkYourEmailResponse(name: string, email: string) {
+  return NextResponse.json({ session: null, user: null, profileName: name, email });
+}
+
 async function handler(request: Request) {
   try {
     const body = await request.json();
@@ -39,10 +43,9 @@ async function handler(request: Request) {
     if (error) {
       const message = error.message.toLowerCase();
       if (message.includes("already registered") || message.includes("already exists")) {
-        return NextResponse.json(
-          { error: "An account with this email already exists." },
-          { status: 409 },
-        );
+        // Same answer as a fresh sign-up, so the form never reveals which
+        // emails have accounts. The owner can sign in or reset the password.
+        return checkYourEmailResponse(name, email);
       }
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
@@ -50,10 +53,7 @@ async function handler(request: Request) {
     // Supabase returns a user with no identities (no error) when the email is
     // already registered and confirmed, to avoid leaking account existence.
     if (data.user && data.user.identities && data.user.identities.length === 0) {
-      return NextResponse.json(
-        { error: "An account with this email already exists." },
-        { status: 409 },
-      );
+      return checkYourEmailResponse(name, email);
     }
 
     if (data.user?.id) {

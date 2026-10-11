@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -88,7 +88,27 @@ export function CreateOutingModal({
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
+  function reset() {
+    setName("");
+    setCategory("Trip");
+    setLocation("");
+    setBudget("");
+    setStartDate(new Date().toISOString().slice(0, 10));
+    setEndDate("");
+    setMembers([makeYouMember()]);
+    setCustomName("");
+    setPurposeId(undefined);
+  }
+
+  // Load the form when the dialog opens (or its initial values change).
+  // Done while rendering instead of in an effect so React does not render
+  // the stale form first (react-hooks/set-state-in-effect).
+  const [loadedFor, setLoadedFor] = useState<{
+    open: boolean;
+    initialValues: typeof initialValues;
+  }>({ open: false, initialValues: undefined });
+  if (loadedFor.open !== open || loadedFor.initialValues !== initialValues) {
+    setLoadedFor({ open, initialValues });
     if (open) {
       if (initialValues) {
         setName(initialValues.name ?? initialValues.title ?? "");
@@ -111,7 +131,7 @@ export function CreateOutingModal({
         reset();
       }
     }
-  }, [open, initialValues]);
+  }
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>(["Outings", "Trip", ...remoteCategories]);
@@ -141,18 +161,6 @@ export function CreateOutingModal({
     }
     return defaultPurposeId ?? activePurposes[0]?.id;
   }, [purposeId, activePurposes, defaultPurposeId]);
-
-  function reset() {
-    setName("");
-    setCategory("Trip");
-    setLocation("");
-    setBudget("");
-    setStartDate(new Date().toISOString().slice(0, 10));
-    setEndDate("");
-    setMembers([makeYouMember()]);
-    setCustomName("");
-    setPurposeId(undefined);
-  }
 
   function isSelectedFriend(friendId: string) {
     return members.some((m) => m.friendId === friendId);

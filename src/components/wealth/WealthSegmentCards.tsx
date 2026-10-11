@@ -9,6 +9,8 @@ type WealthSegmentCardsProps = {
   accounts: Account[];
   activeFilter: WealthFilter;
   onFilter: (filter: WealthFilter) => void;
+  /** Number of holdings in public.investments. */
+  investmentCount?: number;
 };
 
 const segments = [
@@ -51,17 +53,13 @@ export function WealthSegmentCards({
   accounts,
   activeFilter,
   onFilter,
+  investmentCount = 0,
 }: WealthSegmentCardsProps) {
   const accountCounts = {
     bank: accounts.filter((account) => account.type === "bank").length,
     wallet: accounts.filter((account) => account.type === "wallet").length,
     cash: accounts.filter((account) => account.type === "cash").length,
-    investment: accounts.filter(
-      (account) =>
-        account.type === "investment" ||
-        account.type === "mutual_fund" ||
-        account.type === "stocks",
-    ).length,
+    investment: investmentCount,
   };
 
   // If wallet count is 0, hide the Wallets card completely

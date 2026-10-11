@@ -47,12 +47,13 @@ export function QuickAccountTransfer({
   const [amount, setAmount] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Sync defaultFromAccount when it changes
-  useMemo(() => {
-    if (defaultFromAccount) {
-      setFromAccount(defaultFromAccount);
-    }
-  }, [defaultFromAccount]);
+  // Follow defaultFromAccount when it changes (adjust state during render,
+  // the React-recommended pattern; never setState inside useMemo).
+  const [lastDefaultFrom, setLastDefaultFrom] = useState(defaultFromAccount);
+  if (defaultFromAccount !== lastDefaultFrom) {
+    setLastDefaultFrom(defaultFromAccount);
+    if (defaultFromAccount) setFromAccount(defaultFromAccount);
+  }
 
   const transferableAccounts = useMemo(
     () =>

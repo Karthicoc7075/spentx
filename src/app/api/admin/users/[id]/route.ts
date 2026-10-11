@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
 import { userStatusChannelName } from "@/lib/supabase-data";
-import { isAdminUser } from "@/lib/admin";
+import { adminCheckResponse, rejectCrossSite, requireAdmin } from "@/lib/server/admin-auth";
 
 // Deleting a user is the one admin operation that cannot go through the RPC
 // layer: removing the auth.users row requires the Supabase Admin API and the
@@ -13,7 +12,7 @@ import { isAdminUser } from "@/lib/admin";
 // The caller must be a signed-in admin — verified here against the session,
 // exactly like the /admin layout guard, before the service role key is used.
 async function handleDelete(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -22,27 +21,11 @@ async function handleDelete(
       return NextResponse.json({ error: "User id is required." }, { status: 400 });
     }
 
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
-    }
-
-    const { data: callerProfile } = await supabase
-      .from("users")
-      .select("role, email")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (!isAdminUser(user, callerProfile)) {
-      return NextResponse.json(
-        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
-        { status: 403 },
-      );
-    }
+    const csrf = rejectCrossSite(request);
+    if (csrf) return csrf;
+    const check = await requireAdmin();
+    if (!check.ok) return adminCheckResponse(check);
+    const user = check.user;
 
     if (targetUserId === user.id) {
       return NextResponse.json(

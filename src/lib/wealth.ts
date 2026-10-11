@@ -4,8 +4,10 @@ import { narrowTransactionsToFilter } from "@/lib/utils";
 import { eachDayOfInterval } from "date-fns";
 import { getAccountOpeningDate } from "@/lib/accounts";
 import { getTodayCalendarDate, toCalendarDate } from "@/lib/date-filters";
+import { computePortfolio, isInvestmentTransaction } from "@/lib/investments";
 import type {
   Account,
+  Investment,
   NetWorthBreakdown,
   OutingExpense,
   Purpose,
@@ -281,10 +283,29 @@ export function computeInvestmentValue(transactions: Transaction[]): number {
  * Computes net worth breakdown in a single pass over accounts and transactions.
  * Easily handles 10,000+ transactions with zero UI stutter.
  */
+const INVESTMENT_ACCOUNT_TYPES = new Set(["investment", "mutual_fund", "stocks"]);
+
+/** Legacy investment-type accounts. Holdings live in public.investments now. */
+export function isInvestmentAccount(account: Pick<Account, "type">) {
+  return INVESTMENT_ACCOUNT_TYPES.has(String(account.type ?? "").toLowerCase());
+}
+
+/**
+ * Accounts that count toward the Net Worth card outside the Wealth page:
+ * bank + cash + wallet balances minus credit card dues. Investments and goals
+ * only show on the Wealth page.
+ */
+export function netWorthCardAccounts<T extends Pick<Account, "type">>(accounts: T[]): T[] {
+  return accounts.filter((account) => !isInvestmentAccount(account));
+}
+
 export function computeNetWorthBreakdown(
   accounts: Account[],
   transactions: Transaction[],
   unlinkedOutingExpenses: OutingExpense[] = [],
+  /** Holdings from public.investments. When given, the investment value is
+   * holdings (current value) + investment spends not linked to a holding. */
+  investments?: Investment[],
 ): NetWorthBreakdown {
   const balanceMap = computeAccountBalancesMap(
     accounts,
@@ -316,7 +337,9 @@ export function computeNetWorthBreakdown(
     }
   }
 
-  const investmentValue = computeInvestmentValue(transactions);
+  const investmentValue = investments
+    ? computePortfolio(investments, transactions).current
+    : computeInvestmentValue(transactions);
 
   // Calculate monthly savings rate (this month vs last month)
   const now = new Date();
@@ -678,16 +701,18 @@ export function filterWealthTransactions(
     else if (filter.segment === "wallet") match = acc.type === "wallet";
     else if (filter.segment === "cash") match = acc.type === "cash";
     else if (filter.segment === "investment") {
-      match =
-        acc.type === "investment" ||
-        acc.type === "mutual_fund" ||
-        acc.type === "stocks";
+      // Investments are no longer accounts — handled below by category.
+      match = false;
     }
 
     if (match) {
       if (acc.id) validIds.add(acc.id.trim().toLowerCase());
       if (acc.name) validNames.add(acc.name.trim().toLowerCase());
     }
+  }
+
+  if (filter.segment === "investment") {
+    return transactions.filter((tx) => isInvestmentTransaction(tx));
   }
 
   return transactions.filter((tx) => {

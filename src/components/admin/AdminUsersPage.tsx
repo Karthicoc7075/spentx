@@ -1,197 +1,212 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, Search, ShieldCheck, User } from "lucide-react";
+import { Search, ShieldCheck, User } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { adminCountTable, adminListUsers } from "@/lib/admin-api";
+import {
+  AdminEmptyState,
+  AdminErrorState,
+  AdminPageHeader,
+  AdminPagination,
+  StatusPill,
+  useDebouncedValue,
+} from "@/components/admin/admin-ui";
+import { adminCountUsers, adminListUsers, type AdminUserSort } from "@/lib/admin-api";
+import { formatIST, formatISTDate, isInFuture } from "@/lib/admin-format";
 import { formatCurrency } from "@/lib/utils";
-import { formatISTDate } from "@/lib/admin-format";
 
 const PAGE_SIZE = 25;
 
+const selectClass =
+  "h-9 rounded-lg border border-border bg-card px-2.5 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+
 export function AdminUsersPage() {
   const [search, setSearch] = useState("");
-  const [appliedSearch, setAppliedSearch] = useState("");
+  const [role, setRole] = useState<"" | "admin" | "user">("");
+  const [sort, setSort] = useState<AdminUserSort>("joined_desc");
   const [page, setPage] = useState(0);
+  const debouncedSearch = useDebouncedValue(search.trim());
 
-  const { data: users, isLoading } = useQuery({
-    queryKey: ["admin-users", appliedSearch, page],
-    queryFn: () =>
-      adminListUsers({
-        search: appliedSearch || null,
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
-      }),
+  const filters = { search: debouncedSearch || null, role: role || null };
+
+  const usersQuery = useQuery({
+    queryKey: ["admin-users", filters, sort, page],
+    queryFn: () => adminListUsers({ ...filters, sort, limit: PAGE_SIZE, offset: page * PAGE_SIZE }),
     placeholderData: keepPreviousData,
   });
-
-  const { data: totalUsers } = useQuery({
-    queryKey: ["admin-users-count"],
-    queryFn: () => adminCountTable("users"),
+  const countQuery = useQuery({
+    queryKey: ["admin-users-count", filters],
+    queryFn: () => adminCountUsers(filters),
   });
 
-  const totalPages = appliedSearch
-    ? Math.max(1, page + 1 + (users && users.length === PAGE_SIZE ? 1 : 0))
-    : Math.max(1, Math.ceil((totalUsers ?? 0) / PAGE_SIZE));
+  const users = usersQuery.data ?? [];
 
   return (
-    <div className="grid gap-6">
-      {/* ── Search Bar Header ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+    <div className="grid gap-5">
+      <AdminPageHeader
+        title="Users"
+        description="Spend = confirmed expenses, excluding transfers and outing roll-ups. Month uses IST."
+      />
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative flex-1 sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            className="h-10 pl-10 text-xs rounded-xl border-border/80 bg-card/60 backdrop-blur-sm"
-            placeholder="Search users by name, email, or user id…"
+            className="h-9 pl-9 text-sm"
+            placeholder="Search name, email, phone or user id…"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                setAppliedSearch(search.trim());
-                setPage(0);
-              }
-            }}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            className="h-10 text-xs font-semibold rounded-xl px-4"
-            variant="default"
-            onClick={() => {
-              setAppliedSearch(search.trim());
+            onChange={(event) => {
+              setSearch(event.target.value);
               setPage(0);
             }}
+            aria-label="Search users"
+          />
+        </div>
+        <div className="flex gap-2">
+          <select
+            className={selectClass}
+            value={role}
+            onChange={(event) => {
+              setRole(event.target.value as typeof role);
+              setPage(0);
+            }}
+            aria-label="Filter by role"
           >
-            Search Directory
-          </Button>
-          {appliedSearch ? (
-            <Button
-              className="h-10 text-xs rounded-xl"
-              variant="outline"
-              onClick={() => {
-                setSearch("");
-                setAppliedSearch("");
-                setPage(0);
-              }}
-            >
-              Clear
-            </Button>
-          ) : null}
+            <option value="">All roles</option>
+            <option value="user">Users</option>
+            <option value="admin">Admins</option>
+          </select>
+          <select
+            className={selectClass}
+            value={sort}
+            onChange={(event) => {
+              setSort(event.target.value as AdminUserSort);
+              setPage(0);
+            }}
+            aria-label="Sort users"
+          >
+            <option value="joined_desc">Newest first</option>
+            <option value="joined_asc">Oldest first</option>
+            <option value="name_asc">Name A–Z</option>
+            <option value="email_asc">Email A–Z</option>
+          </select>
         </div>
       </div>
 
-      {isLoading ? (
+      {usersQuery.isLoading ? (
         <div className="grid gap-2">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 rounded-2xl" />
+            <Skeleton key={i} className="h-14 rounded-xl" />
           ))}
         </div>
-      ) : !users?.length ? (
-        <div className="flex h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/40 p-6 text-center text-sm text-muted-foreground">
-          <User className="size-8 text-muted-foreground/50 mb-2" />
-          <p className="font-semibold text-foreground">No users found</p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Try adjusting your search keywords.
-          </p>
-        </div>
+      ) : usersQuery.error ? (
+        <AdminErrorState error={usersQuery.error} onRetry={() => usersQuery.refetch()} />
+      ) : !users.length ? (
+        <AdminEmptyState
+          icon={<User className="size-7 text-muted-foreground" />}
+          title="No users found"
+          description={debouncedSearch || role ? "Try a different search or filter." : "Nobody has signed up yet."}
+        />
       ) : (
-        <div className="overflow-x-auto rounded-2xl border border-border/80 bg-card/40 shadow-sm">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-border bg-muted/40">
-                <th className="px-5 py-3 font-bold text-foreground">User Profile</th>
-                <th className="px-4 py-3 font-bold text-foreground">Access Role</th>
-                <th className="px-4 py-3 font-bold text-foreground">Member Joined</th>
-                <th className="px-4 py-3 text-right font-bold text-foreground">Transactions</th>
-                <th className="px-4 py-3 text-right font-bold text-foreground">Month Spend</th>
-                <th className="px-5 py-3 text-right font-bold text-foreground">Total Spend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => {
-                const initial = (user.name || user.email || "U")[0].toUpperCase();
-                return (
-                  <tr
-                    key={user.id}
-                    className="border-b border-border/60 last:border-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-5 py-3">
-                      <Link className="group flex items-center gap-3" href={`/admin/users/${user.id}`}>
-                        <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary font-bold text-sm ring-1 ring-primary/20">
-                          {initial}
-                        </div>
-                        <div className="grid">
-                          <span className="font-bold text-foreground group-hover:text-primary transition-colors">
-                            {user.name || "Unnamed User"}
-                          </span>
-                          <span className="text-[11px] text-muted-foreground font-mono">
-                            {user.email}
-                          </span>
-                        </div>
+        <>
+          {/* Desktop / tablet table */}
+          <div className="hidden overflow-x-auto rounded-2xl border border-border bg-card md:block">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/40">
+                  <th className="px-4 py-2.5 font-semibold">User</th>
+                  <th className="px-3 py-2.5 font-semibold">Status</th>
+                  <th className="px-3 py-2.5 font-semibold">Joined</th>
+                  <th className="px-3 py-2.5 font-semibold">Last seen</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">Txns</th>
+                  <th className="px-3 py-2.5 text-right font-semibold">This month</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">All-time spend</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} className="border-b border-border/60 last:border-0 hover:bg-muted/30">
+                    <td className="px-4 py-2.5">
+                      <Link className="group grid" href={`/admin/users/${user.id}`}>
+                        <span className="font-medium text-foreground group-hover:text-primary">
+                          {user.name || "Unnamed user"}
+                        </span>
+                        <span className="font-mono text-[11px] text-muted-foreground">{user.email}</span>
                       </Link>
                     </td>
-                    <td className="px-4 py-3">
-                      {user.role === "admin" ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-bold text-amber-700 dark:text-amber-400 border border-amber-500/20">
-                          <ShieldCheck className="size-3.5" /> Admin
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
-                          User
-                        </span>
-                      )}
+                    <td className="px-3 py-2.5">
+                      <UserStatusPills user={user} />
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-muted-foreground font-mono">
-                      {formatISTDate(user.joinedAt)}
+                    <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">{formatISTDate(user.joinedAt)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
+                      {user.lastSeenAt || user.lastSignInAt ? formatIST(user.lastSeenAt ?? user.lastSignInAt) : "—"}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono font-semibold text-foreground">
-                      {user.txCount}
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold text-foreground">
-                      {formatCurrency(user.monthSpend)}
-                    </td>
-                    <td className="px-5 py-3 text-right font-bold text-primary">
-                      {formatCurrency(user.totalSpend)}
-                    </td>
+                    <td className="px-3 py-2.5 text-right font-mono">{user.txCount}</td>
+                    <td className="px-3 py-2.5 text-right">{formatCurrency(user.monthSpend)}</td>
+                    <td className="px-4 py-2.5 text-right font-medium">{formatCurrency(user.totalSpend)}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="grid gap-2 md:hidden">
+            {users.map((user) => (
+              <Link
+                key={user.id}
+                href={`/admin/users/${user.id}`}
+                className="grid gap-1.5 rounded-xl border border-border bg-card p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-foreground">{user.name || "Unnamed user"}</p>
+                    <p className="truncate font-mono text-[11px] text-muted-foreground">{user.email}</p>
+                  </div>
+                  <UserStatusPills user={user} />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>{user.txCount} txns · joined {formatISTDate(user.joinedAt)}</span>
+                  <span className="font-medium text-foreground">{formatCurrency(user.monthSpend)} / mo</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
 
-      {/* ── Pagination ── */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          Showing page <strong className="text-foreground">{page + 1}</strong>
-          {appliedSearch ? "" : ` of ${totalPages}`}
-        </span>
-        <div className="flex gap-1.5">
-          <Button
-            disabled={page === 0}
-            size="icon-sm"
-            variant="outline"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            className="rounded-xl"
-          >
-            <ChevronLeft className="size-3.5" />
-          </Button>
-          <Button
-            disabled={(users?.length ?? 0) < PAGE_SIZE}
-            size="icon-sm"
-            variant="outline"
-            onClick={() => setPage((p) => p + 1)}
-            className="rounded-xl"
-          >
-            <ChevronRight className="size-3.5" />
-          </Button>
-        </div>
-      </div>
+      <AdminPagination
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={countQuery.data}
+        onPageChange={setPage}
+        loading={usersQuery.isFetching}
+      />
+    </div>
+  );
+}
+
+function UserStatusPills({
+  user,
+}: {
+  user: { role: string; emailConfirmed?: boolean; bannedUntil?: string | null };
+}) {
+  const banned = isInFuture(user.bannedUntil);
+  return (
+    <div className="flex flex-wrap gap-1">
+      {user.role === "admin" ? (
+        <StatusPill tone="warning">
+          <ShieldCheck className="size-3" /> Admin
+        </StatusPill>
+      ) : null}
+      {banned ? <StatusPill tone="danger">Suspended</StatusPill> : null}
+      {user.emailConfirmed === false ? <StatusPill tone="muted">Unverified</StatusPill> : null}
+      {user.role !== "admin" && !banned && user.emailConfirmed !== false ? (
+        <StatusPill tone="success">Active</StatusPill>
+      ) : null}
     </div>
   );
 }

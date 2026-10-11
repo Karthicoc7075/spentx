@@ -16,6 +16,7 @@ import { SavingsGoalsSection } from "@/components/wealth/SavingsGoalsSection";
 import { InvestmentsSection } from "@/components/wealth/InvestmentsSection";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
+import { useInvestments } from "@/hooks/useInvestments";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
 import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
@@ -42,6 +43,7 @@ export function WealthPage() {
   const { outings } = useOutings();
   const { accounts, isLoading: accountsLoading } = useAccounts();
   const { goals: savingsGoals = [] } = useSavingsGoals();
+  const { investments } = useInvestments();
 
   // Tab state: "accounts" | "goals" | "investments"
   const [activeTab, setActiveTab] = useState<"accounts" | "goals" | "investments">("accounts");
@@ -74,17 +76,6 @@ export function WealthPage() {
     [accounts],
   );
 
-  const investmentAccounts = useMemo(
-    () =>
-      activeAccounts.filter(
-        (a) =>
-          a.type === "investment" ||
-          a.type === "mutual_fund" ||
-          a.type === "stocks",
-      ),
-    [activeAccounts],
-  );
-
   const activeGoalsCount = useMemo(
     () => savingsGoals.filter((g) => g.isActive !== false && !g.deletedAt).length,
     [savingsGoals],
@@ -104,8 +95,9 @@ export function WealthPage() {
         activeAccounts,
         transactions,
         unlinkedOutingExpenses,
+        investments,
       ),
-    [activeAccounts, transactions, unlinkedOutingExpenses],
+    [activeAccounts, transactions, unlinkedOutingExpenses, investments],
   );
 
   // Lazily compute purpose breakdown only when user switches to "by-purpose" view
@@ -344,7 +336,7 @@ export function WealthPage() {
                     : "bg-muted text-muted-foreground",
                 )}
               >
-                {investmentAccounts.length}
+                {investments.length}
               </span>
             </button>
           </div>
@@ -354,6 +346,7 @@ export function WealthPage() {
             <div className="space-y-6">
               <WealthSegmentCards
                 accounts={accounts}
+                investmentCount={investments.length}
                 activeFilter={filter}
                 breakdown={netWorthBreakdown}
                 onFilter={setFilter}
@@ -382,9 +375,7 @@ export function WealthPage() {
           {/* Tab 3: Portfolio Investments */}
           {activeTab === "investments" ? (
             <InvestmentsSection
-              accounts={activeAccounts}
               transactions={transactions}
-              unlinkedOutingExpenses={unlinkedOutingExpenses}
               onNewInvestmentClick={() => setNewInvestmentOpen(true)}
             />
           ) : null}

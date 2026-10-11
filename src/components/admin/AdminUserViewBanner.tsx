@@ -2,7 +2,6 @@
 
 import { Shield, ArrowRight, Eye } from "lucide-react";
 import { useRoleMode } from "@/hooks/useRoleMode";
-import { Button } from "@/components/ui/button";
 
 export function AdminUserViewBanner() {
   const { isAdmin, mode, setMode } = useRoleMode();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,196 +12,222 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuthReady } from "@/hooks/useAuthReady";
 import { useAccounts } from "@/hooks/useAccounts";
+import { useInvestments } from "@/hooks/useInvestments";
+import { usePurposes } from "@/hooks/usePurposes";
 import { useTransactions } from "@/hooks/useTransactions";
 import { useToast } from "@/providers/toast-provider";
-import { useQueryClient } from "@tanstack/react-query";
-import { saveAccount } from "@/lib/supabase-data";
-import { queryKeys } from "@/lib/query-keys";
-import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
+import { getDefaultPersonalPurpose } from "@/lib/purposes";
+import {
+  INVESTMENT_TX_CATEGORY,
+  INVESTMENT_TYPE_LABELS,
+  INVESTMENT_TYPES,
+  parseAmountInput,
+} from "@/lib/investments";
 import { cn, formatCurrency } from "@/lib/utils";
 import {
-  Briefcase,
+  Bitcoin,
   Building,
   Coins,
+  FileText,
   Gem,
-  Landmark,
+  Home,
   LineChart,
   Loader2,
+  PieChart,
   TrendingUp,
+  Wallet,
 } from "lucide-react";
-import type { Account } from "@/types";
+import type { Investment, InvestmentAssetType } from "@/types";
 
-type AssetTypeOption = {
-  type: Account["type"];
-  label: string;
-  icon: typeof LineChart;
-  description: string;
+export const INVESTMENT_TYPE_ICONS: Record<InvestmentAssetType, typeof LineChart> = {
+  mutual_fund: TrendingUp,
+  stocks: LineChart,
+  fixed_deposit: Building,
+  bonds: FileText,
+  gold: Gem,
+  crypto: Bitcoin,
+  real_estate: Home,
+  liquid: Wallet,
+  other: PieChart,
 };
-
-const ASSET_TYPES: AssetTypeOption[] = [
-  {
-    type: "mutual_fund",
-    label: "Mutual Fund",
-    icon: TrendingUp,
-    description: "SIP or lumpsum equity/debt fund",
-  },
-  {
-    type: "stocks",
-    label: "Stocks & Equity",
-    icon: LineChart,
-    description: "Direct equity holdings / Demat",
-  },
-  {
-    type: "investment",
-    label: "Fixed Deposit / Bonds",
-    icon: Building,
-    description: "FD, RD, Government bonds",
-  },
-  {
-    type: "investment",
-    label: "Gold / Commodities",
-    icon: Gem,
-    description: "Sovereign Gold Bonds, digital gold",
-  },
-];
 
 type NewInvestmentModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  initialAccount?: Account | null;
-  onSuccess?: (account: Account) => void;
+  /** When set the modal edits this holding instead of creating one. */
+  initialInvestment?: Investment | null;
+  onSuccess?: (investment: Investment) => void;
 };
+
+type FieldErrors = Partial<Record<"name" | "invested" | "current" | "form", string>>;
+
+function plain(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
 
 export function NewInvestmentModal({
   open,
   onOpenChange,
-  initialAccount,
+  initialInvestment,
   onSuccess,
 }: NewInvestmentModalProps) {
-  const { user } = useAuthReady();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[480px] p-0 overflow-hidden rounded-2xl border bg-card">
+        {open ? (
+          // Mounted only while open so every open starts from fresh state.
+          <InvestmentForm
+            key={initialInvestment?.id ?? "new"}
+            initialInvestment={initialInvestment ?? null}
+            onOpenChange={onOpenChange}
+            onSuccess={onSuccess}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function InvestmentForm({
+  initialInvestment,
+  onOpenChange,
+  onSuccess,
+}: {
+  initialInvestment: Investment | null;
+  onOpenChange: (open: boolean) => void;
+  onSuccess?: (investment: Investment) => void;
+}) {
   const { accounts } = useAccounts();
-  const { addTransaction } = useTransactions();
-  const queryClient = useQueryClient();
+  const { purposes } = usePurposes();
+  const { save } = useInvestments();
+  const { addTransaction, deleteTransaction } = useTransactions();
   const { notify } = useToast();
+  const isEditing = Boolean(initialInvestment);
 
-  const [name, setName] = useState("");
-  const [assetType, setAssetType] = useState<Account["type"]>("mutual_fund");
-  const [selectedAssetLabel, setSelectedAssetLabel] = useState("Mutual Fund");
-  const [amount, setAmount] = useState("");
-  const [sourceAccount, setSourceAccount] = useState(
-    accounts.find((a) => a.type === "bank")?.name || "",
+  const bankAccounts = useMemo(
+    () =>
+      accounts.filter(
+        (a) => a.isActive !== false && (a.type === "bank" || a.type === "wallet"),
+      ),
+    [accounts],
   );
-  const [deductFromBank, setDeductFromBank] = useState(true);
+  const activePurposes = useMemo(
+    () => purposes.filter((p) => p.isActive !== false && !p.deletedAt),
+    [purposes],
+  );
+  const defaultPurposeName = getDefaultPersonalPurpose(activePurposes)?.name ?? "";
+
+  const [name, setName] = useState(initialInvestment?.name ?? "");
+  const [assetType, setAssetType] = useState<InvestmentAssetType>(
+    initialInvestment?.type ?? "mutual_fund",
+  );
+  const [invested, setInvested] = useState(
+    initialInvestment ? plain(initialInvestment.investedAmount) : "",
+  );
+  const [current, setCurrent] = useState(
+    initialInvestment ? plain(initialInvestment.currentValue) : "",
+  );
+  const [purposeChoice, setPurposeChoice] = useState(initialInvestment?.purpose ?? "");
+  const [sourceChoice, setSourceChoice] = useState("");
+  const [deductFromBank, setDeductFromBank] = useState(!initialInvestment);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [note, setNote] = useState("");
+  const [notes, setNotes] = useState(initialInvestment?.notes ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>({});
 
-  useEffect(() => {
-    if (initialAccount) {
-      setName(initialAccount.name);
-      setAssetType(initialAccount.type);
-      const match = ASSET_TYPES.find((t) => t.type === initialAccount.type);
-      setSelectedAssetLabel(match?.label || "Mutual Fund");
-      setAmount(initialAccount.openingBalance ? initialAccount.openingBalance.toString() : "");
-      setDate(initialAccount.openingBalanceDate || new Date().toISOString().slice(0, 10));
-      setDeductFromBank(false); // don't re-debit when just editing details
-    } else {
-      resetForm();
-    }
-  }, [initialAccount, open]);
-
-  const bankAccounts = accounts.filter(
-    (a) => a.type === "bank" || a.type === "wallet",
-  );
+  // Accounts / purposes often load after the first render; derive defaults
+  // instead of snapshotting them into state at mount time.
+  const sourceAccount =
+    sourceChoice && bankAccounts.some((a) => a.name === sourceChoice)
+      ? sourceChoice
+      : (bankAccounts.find((a) => a.type === "bank")?.name ?? bankAccounts[0]?.name ?? "");
+  const purposeName = purposeChoice || defaultPurposeName;
+  const setSourceAccount = setSourceChoice;
+  const setPurposeName = setPurposeChoice;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!user?.id) {
-      setError("Please sign in to record investments.");
-      return;
-    }
-
     const trimmedName = name.trim();
-    if (!trimmedName) {
-      setError("Please enter an asset or fund name (e.g., 'HDFC Top 100 Index').");
-      return;
-    }
-
-    const investAmount = parseFloat(amount.replace(/[^0-9.]/g, ""));
-    if (isNaN(investAmount) || investAmount <= 0) {
-      setError("Please enter a valid investment amount.");
+    const investedAmount = parseAmountInput(invested);
+    const currentRaw = current.trim();
+    const currentValue = currentRaw ? parseAmountInput(currentRaw) : investedAmount;
+    const nextErrors: FieldErrors = {};
+    if (!trimmedName) nextErrors.name = "Please enter an asset or fund name.";
+    if (investedAmount === null) nextErrors.invested = "Enter a number, e.g. 25,000.";
+    else if (investedAmount <= 0) nextErrors.invested = "Enter an amount greater than 0.";
+    if (currentRaw && currentValue === null) nextErrors.current = "Enter a number, e.g. 27,500.";
+    else if (currentValue !== null && currentValue < 0) nextErrors.current = "Value cannot be negative.";
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0 || investedAmount === null || currentValue === null) {
       return;
     }
 
     setIsSubmitting(true);
-    setError(null);
-
+    let createdTxId: string | undefined;
     try {
-      // 1. Create or upsert investment account
-      const savedAcc = await saveAccount(user.id, {
-        id: initialAccount?.id || crypto.randomUUID(),
-        name: trimmedName,
-        type: assetType,
-        openingBalance: investAmount,
-        openingBalanceDate: date,
-        isActive: true,
-      });
-
-      // 2. Optionally record deduction transaction from source bank account
-      if (deductFromBank && sourceAccount) {
-        await addTransaction({
+      const id = initialInvestment?.id ?? crypto.randomUUID();
+      const links = [...(initialInvestment?.sourceTransactionIds ?? [])];
+      if (!isEditing && deductFromBank && sourceAccount) {
+        const purposeId =
+          activePurposes.find((p) => p.name === purposeName)?.id ??
+          getDefaultPersonalPurpose(activePurposes)?.id ??
+          "personal";
+        const tx = await addTransaction({
           type: "expense",
-          amount: investAmount,
-          totalAmount: investAmount,
+          amount: investedAmount,
+          totalAmount: investedAmount,
           merchant: trimmedName,
-          category: "Investments",
+          category: INVESTMENT_TX_CATEGORY,
           account: sourceAccount,
-          purpose: "personal",
+          purpose: purposeId,
           source: "manual",
-          date: new Date(date).toISOString(),
-          note: note ? `Investment in ${trimmedName}: ${note}` : `Capital invested in ${trimmedName}`,
-          tags: ["investment", `asset:${assetType}`],
+          date: new Date(`${date}T12:00:00`).toISOString(),
+          note: notes.trim()
+            ? `Investment in ${trimmedName}: ${notes.trim()}`
+            : `Capital invested in ${trimmedName}`,
+          tags: ["investment", `asset:${assetType}`, `investment:${id}`],
           paymentMethod: "Bank Transfer",
         });
+        createdTxId = tx.id;
+        links.push(tx.id);
       }
 
-      await queryClient.invalidateQueries({ queryKey: queryKeys.accounts(user.id) });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.investmentTotal(user.id) });
-      await invalidateFinancialData(queryClient, user.id);
-
-      notify({
-        title: "Investment recorded! 🚀",
-        description: `Deployed ${formatCurrency(investAmount)} into ${trimmedName}.`,
+      const saved = await save({
+        id,
+        name: trimmedName,
+        type: assetType,
+        investedAmount,
+        currentValue,
+        accountId: initialInvestment?.accountId ?? null,
+        purpose: purposeName || null,
+        notes: notes.trim() || null,
+        sourceTransactionIds: links,
+        createdAt: initialInvestment?.createdAt,
+        updatedAt: initialInvestment?.updatedAt,
       });
 
-      if (onSuccess) onSuccess(savedAcc);
+      notify({
+        title: isEditing ? "Investment updated" : "Investment recorded 🚀",
+        description: isEditing
+          ? `"${trimmedName}" saved.`
+          : `Deployed ${formatCurrency(investedAmount)} into ${trimmedName}.`,
+      });
+      onSuccess?.(saved);
       onOpenChange(false);
-      resetForm();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to record investment.";
-      setError(msg);
+      // Don't leave an orphan bank debit when the holding failed to save.
+      if (createdTxId) {
+        await deleteTransaction(createdTxId).catch(() => undefined);
+      }
+      setErrors({ form: err instanceof Error ? err.message : "Failed to save investment." });
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  function resetForm() {
-    setName("");
-    setAssetType("mutual_fund");
-    setSelectedAssetLabel("Mutual Fund");
-    setAmount("");
-    setDeductFromBank(true);
-    setNote("");
-    setError(null);
-  }
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] p-0 overflow-hidden rounded-2xl border bg-card">
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
           <DialogHeader className="p-5 pb-4 border-b">
             <div className="flex items-center gap-3">
               <span className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -209,39 +235,37 @@ export function NewInvestmentModal({
               </span>
               <div>
                 <DialogTitle className="text-lg font-bold">
-                  Add Investment Asset
+                  {isEditing ? "Edit Investment" : "Add Investment"}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                  Track capital deployed across mutual funds, stocks, bonds and gold.
+                  {isEditing
+                    ? "Update what you put in and what it is worth now."
+                    : "Track mutual funds, stocks, deposits, gold and more."}
                 </DialogDescription>
               </div>
             </div>
           </DialogHeader>
 
           <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-none">
-            {error ? (
+            {errors.form ? (
               <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                {error}
+                {errors.form}
               </div>
             ) : null}
 
-            {/* Asset Type Selector */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Asset Class</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {ASSET_TYPES.map((opt) => {
-                  const Icon = opt.icon;
-                  const isSelected = selectedAssetLabel === opt.label;
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {INVESTMENT_TYPES.map((type) => {
+                  const Icon = INVESTMENT_TYPE_ICONS[type];
+                  const isSelected = assetType === type;
                   return (
                     <button
-                      key={opt.label}
+                      key={type}
                       type="button"
-                      onClick={() => {
-                        setAssetType(opt.type);
-                        setSelectedAssetLabel(opt.label);
-                      }}
+                      onClick={() => setAssetType(type)}
                       className={cn(
-                        "flex items-center gap-2.5 p-2.5 text-left rounded-xl border transition-all cursor-pointer",
+                        "flex items-center gap-2 p-2 text-left rounded-xl border transition-all cursor-pointer",
                         isSelected
                           ? "border-primary bg-primary/5 ring-1 ring-primary text-foreground"
                           : "border-border hover:bg-muted/50 text-muted-foreground",
@@ -249,105 +273,143 @@ export function NewInvestmentModal({
                     >
                       <span
                         className={cn(
-                          "flex size-7 items-center justify-center rounded-lg shrink-0",
-                          isSelected
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground",
+                          "flex size-6 items-center justify-center rounded-lg shrink-0",
+                          isSelected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
                         )}
                       >
                         <Icon className="size-3.5" />
                       </span>
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-foreground truncate">
-                          {opt.label}
-                        </p>
-                      </div>
+                      <span className="text-[11px] font-semibold text-foreground truncate">
+                        {INVESTMENT_TYPE_LABELS[type]}
+                      </span>
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Asset / Fund Name */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Investment Name *</Label>
               <Input
-                placeholder="e.g. Parag Parikh Flexi Cap, Zerodha Demat, SBI FD"
+                placeholder="e.g. Parag Parikh Flexi Cap, SBI FD, Gold ETF"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="h-10 text-sm rounded-xl"
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (errors.name) setErrors((prev) => ({ ...prev, name: undefined }));
+                }}
+                aria-invalid={Boolean(errors.name)}
+                className={cn("h-10 text-sm rounded-xl", errors.name && "border-destructive")}
                 autoFocus
               />
+              {errors.name ? <p className="text-[11px] text-destructive">{errors.name}</p> : null}
             </div>
 
-            {/* Amount & Date */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Amount Invested (₹) *</Label>
                 <Input
-                  type="number"
-                  min="1"
-                  step="any"
-                  placeholder="e.g. 25000"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  className="h-10 text-sm font-semibold rounded-xl"
+                  inputMode="decimal"
+                  placeholder="e.g. 25,000"
+                  value={invested}
+                  onChange={(e) => {
+                    setInvested(e.target.value);
+                    if (errors.invested) setErrors((prev) => ({ ...prev, invested: undefined }));
+                  }}
+                  aria-invalid={Boolean(errors.invested)}
+                  className={cn("h-10 text-sm font-semibold rounded-xl", errors.invested && "border-destructive")}
                 />
+                {errors.invested ? <p className="text-[11px] text-destructive">{errors.invested}</p> : null}
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Investment Date</Label>
+                <Label className="text-xs font-semibold">Current Value (₹)</Label>
                 <Input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="h-10 text-xs rounded-xl"
+                  inputMode="decimal"
+                  placeholder="Same as invested"
+                  value={current}
+                  onChange={(e) => {
+                    setCurrent(e.target.value);
+                    if (errors.current) setErrors((prev) => ({ ...prev, current: undefined }));
+                  }}
+                  aria-invalid={Boolean(errors.current)}
+                  className={cn("h-10 text-sm font-semibold rounded-xl", errors.current && "border-destructive")}
                 />
+                {errors.current ? <p className="text-[11px] text-destructive">{errors.current}</p> : null}
               </div>
             </div>
 
-            {/* Funding Source Bank */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Funding Source Account</Label>
-              <select
-                value={sourceAccount}
-                onChange={(e) => setSourceAccount(e.target.value)}
-                className="w-full h-10 px-3 text-sm rounded-xl border bg-background text-foreground"
-              >
-                {bankAccounts.length === 0 ? (
-                  <option value="">No bank accounts found</option>
-                ) : (
-                  bankAccounts.map((acc) => (
-                    <option key={acc.id} value={acc.name}>
-                      {acc.name} ({acc.type})
+            {activePurposes.length > 0 ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Purpose</Label>
+                <select
+                  value={purposeName}
+                  onChange={(e) => setPurposeName(e.target.value)}
+                  className="w-full h-10 px-3 text-sm rounded-xl border bg-background text-foreground"
+                >
+                  {purposeName && !activePurposes.some((p) => p.name === purposeName) ? (
+                    <option value={purposeName}>{purposeName}</option>
+                  ) : null}
+                  {activePurposes.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name}
                     </option>
-                  ))
-                )}
-              </select>
-            </div>
-
-            {/* Deduct from bank checkbox */}
-            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-muted/30 border cursor-pointer">
-              <input
-                type="checkbox"
-                checked={deductFromBank}
-                onChange={(e) => setDeductFromBank(e.target.checked)}
-                className="mt-0.5 rounded text-primary"
-              />
-              <div className="text-xs">
-                <p className="font-semibold text-foreground">Record debit from bank account</p>
-                <p className="text-muted-foreground mt-0.5">
-                  Records an investment transaction under Settlements / Investments so bank balance adjusts correctly.
-                </p>
+                  ))}
+                </select>
               </div>
-            </label>
+            ) : null}
 
-            {/* Notes */}
+            {!isEditing ? (
+              <>
+                <label className="flex items-start gap-2.5 p-3 rounded-xl bg-muted/30 border cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deductFromBank && bankAccounts.length > 0}
+                    disabled={bankAccounts.length === 0}
+                    onChange={(e) => setDeductFromBank(e.target.checked)}
+                    className="mt-0.5 rounded text-primary"
+                  />
+                  <div className="text-xs">
+                    <p className="font-semibold text-foreground">Deduct from bank balance</p>
+                    <p className="text-muted-foreground mt-0.5">
+                      Records a linked &quot;{INVESTMENT_TX_CATEGORY}&quot; transaction (counted once in totals).
+                    </p>
+                  </div>
+                </label>
+                {deductFromBank && bankAccounts.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Paid from</Label>
+                      <select
+                        value={sourceAccount}
+                        onChange={(e) => setSourceAccount(e.target.value)}
+                        className="w-full h-10 px-3 text-sm rounded-xl border bg-background text-foreground"
+                      >
+                        {bankAccounts.map((acc) => (
+                          <option key={acc.id} value={acc.name}>
+                            {acc.name} ({acc.type})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs font-semibold">Date</Label>
+                      <Input
+                        type="date"
+                        value={date}
+                        onChange={(e) => setDate(e.target.value)}
+                        className="h-10 text-xs rounded-xl"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold">Folio / Demat Note (Optional)</Label>
+              <Label className="text-xs font-semibold">Notes (optional)</Label>
               <Input
                 placeholder="e.g. Folio #12345678, SIP monthly"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
                 className="h-10 text-xs rounded-xl"
               />
             </div>
@@ -363,27 +425,20 @@ export function NewInvestmentModal({
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              size="sm"
-              disabled={isSubmitting}
-              className="rounded-xl gap-2 font-medium"
-            >
+            <Button type="submit" size="sm" disabled={isSubmitting} className="rounded-xl gap-2 font-medium">
               {isSubmitting ? (
                 <>
                   <Loader2 className="size-3.5 animate-spin" />
-                  Recording...
+                  Saving...
                 </>
               ) : (
                 <>
-                  <TrendingUp className="size-3.5" />
-                  Add Investment
+                  <Coins className="size-3.5" />
+                  {isEditing ? "Save Changes" : "Add Investment"}
                 </>
               )}
             </Button>
           </DialogFooter>
         </form>
-      </DialogContent>
-    </Dialog>
   );
 }

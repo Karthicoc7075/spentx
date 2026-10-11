@@ -99,6 +99,11 @@ assert.strictEqual(
   false,
   "Arbitrary account claiming admin role must be rejected",
 );
+assert.strictEqual(
+  isAdminUser({ email: "attacker@gmail.com" }, { role: "user", email: "karthicoc7075@gmail.com" }),
+  false,
+  "Editing public.users.email to the admin address must NOT grant admin (issue #1)",
+);
 console.log("  ✓ Role spoofing protection verified — only authenticated karthicoc7075@gmail.com is authorized");
 
 // 4. Role View Mode Logic & PIN verification check
@@ -127,6 +132,6 @@ assert.strictEqual(
   "admin",
   "Admins can toggle into Admin View mode",
 );
-console.log("  ✓ Role view switcher logic verified (Normal users locked to User View; Admin can switch freely via PIN)");
+console.log("  ✓ Role view switcher logic verified (Normal users locked to User View; Admin can switch freely; access enforced server-side)");
 
 console.log("\nALL USER ROLE AND ADMIN PERMISSION TESTS PASSED!\n");

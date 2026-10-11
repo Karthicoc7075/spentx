@@ -25,6 +25,7 @@ import { useOutingSettlements } from "@/hooks/useOutingSettlements";
 import { useTransactions } from "@/hooks/useTransactions";
 import { getCurrentUserMember } from "@/lib/outings";
 import { PERSONAL_PURPOSE_ID } from "@/lib/purposes";
+import { settlementLinkTag } from "@/lib/supabase-data";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Outing } from "@/types";
 
@@ -96,7 +97,7 @@ export function RecordSettlementDialog({
     setSubmitting(true);
     try {
       // 1. Record settlement row in outing_settlements
-      await addSettlement({
+      const savedSettlement = await addSettlement({
         outingId: outing.id,
         fromMemberId,
         toMemberId,
@@ -133,6 +134,7 @@ export function RecordSettlementDialog({
             "settlement",
             `settlement:${isReceive ? "receive" : "send"}`,
             ...(isReceive ? ["reimbursement"] : []),
+            ...(savedSettlement?.id ? [settlementLinkTag(savedSettlement.id)] : []),
           ],
         });
       }

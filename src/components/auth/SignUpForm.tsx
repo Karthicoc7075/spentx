@@ -118,6 +118,13 @@ export function SignUpForm() {
             on the confirmation page. If you don&apos;t see the email, check spam or
             resend below.
           </p>
+          <p className="text-muted-foreground">
+            Already have an account with this email? Sign in, or use{" "}
+            <Link className="text-primary hover:underline" href="/auth/forgot-password">
+              Forgot password
+            </Link>
+            .
+          </p>
           <Button
             disabled={isResending}
             type="button"

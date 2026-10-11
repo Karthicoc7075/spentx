@@ -1,6 +1,14 @@
 "use client";
 
-import { AlertTriangle, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { AdminConfirmDialog, AdminErrorState, AdminPageHeader } from "@/components/admin/admin-ui";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -13,7 +21,7 @@ import {
 } from "@/lib/admin-api";
 import { fetchGlobalSettings } from "@/lib/supabase-data";
 import { getCategoryIcon } from "@/lib/transaction-ui";
-import { IconPicker, ColorPicker, InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
+import { InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
 import { queryKeys } from "@/lib/query-keys";
 import type { DefaultCategory } from "@/types";
 import { useToast } from "@/providers/toast-provider";
@@ -49,7 +57,7 @@ export function AdminCategoriesPage() {
   const [pendingDelete, setPendingDelete] = useState<DefaultCategory | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const { data: settings, isLoading } = useQuery({
+  const { data: settings, isLoading, error, refetch } = useQuery({
     queryKey: ["admin-global-settings"],
     queryFn: fetchGlobalSettings,
   });
@@ -217,43 +225,34 @@ export function AdminCategoriesPage() {
     );
   }
 
+  if (error) {
+    return <AdminErrorState error={error} onRetry={() => refetch()} />;
+  }
+
   return (
     <div className="grid gap-4">
-      <p className="text-xs text-muted-foreground">
-        These are the shared default categories every user sees in their
-        pickers. Changes here apply to all users. Removing one is a soft
-        removal — existing transactions keep the historical label.
-      </p>
+      <AdminPageHeader
+        title="Default categories"
+        description="Shared defaults every user sees in their pickers. Removing one keeps the label on existing transactions."
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         {renderSection("Expense categories", "expense", expense)}
         {renderSection("Income categories", "income", income)}
       </div>
 
-      {/* Add / edit form */}
-      {form ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setForm(null)}
-        >
-          <div
-            className="sx-surface w-full max-w-md space-y-4 p-5 sm:p-6 scale-in duration-200 shadow-2xl border border-border/80 rounded-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-border/60 pb-3">
-              <h3 className="text-sm font-bold text-foreground">
+      {/* Add / edit form — shared Dialog (Esc, focus trap, a11y) */}
+      <Dialog open={Boolean(form)} onOpenChange={(open) => !open && !isSaving && setForm(null)}>
+        <DialogContent className="sm:max-w-md">
+          {form ? (
+          <div className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>
                 {form.mode === "add"
-                  ? `Add ${form.type === "income" ? "Income" : "Expense"} Category`
-                  : `Edit Category`}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setForm(null)}
-                className="text-muted-foreground hover:text-foreground cursor-pointer p-1 rounded-lg hover:bg-muted transition-colors"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
+                  ? `Add ${form.type === "income" ? "income" : "expense"} category`
+                  : "Edit category"}
+              </DialogTitle>
+              <DialogDescription>Applies to every user&apos;s category picker.</DialogDescription>
+            </DialogHeader>
 
             {/* Hero Input Section */}
             <div className="flex items-center gap-3">
@@ -340,55 +339,20 @@ export function AdminCategoriesPage() {
               </Button>
             </div>
           </div>
-        </div>
-      ) : null}
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirm — global blast radius, and the copy says so */}
-      {pendingDelete ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setPendingDelete(null)}
-        >
-          <div
-            className="sx-surface w-full max-w-sm space-y-4 p-6 text-center scale-in duration-200 shadow-2xl border border-border/80"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex justify-center">
-              <span className="flex size-12 items-center justify-center rounded-full bg-rose-500/10 text-rose-500">
-                <AlertTriangle className="size-6" />
-              </span>
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-sm font-bold text-foreground">
-                Remove &ldquo;{pendingDelete.name}&rdquo; for ALL users?
-              </h3>
-              <p className="text-xs leading-normal text-muted-foreground">
-                This removes the category from the picker of{" "}
-                <span className="font-extrabold text-foreground">every user of the app</span>{" "}
-                — not just one account. Existing transactions keep their
-                historical label; it only disappears from future entry.
-              </p>
-            </div>
-            <div className="flex gap-2 pt-2">
-              <Button
-                className="h-10 flex-1 text-xs font-bold cursor-pointer"
-                disabled={isSaving}
-                variant="outline"
-                onClick={() => setPendingDelete(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                className="h-10 flex-1 bg-rose-500 text-xs font-bold text-white hover:bg-rose-600 cursor-pointer"
-                disabled={isSaving}
-                onClick={handleConfirmDelete}
-              >
-                {isSaving ? <Loader2 className="size-4 animate-spin" /> : "Remove for everyone"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <AdminConfirmDialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title={pendingDelete ? `Remove "${pendingDelete.name}" for ALL users?` : ""}
+        description="It disappears from every user's picker. Existing transactions keep their historical label."
+        confirmLabel="Remove for everyone"
+        destructive
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 }

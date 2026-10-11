@@ -4,6 +4,8 @@ import { Loader2, ShieldAlert, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useEffect, useRef, useState } from "react";
+import { clearImpersonationRequest, takeImpersonationRequest } from "@/lib/impersonation-request";
+import type { ImpersonationMode } from "@/lib/admin-api";
 import { Button } from "@/components/ui/button";
 import {
   adminEndImpersonation,
@@ -32,6 +34,7 @@ const sections = [
   { slug: "plan", label: "Plan" },
   { slug: "outings", label: "Outings" },
   { slug: "friends", label: "Friends" },
+  { slug: "wealth", label: "Wealth" },
   { slug: "alerts", label: "Alerts" },
   { slug: "settings", label: "Settings" },
 ];
@@ -49,22 +52,31 @@ export function ImpersonationShell({
   const [target, setTarget] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isExiting, setIsExiting] = useState(false);
-  const startedRef = useRef(false);
+  const [mode, setMode] = useState<ImpersonationMode>("read");
   const sessionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    // No "already started" ref: under React strict mode the first effect run
+    // is cleaned up (ending its session), and the second run must start a
+    // fresh one — otherwise the admin is left with an ended session.
+    let cancelled = false;
+    const request = takeImpersonationRequest(targetUserId);
 
     void (async () => {
       try {
         const [rows, newSessionId] = await Promise.all([
           adminListTable({ table: "users", filterUser: targetUserId, limit: 1 }),
-          adminStartImpersonation(targetUserId),
+          adminStartImpersonation(targetUserId, request.mode, request.reason),
         ]);
+        if (cancelled) {
+          void adminEndImpersonation(newSessionId).catch(() => {});
+          return;
+        }
+        clearImpersonationRequest(targetUserId);
         const row = rows[0];
         if (!row) throw new Error("Target user not found.");
         sessionRef.current = newSessionId;
+        setMode(request.mode);
         setImpersonationSession(newSessionId);
         setTarget({
           id: targetUserId,
@@ -74,7 +86,9 @@ export function ImpersonationShell({
         });
         setSessionId(newSessionId);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not start impersonation.");
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not start impersonation.");
+        }
       }
     })();
 
@@ -92,6 +106,7 @@ export function ImpersonationShell({
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
+      cancelled = true;
       window.removeEventListener("beforeunload", handleBeforeUnload);
       // Navigating away from the route group ends the session too — the
       // explicit Exit button is not the only cleanup path.
@@ -144,14 +159,21 @@ export function ImpersonationShell({
     <>
       {/* Persistent, impossible-to-miss banner — fixed above everything,
           on every page of this route group, not dismissible. */}
-      <div className="fixed inset-x-0 top-0 z-[100] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-rose-600 px-4 py-2 text-center text-xs font-semibold text-white shadow-lg">
+      <div
+        className={cn(
+          "fixed inset-x-0 top-0 z-[100] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 px-4 py-2 text-center text-xs font-semibold text-white shadow-lg",
+          mode === "write" ? "bg-rose-600" : "bg-amber-600",
+        )}
+      >
         <ShieldAlert className="size-4 shrink-0" />
         <span>
-          Acting as {target.name} ({target.email}) — Admin impersonation session.
-          Every action is logged and attributed to you.
+          Viewing as {target.name} ({target.email}) —{" "}
+          {mode === "write"
+            ? "WRITE mode: changes you make are real, logged and attributed to you."
+            : "read-only: saving, editing and deleting are blocked."}
         </span>
         <Button
-          className="h-6 rounded-full bg-white px-3 text-[11px] font-bold text-rose-600 hover:bg-rose-50"
+          className="h-6 rounded-full bg-white px-3 text-[11px] font-bold text-foreground hover:bg-white/90"
           disabled={isExiting}
           size="sm"
           onClick={handleExit}
@@ -166,7 +188,7 @@ export function ImpersonationShell({
       {/* Spacer so the fixed banner never covers content */}
       <div className="h-10" />
 
-      <nav className="mb-4 flex flex-wrap gap-1 rounded-xl border border-rose-500/40 bg-rose-500/5 p-1">
+      <nav className="mb-4 flex gap-1 overflow-x-auto rounded-xl border border-border bg-muted/40 p-1">
         {sections.map((section) => {
           const href = `/admin/users/${targetUserId}/impersonate/${section.slug}`;
           const isActive = pathname === href;
@@ -174,7 +196,7 @@ export function ImpersonationShell({
             <Link
               key={section.slug}
               className={cn(
-                "rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+                "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
                 isActive && "bg-background font-semibold text-foreground shadow-sm",
               )}
               href={href}

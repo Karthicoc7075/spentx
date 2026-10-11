@@ -1,249 +1,243 @@
 "use client";
 
-import { ArrowRight, Loader2, Save, Smartphone } from "lucide-react";
+import { ArrowRight, Loader2, RotateCcw, Save } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { SmsRulesAdminPanel } from "@/components/settings/SmsRulesAdminPanel";
+import { AdminCard, AdminConfirmDialog, AdminErrorState, AdminPageHeader } from "@/components/admin/admin-ui";
 import { createClient } from "@/lib/supabase/client";
 import { queryKeys } from "@/lib/query-keys";
-import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useToast } from "@/providers/toast-provider";
 
-// Full global_settings editor, relocated into the admin portal. Writes go
-// directly through the global_settings table under the existing
-// global_settings_write_admin RLS policy — no new backend. Default
-// categories have their own dedicated CRUD at /admin/categories; mail
-// templates are editable via Database -> mail_templates.
-type GlobalSettingsForm = {
+// global_settings editor. Writes go through the global_settings_write_admin
+// RLS policy; the admin_audit_config_change trigger (20261011_admin_fixes)
+// records before/after in the audit log. SMS rules live on /admin/sms-rules.
+type Form = {
   app_name: string;
   logo_url: string;
+  app_version: string;
   default_safe_spending_percentage: string;
   default_monthly_budget: string;
   max_category_limit: string;
   max_purposes_limit: string;
   max_accounts_limit: string;
   max_contributors_limit: string;
-  app_version: string;
   maintenance_mode: boolean;
 };
 
+const NUMBER_FIELDS: Array<{ key: keyof Form; label: string; min: number; max?: number; fallback: number }> = [
+  { key: "default_safe_spending_percentage", label: "Default safe-spending %", min: 1, max: 100, fallback: 20 },
+  { key: "default_monthly_budget", label: "Default monthly budget (₹)", min: 0, fallback: 0 },
+  { key: "max_category_limit", label: "Max categories per user", min: 1, fallback: 50 },
+  { key: "max_purposes_limit", label: "Max purposes per user", min: 1, fallback: 10 },
+  { key: "max_accounts_limit", label: "Max accounts per user", min: 1, fallback: 8 },
+  { key: "max_contributors_limit", label: "Max contributors per user", min: 1, fallback: 10 },
+];
+
 async function fetchRawGlobalSettings() {
-  const { data, error } = await createClient()
-    .from("global_settings")
-    .select("*")
-    .eq("id", "app")
-    .maybeSingle();
+  const { data, error } = await createClient().from("global_settings").select("*").eq("id", "app").maybeSingle();
   if (error) throw new Error(error.message);
-  return data as Record<string, unknown> | null;
+  if (!data) throw new Error('The global_settings row with id "app" is missing.');
+  return data as Record<string, unknown>;
+}
+
+function toForm(row: Record<string, unknown>): Form {
+  const num = (key: keyof Form, fallback: number) => String(row[key] ?? fallback);
+  return {
+    app_name: String(row.app_name ?? "SpentX"),
+    logo_url: String(row.logo_url ?? ""),
+    app_version: String(row.app_version ?? "1.0.0"),
+    default_safe_spending_percentage: num("default_safe_spending_percentage", 20),
+    default_monthly_budget: num("default_monthly_budget", 0),
+    max_category_limit: num("max_category_limit", 50),
+    max_purposes_limit: num("max_purposes_limit", 10),
+    max_accounts_limit: num("max_accounts_limit", 8),
+    max_contributors_limit: num("max_contributors_limit", 10),
+    maintenance_mode: Boolean(row.maintenance_mode),
+  };
+}
+
+function validate(form: Form): string | null {
+  for (const field of NUMBER_FIELDS) {
+    const raw = String(form[field.key]).trim();
+    const value = Number(raw);
+    if (raw === "" || Number.isNaN(value)) return `${field.label} must be a number.`;
+    if (value < field.min) return `${field.label} must be at least ${field.min}.`;
+    if (field.max != null && value > field.max) return `${field.label} must be at most ${field.max}.`;
+  }
+  if (form.logo_url.trim() && !/^https?:\/\//i.test(form.logo_url.trim())) return "Logo URL must start with http(s)://";
+  return null;
 }
 
 export function AdminSettingsPage() {
   const { notify } = useToast();
-  const { user } = useSupabaseAuth();
   const queryClient = useQueryClient();
-  const [form, setForm] = useState<GlobalSettingsForm | null>(null);
+  const [draft, setDraft] = useState<Form | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const { data: row, isLoading } = useQuery({
+  const { data: row, isLoading, error, refetch } = useQuery({
     queryKey: ["admin-global-settings-raw"],
     queryFn: fetchRawGlobalSettings,
   });
 
-  useEffect(() => {
-    if (!row || form) return;
-    setForm({
-      app_name: String(row.app_name ?? "SpentX"),
-      logo_url: String(row.logo_url ?? ""),
-      default_safe_spending_percentage: String(row.default_safe_spending_percentage ?? 20),
-      default_monthly_budget: String(row.default_monthly_budget ?? 0),
-      max_category_limit: String(row.max_category_limit ?? 50),
-      max_purposes_limit: String(row.max_purposes_limit ?? 10),
-      max_accounts_limit: String(row.max_accounts_limit ?? 8),
-      max_contributors_limit: String(row.max_contributors_limit ?? 10),
-      app_version: String(row.app_version ?? "1.0.0"),
-      maintenance_mode: Boolean(row.maintenance_mode),
-    });
-  }, [row, form]);
+  if (isLoading) {
+    return <Skeleton className="h-80 rounded-2xl" />;
+  }
+  if (error || !row) {
+    return <AdminErrorState error={error} onRetry={() => refetch()} />;
+  }
 
-  const handleSave = async () => {
-    if (!form) return;
+  const original = toForm(row);
+  const form = draft ?? original;
+  const dirty = JSON.stringify(form) !== JSON.stringify(original);
+  const set = <K extends keyof Form>(key: K, value: Form[K]) => setDraft({ ...form, [key]: value });
+  const validationError = validate(form);
+  const maintenanceChanging = form.maintenance_mode !== original.maintenance_mode;
+
+  const save = async () => {
     setIsSaving(true);
     try {
-      const { error } = await createClient()
-        .from("global_settings")
-        .update({
-          app_name: form.app_name.trim() || "SpentX",
-          logo_url: form.logo_url.trim() || null,
-          default_safe_spending_percentage:
-            Number(form.default_safe_spending_percentage) || 20,
-          default_monthly_budget: Number(form.default_monthly_budget) || 0,
-          max_category_limit: Number(form.max_category_limit) || 50,
-          max_purposes_limit: Number(form.max_purposes_limit) || 10,
-          max_accounts_limit: Number(form.max_accounts_limit) || 8,
-          max_contributors_limit: Number(form.max_contributors_limit) || 10,
-          app_version: form.app_version.trim() || "1.0.0",
-          maintenance_mode: form.maintenance_mode,
-        })
-        .eq("id", "app");
-      if (error) throw new Error(error.message);
-      queryClient.invalidateQueries({ queryKey: ["admin-global-settings-raw"] });
-      queryClient.invalidateQueries({ queryKey: ["admin-app-config"] });
-      queryClient.invalidateQueries({ queryKey: ["app-config"] });
-      queryClient.invalidateQueries({ queryKey: ["app-config-shell"] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.globalSettings() });
-      notify({ title: "Global settings saved", description: "Changes apply to all users." });
-    } catch (error) {
-      notify({
-        title: "Save failed",
-        description: error instanceof Error ? error.message : "Could not save settings.",
+      const payload: Record<string, unknown> = {
+        app_name: form.app_name.trim() || "SpentX",
+        logo_url: form.logo_url.trim() || null,
+        app_version: form.app_version.trim() || "1.0.0",
+        maintenance_mode: form.maintenance_mode,
+      };
+      NUMBER_FIELDS.forEach((field) => {
+        payload[field.key] = Number(String(form[field.key]).trim());
       });
+      const { data, error: saveError } = await createClient()
+        .from("global_settings")
+        .update(payload)
+        .eq("id", "app")
+        .select("id");
+      if (saveError) throw new Error(saveError.message);
+      if (!data?.length) throw new Error("No row was updated — check the admin RLS policy on global_settings.");
+      setDraft(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-global-settings-raw"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["app-config"] }),
+        queryClient.invalidateQueries({ queryKey: ["app-config-shell"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.globalSettings() }),
+      ]);
+      notify({ title: "Settings saved", description: "Changes apply to all users." });
+    } catch (saveError) {
+      notify({ title: "Save failed", description: saveError instanceof Error ? saveError.message : String(saveError) });
     } finally {
       setIsSaving(false);
     }
   };
 
-  if (isLoading || !form) {
-    return (
-      <div className="grid gap-4">
-        <Skeleton className="h-64 rounded-2xl" />
-        <Skeleton className="h-40 rounded-2xl" />
-      </div>
-    );
-  }
-
-  const numberField = (
-    label: string,
-    key: keyof GlobalSettingsForm,
-    props?: { min?: number; max?: number },
-  ) => (
-    <div className="grid gap-1.5">
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
-      <Input
-        className="h-10 text-xs"
-        min={props?.min}
-        max={props?.max}
-        type="number"
-        value={String(form[key])}
-        onChange={(event) =>
-          setForm((current) =>
-            current ? { ...current, [key]: event.target.value } : current,
-          )
-        }
-      />
-    </div>
-  );
-
-  const textField = (label: string, key: keyof GlobalSettingsForm, placeholder?: string) => (
-    <div className="grid gap-1.5">
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
-      <Input
-        className="h-10 text-xs"
-        placeholder={placeholder}
-        value={String(form[key])}
-        onChange={(event) =>
-          setForm((current) =>
-            current ? { ...current, [key]: event.target.value } : current,
-          )
-        }
-      />
-    </div>
-  );
-
   return (
-    <div className="grid gap-4">
-      <Card>
-        <CardContent className="p-5">
-          <h2 className="text-sm font-semibold">App identity & limits</h2>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            {textField("App name", "app_name")}
-            {textField("Logo URL", "logo_url", "https://…")}
-            {textField("App version", "app_version")}
-            {numberField("Default safe spending %", "default_safe_spending_percentage", { min: 1, max: 100 })}
-            {numberField("Default monthly budget", "default_monthly_budget", { min: 0 })}
-            {numberField("Max categories per user", "max_category_limit", { min: 1 })}
-            {numberField("Max purposes per user", "max_purposes_limit", { min: 1 })}
-            {numberField("Max bank accounts per user", "max_accounts_limit", { min: 1 })}
-            {numberField("Max contributors per user", "max_contributors_limit", { min: 1 })}
+    <div className="grid gap-5">
+      <AdminPageHeader
+        title="App settings"
+        description="Global defaults and limits for every user. Saved changes are audited."
+        actions={
+          <>
+            <Button size="sm" variant="outline" disabled={!dirty || isSaving} onClick={() => setDraft(null)}>
+              <RotateCcw className="size-3.5" /> Discard
+            </Button>
+            <Button size="sm" disabled={!dirty || isSaving || Boolean(validationError)} onClick={() => setConfirmOpen(true)}>
+              {isSaving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />} Save
+            </Button>
+          </>
+        }
+      />
+
+      {validationError && dirty ? (
+        <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{validationError}</p>
+      ) : null}
+
+      <AdminCard>
+        <h3 className="text-sm font-semibold">Identity</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <Field label="App name">
+            <Input value={form.app_name} onChange={(event) => set("app_name", event.target.value)} />
+          </Field>
+          <Field label="Logo URL">
+            <Input placeholder="https://…" value={form.logo_url} onChange={(event) => set("logo_url", event.target.value)} />
+          </Field>
+          <Field label="App version">
+            <Input value={form.app_version} onChange={(event) => set("app_version", event.target.value)} />
+          </Field>
+        </div>
+      </AdminCard>
+
+      <AdminCard>
+        <h3 className="text-sm font-semibold">Defaults & limits</h3>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {NUMBER_FIELDS.map((field) => (
+            <Field key={field.key} label={field.label}>
+              <Input
+                type="number"
+                inputMode="decimal"
+                min={field.min}
+                max={field.max}
+                value={String(form[field.key])}
+                onChange={(event) => set(field.key, event.target.value as never)}
+              />
+            </Field>
+          ))}
+        </div>
+      </AdminCard>
+
+      <AdminCard>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-semibold">Maintenance mode</h3>
+            <p className="text-xs text-muted-foreground">Signed-in non-admin website users see a maintenance notice. (Not read by the mobile app yet.)</p>
           </div>
+          <Switch checked={form.maintenance_mode} onCheckedChange={(checked) => set("maintenance_mode", checked)} />
+        </div>
+      </AdminCard>
 
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-amber-500/40 px-4 py-3">
-            <div>
-              <p className="text-xs font-semibold">Maintenance mode</p>
-              <p className="text-[11px] text-muted-foreground">
-                Locks every non-admin user out of the app immediately.
-              </p>
-            </div>
-            <Switch
-              checked={form.maintenance_mode}
-              onCheckedChange={(checked) =>
-                setForm((current) =>
-                  current ? { ...current, maintenance_mode: checked } : current,
-                )
-              }
-            />
-          </div>
-
-          <Button
-            className="mt-4 h-10 text-xs font-bold"
-            disabled={isSaving}
-            onClick={handleSave}
-          >
-            {isSaving ? (
-              <Loader2 className="mr-2 size-4 animate-spin" />
-            ) : (
-              <Save className="mr-2 size-4" />
-            )}
-            Save global settings
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-5">
-          <h2 className="text-sm font-semibold">Related editors</h2>
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            <Link
-              className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-xs font-medium transition-colors hover:border-primary/50 hover:bg-muted/50"
-              href="/admin/categories"
-            >
-              Default categories (add / edit / delete)
+      <AdminCard>
+        <h3 className="text-sm font-semibold">Related</h3>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {[
+            { href: "/admin/categories", label: "Default categories" },
+            { href: "/admin/sms-rules", label: "SMS rules" },
+            { href: "/admin/merchant-rules", label: "Merchant rules" },
+          ].map((link) => (
+            <Link key={link.href} href={link.href} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2.5 text-xs font-medium hover:bg-muted/50">
+              {link.label}
               <ArrowRight className="ml-auto size-3.5 text-muted-foreground" />
             </Link>
-            <Link
-              className="flex items-center gap-2 rounded-xl border border-border px-4 py-3 text-xs font-medium transition-colors hover:border-primary/50 hover:bg-muted/50"
-              href="/admin/database"
-            >
-              Mail templates (Database → mail_templates)
-              <ArrowRight className="ml-auto size-3.5 text-muted-foreground" />
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
+          ))}
+        </div>
+      </AdminCard>
 
-      <Card>
-        <CardContent className="p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Smartphone className="size-4 text-muted-foreground" />
-              <h2 className="text-sm font-semibold">SMS Rules</h2>
-            </div>
-            <Link
-              className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-              href="/admin/sms-rules"
-            >
-              Full page
-              <ArrowRight className="size-3.5" />
-            </Link>
-          </div>
-          <SmsRulesAdminPanel adminId={user?.id} onNotify={notify} />
-        </CardContent>
-      </Card>
+      <AdminConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Save global settings?"
+        description={
+          maintenanceChanging
+            ? form.maintenance_mode
+              ? "This also turns maintenance mode ON — non-admin users will be locked out of the website."
+              : "This also turns maintenance mode OFF."
+            : "These defaults apply to every user."
+        }
+        destructive={maintenanceChanging && form.maintenance_mode}
+        confirmLabel="Save"
+        onConfirm={save}
+      />
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="grid gap-1.5 text-xs">
+      <span className="font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
   );
 }

@@ -1,17 +1,31 @@
 // ============================================================================
 // Admin portal data access. Everything here goes through the dedicated
-// admin-only RPC layer (supabase/migrations/20260720_admin_portal.sql) —
+// admin-only RPC layer (supabase/migrations/20260720_admin_portal.sql and
+// 20261011_admin_fixes.sql) —
 // never through relaxed RLS. Each RPC re-checks require_admin() server-side,
 // so these wrappers are safe to call optimistically; a non-admin gets a
 // hard error, not data.
 // ============================================================================
 import { createClient } from "@/lib/supabase/client";
 
+export type AdminColumnMeta = {
+  name: string;
+  type: string;
+  udt: string;
+  nullable: boolean;
+  hasDefault: boolean;
+};
+
 export type AdminTableMeta = {
   table: string;
   pk: string;
   userCol: string | null;
   deletable: boolean;
+  updatable?: boolean;
+  insertable?: boolean;
+  /** true = admin delete sets deleted_at (restorable); false = hard delete */
+  softDelete?: boolean;
+  columns?: AdminColumnMeta[];
 };
 
 export type AdminRow = Record<string, unknown>;
@@ -26,6 +40,9 @@ export type AdminOverview = {
   incomeVolume: number;
   backupsLast7d: number;
   backupFailuresLast7d: number;
+  activeUsers7d?: number;
+  suspendedUsers?: number;
+  apiErrors24h?: number;
   maintenanceMode: boolean;
   storage: Array<{ bucket: string; objects: number; bytes: number }>;
 };
@@ -39,6 +56,10 @@ export type AdminUserRow = {
   txCount: number;
   monthSpend: number;
   totalSpend: number;
+  emailConfirmed?: boolean;
+  bannedUntil?: string | null;
+  lastSignInAt?: string | null;
+  lastSeenAt?: string | null;
 };
 
 export type AdminUserOverview = {
@@ -49,11 +70,21 @@ export type AdminUserOverview = {
     role: string;
     joinedAt: string;
     phone: string | null;
+    setupCompleted?: boolean | null;
+    timezone?: string | null;
+  } | null;
+  auth?: {
+    emailConfirmedAt: string | null;
+    lastSignInAt: string | null;
+    bannedUntil: string | null;
+    createdAt: string | null;
   } | null;
   txCount: number;
+  unverifiedCount?: number;
   totalSpend: number;
   totalIncome: number;
   monthSpend: number;
+  monthIncome?: number;
   spendByCategory: Array<{ categoryId: string; name: string; amount: number }>;
   accounts: Array<{
     id: string;
@@ -77,7 +108,6 @@ export type AdminUserOverview = {
     id: string;
     name: string;
     phone: string | null;
-    netBalance: number;
   }>;
   recentTransactions: Array<{
     id: string;
@@ -86,14 +116,17 @@ export type AdminUserOverview = {
     type: string;
     transaction_date: string;
     status: string;
+    entry_source?: string | null;
     outing_id?: string | null;
     outing_name?: string | null;
     purpose_name?: string | null;
+    account_name?: string | null;
+    to_account_name?: string | null;
     splits?: Array<{
-      friendId: string | null;
       amount: number;
-      isReturn: boolean;
-      friendName: string | null;
+      category: string | null;
+      purpose: string | null;
+      contributor: string | null;
     }> | null;
   }>;
   lastBackup: {
@@ -101,7 +134,56 @@ export type AdminUserOverview = {
     status: string;
     type: string;
     size_bytes: number | null;
+    error_message?: string | null;
   } | null;
+  devices?: Array<{
+    id: string;
+    device_label: string | null;
+    platform: string | null;
+    user_agent: string | null;
+    last_seen_at: string | null;
+    created_at: string | null;
+  }>;
+  logins?: Array<{
+    id: string;
+    logged_in_at: string;
+    platform: string | null;
+    user_agent: string | null;
+  }>;
+  recentErrors?: Array<{
+    id: string;
+    created_at: string;
+    api_type: string;
+    api_name: string;
+    method: string | null;
+    status_code: number | null;
+    error_message: string | null;
+    platform: string | null;
+    app_version: string | null;
+  }>;
+  sms?: { detected30d: number; lastDetectedAt: string | null; learnedMerchants: number };
+  wealth?: { goals: number; investments: number };
+};
+
+export type AdminBalanceInputs = {
+  outings: AdminRow[];
+  outingExpenses: AdminRow[];
+  settlements: AdminRow[];
+  friendSplits: AdminRow[];
+  friendSettlements: AdminRow[];
+};
+
+export type AdminMetrics = {
+  days: number;
+  series: Array<{
+    date: string;
+    signups: number;
+    activeUsers: number;
+    transactions: number;
+    smsDetected: number;
+    apiCalls: number;
+    apiErrors: number;
+  }>;
 };
 
 export type AdminActionLog = {
@@ -111,6 +193,8 @@ export type AdminActionLog = {
   table_name: string | null;
   record_id: string | null;
   before: AdminRow | null;
+  after?: AdminRow | null;
+  reason?: string | null;
   target_user_id: string | null;
   impersonation_session_id: string | null;
   created_at: string;
@@ -124,10 +208,41 @@ function client() {
   return createClient();
 }
 
+/** Error carrying the PostgREST/Postgres code, so pages can tell "run the
+ * migration" (42883 / PGRST202 / 42P01) apart from real failures. */
+export class AdminApiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "AdminApiError";
+    this.code = code;
+  }
+}
+
+export function isMissingMigrationError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as AdminApiError).code;
+  if (code && ["42883", "PGRST202", "42P01", "PGRST205", "PGRST204"].includes(code)) return true;
+  return /does not exist|could not find the function|schema cache|run .*migration/i.test(error.message);
+}
+
 async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {
   const { data, error } = await client().rpc(fn, args);
-  if (error) throw new Error(error.message);
+  if (error) throw new AdminApiError(error.message, error.code);
   return data as T;
+}
+
+async function postJson<T = unknown>(url: string, body?: unknown, method = "POST"): Promise<T> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new AdminApiError(payload?.error ?? `Request failed (${response.status})`);
+  }
+  return payload as T;
 }
 
 export async function fetchAdminTableMeta(): Promise<AdminTableMeta[]> {
@@ -141,6 +256,7 @@ export async function adminListTable(params: {
   orderBy?: string | null;
   orderDir?: "asc" | "desc";
   filterUser?: string | null;
+  search?: string | null;
 }): Promise<AdminRow[]> {
   return rpc<AdminRow[]>("admin_list_table", {
     p_table: params.table,
@@ -149,25 +265,33 @@ export async function adminListTable(params: {
     p_order_by: params.orderBy ?? null,
     p_order_dir: params.orderDir ?? "desc",
     p_filter_user: params.filterUser ?? null,
+    p_search: params.search?.trim() || null,
   });
 }
 
 export async function adminCountTable(
   table: string,
   filterUser?: string | null,
+  search?: string | null,
 ): Promise<number> {
   return rpc<number>("admin_count_table", {
     p_table: table,
     p_filter_user: filterUser ?? null,
+    p_search: search?.trim() || null,
   });
 }
 
+/** Soft-deletes (sets deleted_at) when the table supports it, else hard-deletes. */
 export async function adminDeleteRow(table: string, id: string): Promise<void> {
   await rpc<void>("admin_delete_row", { p_table: table, p_id: id });
 }
 
+export async function adminRestoreRow(table: string, id: string): Promise<void> {
+  await rpc<void>("admin_restore_row", { p_table: table, p_id: id });
+}
+
 export async function adminLogAction(params: {
-  action: "view_table" | "view_row" | "export" | "impersonate_view";
+  action: "view_table" | "view_row" | "export";
   table?: string | null;
   recordId?: string | null;
   targetUserId?: string | null;
@@ -187,6 +311,9 @@ export async function adminListActionLogs(params: {
   adminId?: string | null;
   targetUserId?: string | null;
   impersonationSessionId?: string | null;
+  search?: string | null;
+  from?: string | null;
+  to?: string | null;
 }): Promise<AdminActionLog[]> {
   return rpc<AdminActionLog[]>("admin_list_action_logs", {
     p_limit: params.limit ?? 50,
@@ -195,23 +322,95 @@ export async function adminListActionLogs(params: {
     p_admin_id: params.adminId ?? null,
     p_target_user_id: params.targetUserId ?? null,
     p_impersonation_session_id: params.impersonationSessionId ?? null,
+    p_search: params.search?.trim() || null,
+    p_from: params.from || null,
+    p_to: params.to || null,
   });
+}
+
+export async function adminCountActionLogs(params: {
+  action?: string | null;
+  adminId?: string | null;
+  targetUserId?: string | null;
+  impersonationSessionId?: string | null;
+  search?: string | null;
+  from?: string | null;
+  to?: string | null;
+}): Promise<number> {
+  return rpc<number>("admin_count_action_logs", {
+    p_action: params.action ?? null,
+    p_admin_id: params.adminId ?? null,
+    p_target_user_id: params.targetUserId ?? null,
+    p_impersonation_session_id: params.impersonationSessionId ?? null,
+    p_search: params.search?.trim() || null,
+    p_from: params.from || null,
+    p_to: params.to || null,
+  });
+}
+
+export async function fetchAdminMetrics(days = 30): Promise<AdminMetrics> {
+  return rpc<AdminMetrics>("admin_get_metrics", { p_days: days });
+}
+
+export async function adminListBackups(params: {
+  status?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<AdminRow[]> {
+  return rpc<AdminRow[]>("admin_list_backups", {
+    p_status: params.status || null,
+    p_limit: params.limit ?? 50,
+    p_offset: params.offset ?? 0,
+  });
+}
+
+export async function adminCountBackups(status?: string | null): Promise<number> {
+  return rpc<number>("admin_count_backups", { p_status: status || null });
+}
+
+export async function adminPurgeApiLogs(olderThanDays: number): Promise<number> {
+  return rpc<number>("admin_purge_api_logs", { p_older_than_days: olderThanDays });
 }
 
 export async function fetchAdminOverview(): Promise<AdminOverview> {
   return rpc<AdminOverview>("admin_get_overview");
 }
 
+export type AdminUserSort = "joined_desc" | "joined_asc" | "name_asc" | "email_asc";
+
 export async function adminListUsers(params: {
   search?: string | null;
   limit?: number;
   offset?: number;
+  role?: string | null;
+  sort?: AdminUserSort;
 }): Promise<AdminUserRow[]> {
   return rpc<AdminUserRow[]>("admin_list_users", {
-    p_search: params.search || null,
+    p_search: params.search?.trim() || null,
     p_limit: params.limit ?? 50,
     p_offset: params.offset ?? 0,
+    p_role: params.role || null,
+    p_sort: params.sort ?? "joined_desc",
   });
+}
+
+export async function adminCountUsers(params: {
+  search?: string | null;
+  role?: string | null;
+}): Promise<number> {
+  return rpc<number>("admin_count_users", {
+    p_search: params.search?.trim() || null,
+    p_role: params.role || null,
+  });
+}
+
+/** Exact lookup by email (case-insensitive) or user id. Never partial. */
+export async function adminFindUser(query: string): Promise<string | null> {
+  return rpc<string | null>("admin_find_user", { p_query: query });
+}
+
+export async function fetchAdminUserBalanceInputs(userId: string): Promise<AdminBalanceInputs> {
+  return rpc<AdminBalanceInputs>("admin_get_user_balance_inputs", { p_user_id: userId });
 }
 
 export async function fetchAdminUserOverview(
@@ -338,56 +537,158 @@ export async function adminCountApiLogs(filters: ApiLogFilters): Promise<number>
 
 // --- Impersonation sessions -----------------------------------------------
 
-export async function adminStartImpersonation(targetUserId: string): Promise<string> {
-  return rpc<string>("admin_start_impersonation", { p_target_user_id: targetUserId });
+export type ImpersonationMode = "read" | "write";
+
+export async function adminStartImpersonation(
+  targetUserId: string,
+  mode: ImpersonationMode = "read",
+  reason?: string | null,
+): Promise<string> {
+  return rpc<string>("admin_start_impersonation", {
+    p_target_user_id: targetUserId,
+    p_mode: mode,
+    p_reason: reason?.trim() || null,
+  });
 }
 
+/** Ends via the route so the proxy's session cache is cleared immediately. */
 export async function adminEndImpersonation(sessionId: string): Promise<void> {
-  await rpc<void>("admin_end_impersonation", { p_session_id: sessionId });
+  try {
+    await postJson("/api/impersonation/end", { sessionId });
+  } catch {
+    await rpc<void>("admin_end_impersonation", { p_session_id: sessionId });
+  }
 }
 
 // --- Admin-triggered password reset (service-role Route Handler) ----------
 
 export async function adminResetPassword(userId: string): Promise<void> {
-  const response = await fetch(`/api/admin/users/${userId}/reset-password`, {
-    method: "POST",
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.error ?? `Reset failed (${response.status})`);
-  }
+  await postJson(`/api/admin/users/${userId}/reset-password`);
+}
+
+export async function adminResendVerification(userId: string): Promise<void> {
+  await postJson(`/api/admin/users/${userId}/resend-verification`);
+}
+
+export async function adminForceVerifyEmail(userId: string): Promise<void> {
+  await postJson(`/api/admin/users/${userId}/force-verify-email`);
+}
+
+export async function adminSetSuspended(
+  userId: string,
+  suspend: boolean,
+  reason?: string,
+): Promise<void> {
+  await postJson(`/api/admin/users/${userId}/suspend`, { suspend, reason });
 }
 
 // User deletion goes through the dedicated service-role Route Handler, not
 // a generic RPC — deleting auth.users requires the service role key, which
 // must never reach the browser.
 export async function adminDeleteUser(userId: string): Promise<void> {
-  const { data } = await client().auth.getSession();
-  const token = data.session?.access_token;
-  const response = await fetch(`/api/admin/users/${userId}`, {
-    method: "DELETE",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.error ?? `Delete failed (${response.status})`);
-  }
+  await postJson(`/api/admin/users/${userId}`, undefined, "DELETE");
 }
 
+/** Audited insert through the admin_insert_row RPC (allow-listed tables only). */
 export async function adminInsertRow(
   table: string,
   record: Record<string, unknown>,
 ): Promise<AdminRow> {
-  const response = await fetch("/api/admin/database/insert", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ table, record }),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.error ?? `Insert failed (${response.status})`);
+  return rpc<AdminRow>("admin_insert_row", { p_table: table, p_record: record });
+}
+
+// --- Merchant / category rules (20261011_merchant_category_rules.sql) -------
+
+export type MerchantBrand = {
+  id: string;
+  canonical_name: string;
+  normalized_name: string;
+  category_slug: string;
+  aliases: string[];
+  upi_handles: string[];
+  sms_patterns: string[];
+  is_active: boolean;
+  source: string | null;
+  updated_at: string;
+};
+
+export type KeywordRule = {
+  id: number;
+  keyword: string;
+  match_type: "word" | "prefix" | "contains" | "regex";
+  category_slug: string;
+  priority: number;
+  applies_to: "merchant" | "sms" | "vpa";
+  direction: "any" | "debit" | "credit";
+  note: string | null;
+  is_active: boolean;
+  updated_at: string;
+};
+
+export type CategoryCatalogEntry = { slug: string; display_name: string; is_active: boolean };
+
+function tableError(error: { message: string; code?: string } | null) {
+  return error ? new AdminApiError(error.message, error.code) : null;
+}
+
+export async function listCategoryCatalog(): Promise<CategoryCatalogEntry[]> {
+  const { data, error } = await client()
+    .from("category_catalog")
+    .select("slug, display_name, is_active")
+    .order("sort_order", { ascending: true });
+  const err = tableError(error);
+  if (err) throw err;
+  return (data ?? []) as CategoryCatalogEntry[];
+}
+
+export async function listMerchantBrands(params: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ rows: MerchantBrand[]; total: number }> {
+  let query = client()
+    .from("merchant_brands")
+    .select("*", { count: "exact" })
+    .order("canonical_name", { ascending: true })
+    .range(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 50) - 1);
+  const term = params.search?.trim();
+  if (term) {
+    const safe = term.replace(/[%,()]/g, " ");
+    query = query.or(`canonical_name.ilike.%${safe}%,normalized_name.ilike.%${safe}%,category_slug.ilike.%${safe}%`);
   }
-  const result = await response.json();
-  return result.data as AdminRow;
+  const { data, error, count } = await query;
+  const err = tableError(error);
+  if (err) throw err;
+  return { rows: (data ?? []) as MerchantBrand[], total: count ?? 0 };
+}
+
+export async function listKeywordRules(params: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ rows: KeywordRule[]; total: number }> {
+  let query = client()
+    .from("merchant_keyword_rules")
+    .select("*", { count: "exact" })
+    .order("priority", { ascending: false })
+    .order("keyword", { ascending: true })
+    .range(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 50) - 1);
+  const term = params.search?.trim();
+  if (term) {
+    const safe = term.replace(/[%,()]/g, " ");
+    query = query.or(`keyword.ilike.%${safe}%,category_slug.ilike.%${safe}%`);
+  }
+  const { data, error, count } = await query;
+  const err = tableError(error);
+  if (err) throw err;
+  return { rows: (data ?? []) as KeywordRule[], total: count ?? 0 };
+}
+
+export async function adminUpsertMerchantBrand(brand: Partial<MerchantBrand>): Promise<MerchantBrand> {
+  return rpc<MerchantBrand>("admin_upsert_merchant_brand", { p_brand: brand });
+}
+
+export async function adminUpsertKeywordRule(rule: Partial<KeywordRule>): Promise<KeywordRule> {
+  return rpc<KeywordRule>("admin_upsert_keyword_rule", { p_rule: rule });
 }
 

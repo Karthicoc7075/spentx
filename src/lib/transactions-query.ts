@@ -1,4 +1,4 @@
-import { deriveMonthKey } from "@/lib/data-schema";
+import { deriveMonthKey, istDayEnd, istDayStart } from "@/lib/data-schema";
 import type { GlobalFilters, Transaction } from "@/types";
 
 export type ServerTransactionFilters = Pick<
@@ -44,14 +44,14 @@ export function buildTransactionQueryConstraints(
       constraints.push({
         field: "transaction_date",
         op: "gte",
-        value: filters.dateFrom,
+        value: istDayStart(filters.dateFrom),
       });
     }
     if (filters.dateTo) {
       constraints.push({
         field: "transaction_date",
         op: "lte",
-        value: `${filters.dateTo}T23:59:59.999Z`,
+        value: istDayEnd(filters.dateTo),
       });
     }
   }

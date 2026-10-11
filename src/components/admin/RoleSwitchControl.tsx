@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { Shield, User, ArrowLeftRight, Check, KeyRound } from "lucide-react";
+import { Shield, User, ArrowLeftRight, Check } from "lucide-react";
 import { useRoleMode } from "@/hooks/useRoleMode";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,25 +12,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AdminPinModal } from "@/components/admin/AdminPinModal";
 import { cn } from "@/lib/utils";
 
 export function RoleSwitchControl() {
   const { mode, isAdmin, setMode } = useRoleMode();
-  const [pinModalOpen, setPinModalOpen] = useState(false);
 
-  // Only visible for admin-eligible accounts (karthicoc7075@gmail.com)
+  // Only visible for admin accounts. There is no client-side PIN any more:
+  // a PIN checked in the browser is not security. Access is enforced on the
+  // server (/admin layout + require_admin() in every admin RPC), and the
+  // destructive reset re-checks ADMIN_RESET_PASSWORD server-side.
   if (!isAdmin) return null;
 
   const isAdminMode = mode === "admin";
 
   const handleAdminViewClick = () => {
-    if (isAdminMode) {
-      // Already in Admin View, stay in Admin View
-      return;
-    }
-    // Opening Admin View requires PIN prompt!
-    setPinModalOpen(true);
+    if (isAdminMode) return;
+    setMode("admin");
   };
 
   const handleUserViewClick = () => {
@@ -41,8 +37,6 @@ export function RoleSwitchControl() {
 
   return (
     <>
-      <AdminPinModal open={pinModalOpen} onOpenChange={setPinModalOpen} />
-
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
@@ -55,13 +49,14 @@ export function RoleSwitchControl() {
                   ? "border-amber-500/30 bg-amber-500/10 text-amber-900 hover:bg-amber-500/20 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200"
                   : "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20",
               )}
-              title={isAdminMode ? "Admin View active. Click to manage view mode." : "Click to switch to Admin Panel (PIN Required)."}
+              title={isAdminMode ? "Admin View active. Click to manage view mode." : "Switch to the Admin Panel."}
             >
-              {isAdminMode ? (
-                <Shield className="size-3.5 text-amber-600 dark:text-amber-400" />
-              ) : (
-                <KeyRound className="size-3.5 text-primary" />
-              )}
+              <Shield
+                className={cn(
+                  "size-3.5",
+                  isAdminMode ? "text-amber-600 dark:text-amber-400" : "text-primary",
+                )}
+              />
               <span className="inline">
                 {isAdminMode ? "Admin View" : "Admin Panel"}
               </span>
@@ -120,22 +115,16 @@ export function RoleSwitchControl() {
                 <div>
                   <p className="font-semibold leading-none">Admin Panel</p>
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    {isAdminMode ? "Management portal active" : "PIN required to open"}
+                    {isAdminMode ? "Management portal active" : "Open the management portal"}
                   </p>
                 </div>
               </div>
               {isAdminMode ? (
                 <Check className="size-3.5 text-amber-600 dark:text-amber-400" />
-              ) : (
-                <KeyRound className="size-3 text-muted-foreground" />
-              )}
+              ) : null}
             </DropdownMenuItem>
           </DropdownMenuGroup>
 
-          <DropdownMenuSeparator className="my-1" />
-          <div className="px-2 py-1 text-[10px] text-muted-foreground leading-snug">
-            Admin access is restricted to <strong>karthicoc7075@gmail.com</strong>.
-          </div>
         </DropdownMenuContent>
       </DropdownMenu>
     </>

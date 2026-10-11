@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { invalidateSessionCache } from "@/lib/server/impersonation";
-import { isAdminUser } from "@/lib/admin";
+import { adminCheckResponse, rejectCrossSite, requireAdmin } from "@/lib/server/admin-auth";
 
 // Tab-close cleanup path for impersonation sessions (navigator.sendBeacon
 // can't call an RPC with auth headers, but it does send cookies). The
-// explicit Exit button uses the admin_end_impersonation RPC; this route is
-// the backstop so closing the tab still ends the session.
+// Exit button uses it too, because ending here also clears this server's
+// session cache immediately (the RPC path cannot).
 export async function POST(request: Request) {
   try {
+    const csrf = rejectCrossSite(request);
+    if (csrf) return csrf;
+
     let sessionId: string | null = null;
     try {
       const body = await request.json();
@@ -21,23 +23,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "sessionId required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Not signed in." }, { status: 401 });
-
-    const { data: profile } = await supabase
-      .from("users")
-      .select("role, email")
-      .eq("id", user.id)
-      .maybeSingle();
-    if (!isAdminUser(user, profile)) {
-      return NextResponse.json(
-        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
-        { status: 403 },
-      );
-    }
+    const check = await requireAdmin();
+    if (!check.ok) return adminCheckResponse(check);
+    const user = check.user;
 
     const admin = createAdminClient();
     const { data: ended } = await admin

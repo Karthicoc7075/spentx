@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 import { generateFinancialInsights } from "@/lib/ai/financial-insights";
 import type { FinancialInsightContext } from "@/types";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
+import { requireAiCaller } from "@/lib/server/ai-guard";
 
 async function handler(request: Request) {
+  const caller = await requireAiCaller("ai/financial-insights");
+  if ("response" in caller) return caller.response;
   try {
     const { context } = (await request.json()) as {
       context?: FinancialInsightContext;

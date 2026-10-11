@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { safeNextPath } from "@/lib/safe-next-path";
 import { useState } from "react";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { AuthLayout } from "@/components/auth/AuthLayout";
@@ -9,12 +10,6 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import { ensureUserWorkspace } from "@/lib/supabase-data";
 
-function safeNextPath(next: string | null) {
-  if (!next || !next.startsWith("/") || next.startsWith("//")) {
-    return "/";
-  }
-  return next;
-}
 
 export function AuthConfirmForm() {
   const searchParams = useSearchParams();

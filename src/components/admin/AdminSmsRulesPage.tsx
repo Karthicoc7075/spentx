@@ -3,6 +3,7 @@
 import { SmsRulesAdminPanel } from "@/components/settings/SmsRulesAdminPanel";
 import { useSupabaseAuth } from "@/providers/supabase-provider";
 import { useToast } from "@/providers/toast-provider";
+import { AdminPageHeader } from "@/components/admin/admin-ui";
 
 /** Full-page admin editor — Templates + Block SMS only. */
 export function AdminSmsRulesPage() {
@@ -10,15 +11,11 @@ export function AdminSmsRulesPage() {
   const { notify } = useToast();
 
   return (
-    <div className="mx-auto grid max-w-5xl gap-6 p-4 md:p-6">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">SMS rules</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Two lists: bank <strong>templates</strong> (how money SMS parse) and{" "}
-          <strong>block</strong> rules (OTP/spam to ignore). Phones pull these
-          as shared defaults.
-        </p>
-      </div>
+    <div className="grid gap-5">
+      <AdminPageHeader
+        title="SMS rules"
+        description="Bank templates (how money SMS are parsed) and block rules (OTP/spam to ignore). Phones pull these as shared defaults; changes are audited."
+      />
       <SmsRulesAdminPanel adminId={user?.id} onNotify={notify} />
     </div>
   );

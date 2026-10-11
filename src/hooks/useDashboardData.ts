@@ -16,6 +16,7 @@ import { useOutings } from "@/hooks/useOutings";
 import { buildTransactionsListRows } from "@/lib/outings";
 import { fetchSharedPersonalAccounts } from "@/lib/supabase-data";
 import { narrowTransactionsToFilter } from "@/lib/utils";
+import { netWorthCardAccounts } from "@/lib/wealth";
 import { sumPeriodOutingSpend } from "@/lib/period-totals";
 import { useShareSession } from "@/providers/share-provider";
 import type { AnalyticsFilters, Purpose, Transaction } from "@/types";
@@ -69,11 +70,13 @@ export function useDashboardData() {
     queryFn: () => fetchSharedPersonalAccounts(share!.token),
     enabled: Boolean(share && personalShare),
   });
+  // Dashboard Net Worth = bank + cash + wallet − credit dues. Investment
+  // accounts (and goals) only count on the Wealth page.
   const netWorthAccounts = useMemo(() => {
     if (share) {
-      return personalShare ? (sharedAccountsQuery.data ?? []) : [];
+      return personalShare ? netWorthCardAccounts(sharedAccountsQuery.data ?? []) : [];
     }
-    return accounts;
+    return netWorthCardAccounts(accounts);
   }, [accounts, personalShare, share, sharedAccountsQuery.data]);
 
   // All share consumers now use the uncollapsed transaction list directly.

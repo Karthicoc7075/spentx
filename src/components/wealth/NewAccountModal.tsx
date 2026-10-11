@@ -25,7 +25,6 @@ import {
   Wallet,
   PlusCircle,
   Loader2,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import type { Account } from "@/types";
@@ -51,12 +50,7 @@ const ACCOUNT_TYPES: AccountTypeOption[] = [
     icon: Wallet,
     description: "Paytm, PhonePe wallet, etc.",
   },
-  {
-    type: "investment",
-    label: "Investment & Demat",
-    icon: PlusCircle,
-    description: "Mutual funds, Stocks, FD, Gold",
-  },
+  // Investments are not accounts any more: add them on Wealth → Investments.
 ];
 
 type NewAccountModalProps = {

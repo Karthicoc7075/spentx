@@ -1,5 +1,3 @@
-import type { User, UserProfile } from "@/types";
-
 export const PRIMARY_ADMIN_EMAIL = "karthicoc7075@gmail.com";
 
 export function isAdminEmail(email?: string | null): boolean {
@@ -22,18 +20,19 @@ export function isAdminEmail(email?: string | null): boolean {
   return envAdmins.includes(normalized);
 }
 
+/**
+ * Client-side / UI hint only. `user` must be the Supabase *auth* user (email
+ * from the verified session). The editable public.users.email is ignored —
+ * trusting it let any user rename their profile email to an admin address.
+ * The profile role is ignored here too, so a stale/locally-mutated profile
+ * object can never unlock admin UI. Real enforcement is server-side:
+ * lib/server/admin-auth.ts (verified email OR DB role) and require_admin()
+ * inside every admin RPC.
+ */
 export function isAdminUser(
   user?: { email?: string | null } | null,
-  profile?: { email?: string | null; role?: string | null } | null,
+  _profile?: { email?: string | null; role?: string | null } | null,
 ): boolean {
-  if (isAdminEmail(user?.email)) return true;
-  if (isAdminEmail(profile?.email)) return true;
-
-  // The role must be determined from the authenticated account, not just from a frontend toggle.
-  // Only admin@gmail.com (and configured admin emails) can be authorized admins.
-  if (profile?.role === "admin") {
-    return isAdminEmail(user?.email) || isAdminEmail(profile?.email);
-  }
-
-  return false;
+  void _profile;
+  return isAdminEmail(user?.email);
 }

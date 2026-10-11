@@ -25,6 +25,7 @@ import { useDeletedFriends } from "@/hooks/useDeletedFriends";
 import { useOutingSettlements } from "@/hooks/useOutingSettlements";
 import { useTransactions } from "@/hooks/useTransactions";
 import { PERSONAL_PURPOSE_ID } from "@/lib/purposes";
+import { settlementLinkTag } from "@/lib/supabase-data";
 import {
   settlementMembers,
   settlementMerchant,
@@ -104,8 +105,9 @@ export function SettleUpDialog({
     const { fromMemberId, toMemberId } = settlementMembers(target);
     setSubmitting(true);
     try {
+      let savedSettlementId: string | undefined;
       if (target.kind === "outing") {
-        await addOutingSettlement({
+        const savedSettlement = await addOutingSettlement({
           outingId: target.referenceId,
           fromMemberId,
           toMemberId,
@@ -113,8 +115,9 @@ export function SettleUpDialog({
           date,
           note: note.trim() || undefined,
         });
+        savedSettlementId = savedSettlement?.id;
       } else {
-        await addFriendSettlement({
+        const savedSettlement = await addFriendSettlement({
           friendSplitId: target.referenceId,
           fromMemberId,
           toMemberId,
@@ -122,6 +125,7 @@ export function SettleUpDialog({
           date,
           note: note.trim() || undefined,
         });
+        savedSettlementId = savedSettlement?.id;
       }
 
       // Money in when they repay you, money out when you repay them. Both
@@ -155,6 +159,8 @@ export function SettleUpDialog({
           `friend:${target.friendId}`,
           `${target.kind}:${target.referenceId}`,
           status.isFull ? "settlement:full" : "settlement:partial",
+          // Deleting this ledger row removes exactly this settlement.
+          ...(savedSettlementId ? [settlementLinkTag(savedSettlementId)] : []),
         ],
       });
 

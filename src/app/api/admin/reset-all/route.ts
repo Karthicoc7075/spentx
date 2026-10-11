@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { withRouteLogging } from "@/lib/server/with-route-logging";
 import { userStatusChannelName } from "@/lib/supabase-data";
-import { isAdminUser } from "@/lib/admin";
+import { adminCheckResponse, rejectCrossSite, requireAdmin } from "@/lib/server/admin-auth";
 
 // "Reset All Database Data" — the admin portal's nuclear option. It does three
 // things, in this order:
@@ -22,15 +22,21 @@ import { isAdminUser } from "@/lib/admin";
 // this stays signed in) and the admin_action_logs audit trail, which records
 // the reset itself.
 //
-// Two independent gates guard it: the caller must be a signed-in admin, and
-// must re-type the reset password. The admin check is verified here against
+// Three gates guard it: the caller must be a signed-in admin, must type the
+// confirmation phrase, and must re-type ADMIN_RESET_PASSWORD (no default —
+// the route refuses to run when it is unset). The admin check is verified here against
 // the session — exactly like the /admin layout guard — before the service role
 // key is used, and again inside the RPC via require_admin().
 
-const DEFAULT_RESET_PASSWORD = "karthi";
+// There is deliberately NO default: if ADMIN_RESET_PASSWORD is not set on the
+// server, the reset is disabled outright.
+function configuredResetPassword() {
+  return process.env.ADMIN_RESET_PASSWORD?.trim() ?? "";
+}
 
 function resetPasswordMatches(supplied: string) {
-  const expected = process.env.ADMIN_RESET_PASSWORD?.trim() || DEFAULT_RESET_PASSWORD;
+  const expected = configuredResetPassword();
+  if (expected.length < 8) return false;
   const a = Buffer.from(supplied);
   const b = Buffer.from(expected);
   // timingSafeEqual throws on length mismatch, so compare lengths separately.
@@ -54,34 +60,39 @@ async function listAllAuthUsers(admin: ReturnType<typeof createAdminClient>) {
 
 async function handleReset(request: Request) {
   try {
-    const body = (await request.json().catch(() => ({}))) as { password?: unknown };
+    if (configuredResetPassword().length < 8) {
+      return NextResponse.json(
+        {
+          error:
+            "Reset is disabled: set ADMIN_RESET_PASSWORD (8+ characters) in the server environment first.",
+        },
+        { status: 503 },
+      );
+    }
+
+    const body = (await request.json().catch(() => ({}))) as {
+      password?: unknown;
+      confirm?: unknown;
+    };
     const password = typeof body.password === "string" ? body.password.trim() : "";
+
+    if (body.confirm !== "RESET ALL DATA") {
+      return NextResponse.json(
+        { error: 'Type "RESET ALL DATA" to confirm.' },
+        { status: 400 },
+      );
+    }
 
     if (!password) {
       return NextResponse.json({ error: "Admin password is required." }, { status: 400 });
     }
 
+    const csrf = rejectCrossSite(request);
+    if (csrf) return csrf;
+    const check = await requireAdmin();
+    if (!check.ok) return adminCheckResponse(check);
+    const user = check.user;
     const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Not signed in." }, { status: 401 });
-    }
-
-    const { data: callerProfile } = await supabase
-      .from("users")
-      .select("role, email")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (!isAdminUser(user, callerProfile)) {
-      return NextResponse.json(
-        { error: "Authorization Error: Admin access required. Only admin@gmail.com can perform this action." },
-        { status: 403 },
-      );
-    }
 
     if (!resetPasswordMatches(password)) {
       return NextResponse.json(
@@ -136,25 +147,34 @@ async function handleReset(request: Request) {
     const failedUsers: { id: string; email?: string; reason: string }[] = [];
     let deletedUsers = 0;
 
-    for (const target of targets) {
-      const { error: deleteError } = await admin.auth.admin.deleteUser(target.id);
-      if (deleteError) {
-        failedUsers.push({ id: target.id, email: target.email, reason: deleteError.message });
-        continue;
-      }
-      deletedUsers += 1;
-
-      // Force-logout, live. Best-effort: if Realtime hiccups, the deleted
-      // token is already dead server-side and SupabaseProvider's periodic
-      // getUser() revalidation is the safety net.
-      try {
-        await admin.channel(userStatusChannelName(target.id)).send({
-          type: "broadcast",
-          event: "revoked",
-          payload: { reason: "database_reset" },
-        });
-      } catch (broadcastError) {
-        console.error("Failed to broadcast user-revoked event:", broadcastError);
+    // Delete in small parallel batches: sequential deletes time out on large
+    // user bases, unbounded parallelism trips Auth rate limits.
+    const BATCH = 8;
+    for (let index = 0; index < targets.length; index += BATCH) {
+      const batch = targets.slice(index, index + BATCH);
+      const results = await Promise.all(
+        batch.map(async (target) => {
+          const { error: deleteError } = await admin.auth.admin.deleteUser(target.id);
+          return { target, deleteError };
+        }),
+      );
+      for (const { target, deleteError } of results) {
+        if (deleteError) {
+          failedUsers.push({ id: target.id, email: target.email, reason: deleteError.message });
+          continue;
+        }
+        deletedUsers += 1;
+        // Force-logout, live. Best-effort: the deleted token is already dead
+        // server-side; SupabaseProvider's periodic getUser() is the safety net.
+        try {
+          await admin.channel(userStatusChannelName(target.id)).send({
+            type: "broadcast",
+            event: "revoked",
+            payload: { reason: "database_reset" },
+          });
+        } catch (broadcastError) {
+          console.error("Failed to broadcast user-revoked event:", broadcastError);
+        }
       }
     }
 
