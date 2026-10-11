@@ -25,7 +25,7 @@ export function WealthNetWorthIndicator({
     <div className="sx-surface p-4.5 sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="text-xs sm:text-sm font-medium text-muted-foreground">Net Worth</p>
+          <p className="text-xs sm:text-sm font-medium text-muted-foreground">Liquid Total</p>
           <p className="mt-1.5 sm:mt-2 text-3xl sm:text-4xl font-bold leading-none tracking-tight tabular-nums text-foreground truncate">
             {isLoading ? "—" : formatCurrency(breakdown.total)}
           </p>
@@ -94,14 +94,22 @@ export function WealthNetWorthIndicator({
                 <p className="mt-2 text-xl font-bold tracking-tight tabular-nums">
                   {formatCurrency(item.total)}
                 </p>
-                {/* Bank + Cash per purpose — same maths as Combined. */}
-                <div className="mt-2 flex items-center gap-4 text-xs">
+                {/* Bank + Wallet + Cash per purpose */}
+                <div className="mt-2 flex items-center gap-3.5 text-xs flex-wrap">
                   <span className="text-muted-foreground">
                     Bank{" "}
                     <span className="font-semibold tabular-nums text-foreground">
                       {formatCurrency(item.bankAccounts)}
                     </span>
                   </span>
+                  {item.wallets != null && item.wallets > 0 ? (
+                    <span className="text-muted-foreground">
+                      Wallets{" "}
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {formatCurrency(item.wallets)}
+                      </span>
+                    </span>
+                  ) : null}
                   <span className="text-muted-foreground">
                     Cash{" "}
                     <span className="font-semibold tabular-nums text-foreground">

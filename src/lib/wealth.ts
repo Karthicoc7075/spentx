@@ -617,6 +617,7 @@ export type PurposeNetWorth = {
   color: string;
   total: number;
   bankAccounts: number;
+  wallets: number;
   cash: number;
   monthlyChange: number;
 };
@@ -651,6 +652,7 @@ export function computeNetWorthByPurpose(
       color: purpose.color ?? "#6366f1",
       total: breakdown.total,
       bankAccounts: breakdown.bankAccounts,
+      wallets: breakdown.wallets,
       cash: breakdown.cash,
       monthlyChange: breakdown.monthlyChange,
     };

@@ -98,24 +98,23 @@ export function WealthPage() {
   const netWorthBreakdown = useMemo(
     () =>
       computeNetWorthBreakdown(
-        activeAccounts,
+        liquidAccounts,
         transactions,
         unlinkedOutingExpenses,
-        investments,
       ),
-    [activeAccounts, transactions, unlinkedOutingExpenses, investments],
+    [liquidAccounts, transactions, unlinkedOutingExpenses],
   );
 
   // Lazily compute purpose breakdown only when user switches to "by-purpose" view
   const purposeBreakdown = useMemo(() => {
     if (netWorthView !== "by-purpose") return [];
     return computeNetWorthByPurpose(
-      activeAccounts,
+      liquidAccounts,
       transactions,
       purposes,
       unlinkedOutingExpenses,
     );
-  }, [netWorthView, activeAccounts, transactions, purposes, unlinkedOutingExpenses]);
+  }, [netWorthView, liquidAccounts, transactions, purposes, unlinkedOutingExpenses]);
 
   const isLoading = accountsLoading && accounts.length === 0;
 
@@ -123,11 +122,11 @@ export function WealthPage() {
   const dailySnapshots = useMemo(() => {
     if (!snapshotModalOpen) return [];
     return computeDailyFinancialSnapshots(
-      activeAccounts,
+      liquidAccounts,
       transactions,
       unlinkedOutingExpenses,
     );
-  }, [snapshotModalOpen, activeAccounts, transactions, unlinkedOutingExpenses]);
+  }, [snapshotModalOpen, liquidAccounts, transactions, unlinkedOutingExpenses]);
 
   async function handleTransfer({
     fromAccount,
@@ -392,7 +391,7 @@ export function WealthPage() {
         open={snapshotModalOpen}
         onOpenChange={setSnapshotModalOpen}
         dailySnapshots={dailySnapshots}
-        accounts={activeAccounts}
+        accounts={liquidAccounts}
         onNewAccount={() => setNewAccountOpen(true)}
       />
 
