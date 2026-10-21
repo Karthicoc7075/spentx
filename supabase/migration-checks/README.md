@@ -5,6 +5,8 @@ backup/restore. Status on live, checked read-only 2026-10-21 ~14:00 IST:
 
 | migration | live status | precheck | verify | rollback |
 |---|---|---|---|---|
+| 20261004000100_protect_user_roles | **partial — trigger missing (critical)** | ✓ all ok | fails until fixed | restores today's state (trigger absent); run file then `post_step_restore_function.sql` |
+| 20261005000200_high_severity_user_data_fixes | **partial — 2 functions + trigger old** | ✓ all ok | fails until fixed | restores today's versions; run `apply_missing_parts.sql`, NOT the file |
 | 20261021_signup_phone | **not applied** | ✓ all ok | fails as expected until applied | exact pre-migration function + backfill undo (tested on local PG17 copy) |
 | 20261011_user_merchants_trust | applied | ✓ fingerprint | ✓ 6/6 ok | restores definitions captured 2026-10-21 |
 | 20261011_security_audit_fixes | applied | ✓ fingerprint | ✓ 8/8 ok | same |
@@ -15,3 +17,5 @@ Do **not** re-run the four 20261011 files: they are live, and re-running
 `investments_goals` / `security_audit_fixes` re-creates trigger
 `transactions_reverse_goal_contributions`, which
 `20261012_goal_investment_sync.sql` dropped on purpose.
+
+Full per-file status for all 66 files: `STATUS-2026-10-21.md`.
