@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import {
   getAccountOpeningDate,
   getEffectiveOpeningBalance,
@@ -17,7 +18,9 @@ export function computeRunningBalance(
   let balance = openingBalance;
 
   return sorted.map((transaction) => {
-    if (transaction.type === "income") {
+    if (!isConfirmedTransaction(transaction)) {
+      // Keep the review row in the timeline without moving the balance.
+    } else if (transaction.type === "income") {
       balance += transaction.totalAmount;
     } else {
       balance -= transaction.totalAmount;
@@ -74,10 +77,10 @@ export function getBalanceBreakdownAsOfDate(
   const throughDate = getTransactionsThroughDate(transactions, asOfDate);
   const excludedAfterDate = transactions.length - throughDate.length;
   const incomeThroughDate = throughDate
-    .filter((transaction) => transaction.type === "income")
+    .filter((transaction) => isConfirmedTransaction(transaction) && transaction.type === "income")
     .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
   const expenseThroughDate = throughDate
-    .filter((transaction) => transaction.type === "expense")
+    .filter((transaction) => isConfirmedTransaction(transaction) && transaction.type === "expense")
     .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   return {

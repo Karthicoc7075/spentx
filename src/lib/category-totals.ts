@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { isTransferTransaction, isOutingRollupLike } from "@/lib/investments";
 import type { Category, Transaction } from "@/types";
 
@@ -22,6 +23,7 @@ export function buildCategoryTotals(
   categories: Category[],
   limit?: number,
 ) {
+  transactions = transactions.filter(isConfirmedTransaction);
   const colorByName = new Map(
     categories.map((category) => [category.name, category.color]),
   );

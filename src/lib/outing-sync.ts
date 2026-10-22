@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { buildExpenseSplits } from "@/lib/outings";
 import type { Outing, OutingExpense, Transaction } from "@/types";
 
@@ -18,23 +19,8 @@ export function withoutOutingUnlinkedTag(tags?: string[]) {
   return (tags ?? []).filter((t) => t !== OUTING_UNLINKED_TAG);
 }
 
-/** Statuses that are never trip spend (same rule as the mobile app). */
-const NOT_TRIP_SPEND_STATUSES = new Set([
-  "pending",
-  "unverified",
-  "rejected",
-  "cancelled",
-  "failed",
-  "reversed",
-  "deleted",
-]);
-
-/** Only a confirmed payment can be trip spend. */
-export function isOutingSpendStatus(transaction: Transaction) {
-  return !NOT_TRIP_SPEND_STATUSES.has(
-    String(transaction.status ?? "completed").toLowerCase(),
-  );
-}
+/** Same financial status rule as spending and balances. */
+export const isOutingSpendStatus = isConfirmedTransaction;
 
 type WallClock = {
   y: number;

@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import {
   applyAnalyticsFilters,
   type AnalyticsFilterContext,
@@ -611,7 +612,7 @@ export function computePlanComparisonSummary(
   if (plannedTotal <= 0) return null;
 
   const actualTotal = transactions
-    .filter((transaction) => transaction.type === "expense")
+    .filter((transaction) => isConfirmedTransaction(transaction) && transaction.type === "expense")
     .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
 
   const variancePercent = Math.round(
@@ -656,7 +657,7 @@ export function computePlanAdherenceOverTime(
   );
   const dailyPlan = plannedTotal / totalDays;
 
-  const expenses = transactions.filter((transaction) => transaction.type === "expense");
+  const expenses = transactions.filter((transaction) => isConfirmedTransaction(transaction) && transaction.type === "expense");
   const points: Array<{
     label: string;
     adherence: number;
@@ -721,11 +722,11 @@ export function computeDetailedStats(
     Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
   );
   const expenses = filtered.filter(
-    (t) => t.type === "expense" && !isTransferTransaction(t),
+    (t) => isConfirmedTransaction(t) && t.type === "expense" && !isTransferTransaction(t),
   );
   const incomes = filtered.filter(
     (t) =>
-      t.type === "income" &&
+      isConfirmedTransaction(t) && t.type === "income" &&
       t.category !== OPENING_BALANCE_CATEGORY &&
       !isTransferTransaction(t),
   );

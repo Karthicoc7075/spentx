@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { format, parse } from "date-fns";
 import { isTransferTransaction } from "@/lib/investments";
 import { defaultCategories } from "@/lib/mock-data";
@@ -144,6 +145,7 @@ export function computeCategorySpentActuals(
   const map: Record<string, number> = {};
   transactions.forEach((transaction) => {
     if (
+      isConfirmedTransaction(transaction) &&
       transaction.isActive !== false &&
       !transaction.deletedAt &&
       transaction.status !== "unverified" &&

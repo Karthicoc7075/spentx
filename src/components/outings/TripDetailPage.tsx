@@ -1,5 +1,7 @@
 "use client";
 
+import { financialOutingExpenses } from "@/lib/outings";
+
 import {
   ArrowDownLeft,
   ArrowLeft,
@@ -188,21 +190,22 @@ export function TripDetailPage({
 
   const currentMember = getCurrentUserMember(outing.members);
   const viewerCreatedOuting = Boolean(user?.id && outing.createdBy === user.id);
+  const financialExpenses = useMemo(() => financialOutingExpenses(expenses, transactions), [expenses, transactions]);
   const summary = useMemo(
-    () => computeTripSummary(outing, expenses, settlements),
-    [outing, expenses, settlements],
+    () => computeTripSummary(outing, financialExpenses, settlements),
+    [outing, financialExpenses, settlements],
   );
   const balances = useMemo(
-    () => computeMemberBalances(outing.members, expenses, settlements),
-    [outing.members, expenses, settlements],
+    () => computeMemberBalances(outing.members, financialExpenses, settlements),
+    [outing.members, financialExpenses, settlements],
   );
   const debtEdges = useMemo(() => simplifyDebts(balances), [balances]);
   const personal = useMemo(
     () =>
       currentMember
-        ? getMemberPaidAndShare(currentMember.id, expenses)
+        ? getMemberPaidAndShare(currentMember.id, financialExpenses)
         : { paid: 0, share: 0 },
-    [currentMember, expenses],
+    [currentMember, financialExpenses],
   );
   const netBalance =
     balances.find((item) => item.member.id === currentMember?.id)?.balance ?? 0;
@@ -290,8 +293,8 @@ export function TripDetailPage({
   }, [settlements, currentMember]);
 
   const autoManualStats = useMemo(() => {
-    const auto = expenses.filter((expense) => expense.source === "bank-detected");
-    const manual = expenses.filter((expense) => expense.source === "manual");
+    const auto = financialExpenses.filter((expense) => expense.source === "bank-detected");
+    const manual = financialExpenses.filter((expense) => expense.source === "manual");
     let manualCash = 0;
     let manualAccount = 0;
     if (currentMember) {
@@ -314,7 +317,7 @@ export function TripDetailPage({
       manualCash,
       manualAccount,
     };
-  }, [expenses, currentMember]);
+  }, [financialExpenses, currentMember]);
 
   const hasBudget = (outing.budget ?? 0) > 0;
   const budgetProgress = hasBudget

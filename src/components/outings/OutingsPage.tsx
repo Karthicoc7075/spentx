@@ -1,5 +1,8 @@
 "use client";
 
+import { computeOutingRollupAmount } from "@/lib/outings";
+import { useTransactions } from "@/hooks/useTransactions";
+
 import { ArrowRight, Compass, Info, Map as MapIcon, MapPin, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -41,6 +44,7 @@ function memberInitials(member: TripMember) {
 }
 
 export function OutingsPage() {
+  const { transactions } = useTransactions();
   const router = useRouter();
   const { notify } = useToast();
   const { outings, isLoading, addOuting } = useOutings();
@@ -81,13 +85,13 @@ export function OutingsPage() {
     const filtered = filterOutings(outings, statusFilter, search);
     return sortOutings(filtered, (outingId) => {
       const expenses = expensesByOuting.get(outingId) ?? [];
-      return expenses.reduce((sum, expense) => sum + expense.amount, 0);
+      return computeOutingRollupAmount(expenses, undefined, transactions, outingId);
     });
-  }, [expensesByOuting, outings, statusFilter, search]);
+  }, [expensesByOuting, outings, statusFilter, search, transactions]);
 
   function outingTotal(outingId: string) {
     const expenses = expensesByOuting.get(outingId) ?? [];
-    return expenses.reduce((sum, expense) => sum + expense.amount, 0);
+    return computeOutingRollupAmount(expenses, undefined, transactions, outingId);
   }
 
   async function handleCreate(

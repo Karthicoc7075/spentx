@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { getActivePurposes, isPersonalPurposeRef } from "@/lib/purposes";
 import { isOutingRollupTransaction } from "@/lib/outings";
 import { narrowTransactionsToFilter } from "@/lib/utils";
@@ -36,6 +37,7 @@ export function isOpeningBalanceTransaction(transaction: Transaction) {
  * Ledger rows that must NOT move account balance / net worth.
  */
 export function isBalanceExcludedTransaction(transaction: Transaction) {
+  if (!isConfirmedTransaction(transaction)) return true;
   if (
     transaction.isActive === false ||
     Boolean(transaction.deletedAt) ||

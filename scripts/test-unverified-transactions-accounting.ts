@@ -59,7 +59,7 @@ console.log("── Hybrid Sync Engine (Section 12: Website Behavior) Tests ─�
 
 check("isConfirmedTransaction helper accurately differentiates statuses", () => {
   assert.equal(isConfirmedTransaction(makeTx({ status: "completed" })), true);
-  assert.equal(isConfirmedTransaction(makeTx({ status: "pending" })), true);
+  assert.equal(isConfirmedTransaction(makeTx({ status: "pending" })), false);
   assert.equal(isConfirmedTransaction(makeTx({ status: undefined })), true);
   assert.equal(isConfirmedTransaction(makeTx({ status: "unverified" })), false);
   assert.equal(isConfirmedTransaction(makeTx({ status: "rejected" })), false);

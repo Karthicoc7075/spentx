@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 /**
  * Single source of truth for period Income / Expense / Net across
  * Dashboard KPIs and the Transactions summary strip.
@@ -44,20 +45,7 @@ export function isInPeriodRange(rawDate: string | undefined | null, range?: Peri
   return true;
 }
 
-/**
- * Returns true if a transaction is confirmed and active.
- * Unverified (detected but not yet approved by user), rejected, or soft-deleted
- * transactions must never count towards confirmed finance totals.
- */
-export function isConfirmedTransaction(transaction: Transaction) {
-  if (transaction.isActive === false || Boolean(transaction.deletedAt)) return false;
-  return (
-    transaction.status !== "unverified" &&
-    transaction.status !== "rejected" &&
-    transaction.status !== "failed" &&
-    transaction.status !== "deleted"
-  );
-}
+export { isConfirmedTransaction } from "@/lib/transaction-status";
 
 export function isPeriodIncome(transaction: Transaction) {
   if (!isConfirmedTransaction(transaction)) return false;
@@ -125,6 +113,7 @@ export function sumPeriodOutingSpend(
   range?: PeriodRange,
 ) {
   const txSpend = transactions.reduce((sum, tx) => {
+    if (!isConfirmedTransaction(tx)) return sum;
     if (tx.type !== "expense") return sum;
     const isOuting =
       Boolean(tx.outingId) ||
@@ -158,7 +147,7 @@ export function sumPeriodIncome(
 
 export function sumPeriodReturns(transactions: Transaction[], range?: PeriodRange) {
   return transactions.reduce((sum, tx) => {
-    if (!isReimbursementTransaction(tx)) return sum;
+    if (!isConfirmedTransaction(tx) || !isReimbursementTransaction(tx)) return sum;
     const date = tx.transactionDate ?? tx.date;
     if (!isInPeriodRange(date, range)) return sum;
     return sum + money(tx);
@@ -177,7 +166,7 @@ export function sumPeriodGrossExpense(
 ) {
   const { range, categories = [], includeOutingExpenses = true } = options;
 
-  let scoped = transactions;
+  let scoped = transactions.filter(isConfirmedTransaction);
   if (!includeOutingExpenses) {
     scoped = scoped.filter(
       (tx) => !tx.outingId && !tx.tags?.includes("outing-analytics") && !isOutingRollupLike(tx),

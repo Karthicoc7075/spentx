@@ -46,6 +46,9 @@ export type TransactionStatus =
   | "unverified"
   | "rejected"
   | "failed"
+  | "unknown"
+  | "cancelled"
+  | "reversed"
   | "refunded"
   | "deleted";
 

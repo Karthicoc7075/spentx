@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { isOutingRollupTransaction } from "@/lib/outings";
 import type { Category, Investment, InvestmentAssetType, Transaction } from "@/types";
 
@@ -30,6 +31,7 @@ export function isInvestmentTransaction(
   transaction: Transaction,
   categories: Category[] = [],
 ) {
+  if (!isConfirmedTransaction(transaction)) return false;
   if (
     transaction.isActive === false ||
     Boolean(transaction.deletedAt) ||
@@ -77,6 +79,7 @@ const REIMBURSEMENT_CATEGORIES = new Set([
  * expense reversal instead.
  */
 export function isReimbursementTransaction(transaction: Transaction) {
+  if (!isConfirmedTransaction(transaction)) return false;
   if (
     transaction.isActive === false ||
     Boolean(transaction.deletedAt) ||
@@ -127,6 +130,7 @@ export function isOutingRollupLike(transaction: Transaction) {
  * left cash/bank when the expense was booked.
  */
 export function isSpendingExpense(transaction: Transaction, categories: Category[] = []) {
+  if (!isConfirmedTransaction(transaction)) return false;
   void categories; // kept for call-site compatibility
   if (
     transaction.isActive === false ||

@@ -1,3 +1,4 @@
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { PERSONAL_PURPOSE_ID } from "@/lib/purposes";
 import { OUTING_ANALYTICS_TAG, resolveOutingCategoryLabel } from "@/lib/analytics-filters";
 import type {
@@ -92,6 +93,12 @@ export function computeMemberBalances(
 
 export function getCurrentUserMember(members: TripMember[]) {
   return members.find((member) => member.isCurrentUser) ?? members[0];
+}
+
+/** Calculation-only expense list; review rows remain in the original list. */
+export function financialOutingExpenses(expenses: OutingExpense[], ledger: Transaction[]) {
+  const excluded = new Set(ledger.filter((tx) => !isConfirmedTransaction(tx)).map((tx) => tx.id));
+  return expenses.filter((expense) => !excluded.has(expense.linkedTransactionId ?? ""));
 }
 
 export function computeTripSummary(
@@ -359,7 +366,7 @@ export function computeOutingRollupAmount(
   ledgerTransactions: Transaction[] = [],
   outingId?: string,
 ) {
-  const fromExpenses = expenses.reduce(
+  const fromExpenses = financialOutingExpenses(expenses, ledgerTransactions).reduce(
     (sum, expense) => sum + (Number(expense.amount) || 0),
     0,
   );
@@ -397,6 +404,7 @@ function unlinkedOutingLedgerRows(
   );
 
   return ledgerTransactions.filter((tx) => {
+    if (!isConfirmedTransaction(tx)) return false;
     if (tx.outingId !== outingId) return false;
     if (tx.type !== "expense") return false;
     // Display-only trip total line — never part of the total it represents.
@@ -425,7 +433,7 @@ export function computeOutingUserPaidAmount(
   outingId?: string,
 ) {
   const currentMember = getCurrentUserMember(outing.members);
-  const fromExpenses = expenses.reduce((sum, expense) => {
+  const fromExpenses = financialOutingExpenses(expenses, ledgerTransactions).reduce((sum, expense) => {
     if (!currentMember || expense.paidByMemberId !== currentMember.id) return sum;
     return sum + (Number(expense.amount) || 0);
   }, 0);
