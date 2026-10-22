@@ -206,6 +206,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const isAuthRoute = pathname.startsWith("/auth");
   // Public no-login share links render standalone, outside the app shell.
   const isShareRoute = pathname.startsWith("/share");
+  // Public compliance pages render standalone, outside the app shell without requiring login.
+  const isPublicDocRoute =
+    pathname === "/privacy" ||
+    pathname.startsWith("/privacy/") ||
+    pathname === "/delete-account" ||
+    pathname.startsWith("/delete-account/");
+  const isPublicStandaloneRoute = isAuthRoute || isShareRoute || isPublicDocRoute;
 
   useEffect(() => {
     // viewerAllowedPaths are the real app's own routes, for the separate
@@ -214,7 +221,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     // entirely — without this guard, every share link redirects to "/"
     // here and then gets bounced again by the sign-in effect below, since
     // an anonymous visitor never has a real Supabase session.
-    if (!isReadOnlyViewer || isShareRoute) return;
+    if (!isReadOnlyViewer || isShareRoute || isPublicDocRoute) return;
 
     const isAllowed = viewerAllowedPaths.some((path) =>
       path === "/" ? pathname === "/" : pathname.startsWith(path),
@@ -223,7 +230,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (!isAllowed) {
       router.replace("/");
     }
-  }, [isReadOnlyViewer, isShareRoute, pathname, router]);
+  }, [isPublicDocRoute, isReadOnlyViewer, isShareRoute, pathname, router]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -236,12 +243,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [isLoading]);
 
   useEffect(() => {
-    if (isAuthRoute || isShareRoute) return;
+    if (isPublicStandaloneRoute) return;
     if (isLoading && !authTimedOut) return;
     if (!user && !authUser) {
       router.replace("/auth/sign-in");
     }
-  }, [authTimedOut, authUser, isAuthRoute, isShareRoute, isLoading, router, user]);
+  }, [authTimedOut, authUser, isPublicStandaloneRoute, isLoading, router, user]);
 
   // Admins can switch between User View and Admin View seamlessly.
   // The server-side /admin layout guard enforces 403 for unauthorized users.
@@ -250,7 +257,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return <SupabaseSetupScreen />;
   }
 
-  if (isAuthRoute || isShareRoute) {
+  if (isPublicStandaloneRoute) {
     return <>{children}</>;
   }
 
