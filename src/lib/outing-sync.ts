@@ -18,6 +18,174 @@ export function withoutOutingUnlinkedTag(tags?: string[]) {
   return (tags ?? []).filter((t) => t !== OUTING_UNLINKED_TAG);
 }
 
+/** Statuses that are never trip spend (same rule as the mobile app). */
+const NOT_TRIP_SPEND_STATUSES = new Set([
+  "pending",
+  "unverified",
+  "rejected",
+  "cancelled",
+  "failed",
+  "reversed",
+  "deleted",
+]);
+
+/** Only a confirmed payment can be trip spend. */
+export function isOutingSpendStatus(transaction: Transaction) {
+  return !NOT_TRIP_SPEND_STATUSES.has(
+    String(transaction.status ?? "completed").toLowerCase(),
+  );
+}
+
+type WallClock = {
+  y: number;
+  m: number;
+  d: number;
+  h: number;
+  mi: number;
+  s: number;
+  ms: number;
+  /** Written as a date only (no time, or exactly midnight). */
+  dateOnly: boolean;
+  /** "YYYY-MM-DD" as written. */
+  day: string;
+};
+
+const WALL_CLOCK =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * Date and time exactly as written, offset ignored. Trip start / end are
+ * wall-clock values: web saves a bare date (stored as `T00:00:00Z`) and the
+ * mobile app saves its local time without an offset (stored as if UTC), so
+ * `2026-10-22T14:07:33+00:00` means 2:07 pm on the user's clock.
+ */
+function wallClock(value: string): WallClock | null {
+  const m = WALL_CLOCK.exec(value.trim());
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const h = Number(m[4] ?? 0);
+  const mi = Number(m[5] ?? 0);
+  const s = Number(m[6] ?? 0);
+  const ms = Number(((m[7] ?? "") + "000").slice(0, 3));
+  return {
+    y,
+    m: mo,
+    d,
+    h,
+    mi,
+    s,
+    ms,
+    dateOnly: h === 0 && mi === 0 && s === 0 && ms === 0,
+    day: `${m[1]}-${m[2]}-${m[3]}`,
+  };
+}
+
+/** The viewer's IANA time zone (the browser's, where the sync runs). */
+function viewerTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/** Offset of [timeZone] from UTC at instant [utcMs], in ms. */
+function zoneOffsetMs(utcMs: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(utcMs));
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+  return asUtc - Math.floor(utcMs / 1000) * 1000;
+}
+
+/** The instant a wall-clock time happens in [timeZone]. */
+function zonedMs(
+  y: number,
+  m: number,
+  d: number,
+  h: number,
+  mi: number,
+  s: number,
+  ms: number,
+  timeZone: string,
+) {
+  const guess = Date.UTC(y, m - 1, d, h, mi, s, ms);
+  const first = guess - zoneOffsetMs(guess, timeZone);
+  const second = guess - zoneOffsetMs(first, timeZone);
+  return second;
+}
+
+function nextDay(day: string) {
+  const [y, m, d] = day.split("-").map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  return next.toISOString().slice(0, 10);
+}
+
+/**
+ * Whether a transaction that happened at [at] belongs inside the trip
+ * window: from the moment the trip started to the end of its last day.
+ *
+ *  - A trip started with a time (the mobile app stores the activation
+ *    time) begins at that moment: an earlier same-day spend stays out.
+ *  - A date-only start means the whole start day.
+ *  - [at] with a time is an instant (the mobile app sends UTC); a
+ *    date-only [at] cannot be shown to be after a timed start on the same
+ *    day, so it joins only from the next day (or any day of a date-only
+ *    start).
+ *
+ * [timeZone] is the calendar the dates belong to — the viewer's by
+ * default. Never relies on a server's local zone when one is passed.
+ */
+export function isWithinOutingWindow(
+  outing: Outing,
+  at: string,
+  timeZone: string = viewerTimeZone(),
+) {
+  if (!at || !outing.startDate) return false;
+  const start = wallClock(outing.startDate);
+  if (!start) return false;
+  const end = wallClock(outing.endDate || outing.startDate);
+  if (!end) return false;
+
+  const tx = wallClock(at);
+  if (tx && tx.dateOnly && !/[T ]/.test(at.trim())) {
+    // Bare "YYYY-MM-DD" transaction date.
+    if (tx.day > end.day) return false;
+    if (tx.day > start.day) return true;
+    return start.dateOnly && tx.day === start.day;
+  }
+
+  const txMs = Date.parse(at);
+  if (!Number.isFinite(txMs)) return false;
+  const startMs = start.dateOnly
+    ? zonedMs(start.y, start.m, start.d, 0, 0, 0, 0, timeZone)
+    : zonedMs(
+        start.y,
+        start.m,
+        start.d,
+        start.h,
+        start.mi,
+        start.s,
+        start.ms,
+        timeZone,
+      );
+  const [ny, nm, nd] = nextDay(end.day).split("-").map(Number);
+  const endMs = zonedMs(ny, nm, nd, 0, 0, 0, 0, timeZone) - 1;
+  return txMs >= startMs && txMs <= endMs;
+}
+
 /** Inclusive calendar range for an outing (startDate through endDate, or single day on startDate). */
 export function isWithinOutingDates(outing: Outing, date: string) {
   if (!date || !outing.startDate) return false;
@@ -109,15 +277,22 @@ export function isBankLikeTransactionSource(transaction: Transaction) {
  * Rules (one transaction = normal OR outing, never both / never forced):
  *  - If user already set outingId → reconcile that outing only
  *  - If user opted out (outing-unlinked tag) → none
- *  - Auto-link ONLY bank/SMS/import rows during active auto-add trips
+ *  - Auto-link ONLY bank/SMS/import rows during active auto-add trips,
+ *    inside the trip window (start moment → end of last day)
+ *  - Never a pending / failed / cancelled / reversed / rejected payment
  *  - Manual web/app "Add expense" stays normal unless user picks an outing
  */
 export function getOutingCandidatesForTransaction(
   transaction: Transaction,
   outings: Outing[],
   expenses: OutingExpense[],
+  timeZone?: string,
 ) {
   if (transaction.type !== "expense") return [];
+  // Not a confirmed payment: never trip spend — also not for a row already
+  // tagged with an outing (a payment reversed after it was linked must not
+  // get its trip expense back).
+  if (!isOutingSpendStatus(transaction)) return [];
   // Transfers / settlements are not trip spends.
   const cat = (transaction.category ?? "").toLowerCase();
   if (cat === "settlements" || cat === "transfer") return [];
@@ -148,7 +323,7 @@ export function getOutingCandidatesForTransaction(
     (outing) =>
       outing.status === "active" &&
       !outing.isQuickSplit &&
-      isWithinOutingDates(outing, date),
+      isWithinOutingWindow(outing, date, timeZone),
   );
 }
 
