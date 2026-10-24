@@ -19,6 +19,7 @@ export async function updateSession(request: NextRequest) {
         maxAge: SESSION_MAX_AGE_SEC,
         path: "/",
         sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
       },
       cookies: {
         getAll() {
@@ -35,6 +36,7 @@ export async function updateSession(request: NextRequest) {
               maxAge: options?.maxAge ?? SESSION_MAX_AGE_SEC,
               path: options?.path ?? "/",
               sameSite: options?.sameSite ?? "lax",
+              secure: process.env.NODE_ENV === "production" ? true : (options?.secure ?? false),
             }),
           );
         },

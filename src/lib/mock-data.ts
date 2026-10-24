@@ -225,6 +225,7 @@ export const defaultCategories: Category[] = [
   { id: "cat-exp-14", name: "Gifts & Donations", type: "expense", color: "#f59e0b", isDefault: true },
   { id: "cat-exp-15", name: "Miscellaneous", type: "expense", color: "#94a3b8", isDefault: true },
   { id: "cat-exp-16", name: "Investment", type: "expense", color: "#6366f1", isDefault: true, isInvestment: true },
+  { id: "cat-exp-17", name: "Goal", type: "expense", color: "#6366f1", icon: "target", isDefault: true },
 ];
 
 export const defaultPurposes: Purpose[] = [

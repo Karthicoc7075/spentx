@@ -484,7 +484,7 @@ export function TransactionsPage() {
             ? "Linked to outing — trip total updated."
             : undefined,
         });
-        await addTransaction({ ...values, tags });
+        const created = await addTransaction({ ...values, tags });
         const outingId = values.outingId;
         void (async () => {
           try {
@@ -498,6 +498,7 @@ export function TransactionsPage() {
             console.error("Post-save financial refresh failed", refreshError);
           }
         })();
+        return created;
       }
     } catch (submitError) {
       notify({

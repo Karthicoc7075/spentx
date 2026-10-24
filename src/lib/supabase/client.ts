@@ -83,6 +83,7 @@ export function createClient() {
         maxAge: SESSION_MAX_AGE_SEC,
         path: "/",
         sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
       },
       auth: {
         autoRefreshToken: false,
@@ -98,6 +99,7 @@ export function createClient() {
         maxAge: SESSION_MAX_AGE_SEC,
         path: "/",
         sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
       },
       auth: {
         autoRefreshToken: true,

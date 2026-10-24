@@ -10,7 +10,6 @@ import {
   ReactNode,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useState,
 } from "react";
@@ -113,27 +112,15 @@ function readHasSessionFlag() {
 
 export function SupabaseProvider({ children }: { children: ReactNode }) {
   const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
-  const [profileName, setProfileName] = useState<string | null>(null);
-  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
-  const [cachedUser, setCachedUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(() => isSupabaseConfigured);
-
-  useLayoutEffect(() => {
+  const [cachedUser, setCachedUser] = useState<User | null>(readCachedUser);
+  const [profileName, setProfileName] = useState<string | null>(() => readCachedUser()?.name ?? null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(() => readCachedUser()?.photoUrl ?? null);
+  const [isLoading, setIsLoading] = useState(() => {
+    if (!isSupabaseConfigured) return false;
     const cached = readCachedUser();
-    const hasSession = readHasSessionFlag();
-
-    if (cached) {
-      setCachedUser(cached);
-      setProfileName(cached.name);
-      if (cached.photoUrl) setProfilePhotoUrl(cached.photoUrl);
-      setIsLoading(false);
-      return;
-    }
-
-    if (!hasSession) {
-      setIsLoading(false);
-    }
-  }, []);
+    if (cached) return false;
+    return readHasSessionFlag();
+  });
 
   useEffect(() => {
     async function syncProfileName(userId: string) {
@@ -165,7 +152,6 @@ export function SupabaseProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
-      setIsLoading(false);
       return;
     }
 

@@ -17,7 +17,7 @@ import { useTransactions } from "@/hooks/useTransactions";
 import { useAccounts } from "@/hooks/useAccounts";
 import { usePurposes } from "@/hooks/usePurposes";
 import { getDefaultPersonalPurpose } from "@/lib/purposes";
-import { parseAmountInput } from "@/lib/investments";
+import { GOAL_TX_CATEGORY, parseAmountInput } from "@/lib/investments";
 import { useToast } from "@/providers/toast-provider";
 import { formatCurrency } from "@/lib/utils";
 import { Check, Coins, Landmark, Loader2, Sparkles } from "lucide-react";
@@ -87,14 +87,14 @@ export function QuickDepositModal({
           type: "expense",
           amount: depositAmount,
           totalAmount: depositAmount,
-          merchant: `Savings: ${goal.name}`,
-          category: "Settlements",
+          merchant: goal.name,
+          category: GOAL_TX_CATEGORY,
           account: sourceAccount,
           purpose: getDefaultPersonalPurpose(purposes)?.id ?? "personal",
           source: "manual",
           date: new Date().toISOString(),
-          note: `Quick deposit into savings goal "${goal.name}"`,
-          tags: ["savings", "transfer", `goal:${goal.id}`],
+          note: `Deposit into savings goal "${goal.name}"`,
+          tags: ["goal", "savings", `goal:${goal.id}`],
           paymentMethod: "UPI",
         });
         txId = tx.id;

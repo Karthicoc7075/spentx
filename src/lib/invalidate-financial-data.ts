@@ -43,6 +43,8 @@ export async function invalidateFinancialData(
     queryKeys.allFriendSplits(userId),
     queryKeys.allFriendSettlements(userId),
     queryKeys.friends(userId),
+    queryKeys.savingsGoals(userId),
+    queryKeys.investments(userId),
   ];
 
   if (options.outingId) {

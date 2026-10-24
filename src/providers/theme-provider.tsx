@@ -26,8 +26,10 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("dark");
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("dark");
+  const [theme, setThemeState] = useState<Theme>(readStoredTheme);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() =>
+    resolveTheme(readStoredTheme())
+  );
 
   const setTheme = useCallback((nextTheme: Theme) => {
     setThemeState(nextTheme);
@@ -38,12 +40,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const storedTheme = readStoredTheme();
-    const resolved = resolveTheme(storedTheme);
-    setThemeState(storedTheme);
-    setResolvedTheme(resolved);
-    applyTheme(storedTheme);
-  }, []);
+    applyTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     if (theme !== "system") return;

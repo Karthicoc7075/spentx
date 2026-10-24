@@ -47,6 +47,40 @@ export function isInvestmentTransaction(
   return isInvestmentCategory(transaction.category, categories);
 }
 
+export const GOAL_TX_CATEGORY = "Goal";
+
+export function isGoalCategory(categoryName?: string | null) {
+  const normalized = (categoryName || "").trim().toLowerCase();
+  return (
+    normalized === "goal" ||
+    normalized === "goals" ||
+    normalized === "savings goal" ||
+    normalized === "savings goals"
+  );
+}
+
+export function isGoalTransaction(transaction: Transaction) {
+  if (
+    transaction.isActive === false ||
+    Boolean(transaction.deletedAt) ||
+    transaction.status === "unverified" ||
+    transaction.status === "rejected" ||
+    transaction.status === "deleted"
+  ) {
+    return false;
+  }
+  const tags = transaction.tags ?? [];
+  if (tags.some((t) => t === "goal" || t.startsWith("goal:"))) return true;
+  return isGoalCategory(transaction.category);
+}
+
+export function isWealthSavingsTransaction(
+  transaction: Transaction,
+  categories: Category[] = [],
+) {
+  return isInvestmentTransaction(transaction, categories) || isGoalTransaction(transaction);
+}
+
 export function isTransferTransaction(transaction: Transaction) {
   const cat = (transaction.category ?? "").trim().toLowerCase();
   const tags = transaction.tags ?? [];

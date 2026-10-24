@@ -1,0 +1,35 @@
+AFTER snapshot taken 22 Oct 2026, 8:36 AM IST (read-only, by Grok Bot) with p0_snapshot.sql, after both Phase 0 migrations.
+Result: ALL 31 ROWS IDENTICAL to p0_snapshot_BEFORE_2026-10-22.txt (counts,
+fingerprints, every account balance, status = completed only).
+item                    rows  fingerprint
+account_purposes           4  3279e5250e61bda4c1455a06abbe2947
+accounts                  16  d36726fad7bd5f4b666899907fbeefb7
+balance 00cc6bc3           2  -2444.00
+balance 08ee7272           6  18526.00
+balance 0ea7c0b7           2  98000.00
+balance 1ef753ba           0  0.00
+balance 216399c9          14  -969778.00
+balance 23a28c25           2  -428.00
+balance 25992a1a           2  9000.00
+balance 36fc730c           0  0.00
+balance 6de118f6           0  969.00
+balance ca99b5fc           0  0.00
+balance cc5e909e           0  0.00
+balance deb1f2a8           0  0.00
+balance ebf7faf6          25  79392.36
+balance ed05fe76           0  0.00
+balance f2b0e12b           0  0.00
+balance f365893d           3  166.00
+balances_all              16  896f8da352124f47cd29fd7aacdbcb70
+categories                 7  520bacf1af8771d61e370961f2584404
+category_catalog         107  b96e77a9ae9e0c6f7989a5f8015f8780
+mcc_category_map         981  52a0a8057b57d09ec4bd9c760e17bb6f
+merchant_brand_keys     5902  31ef48c1eaa23c9833b9ae6a12df6957
+merchant_brands         1628  b5e69d39044d744301d9a2412ddc5bed
+merchant_keyword_rules   833  5bd78265c46db7bf9b0e63948bfb0cfb
+purposes                  15  e7ff3c0e346dc7b024ae2b00df75e0e1
+transaction_splits        79  60139987a1fdb8faea4e1d95b14a70fa
+transactions              75  72b65c2aaf40569bb3a9a85c79f8e804
+tx_status_values          75  completed
+user_merchant_category     0  d41d8cd98f00b204e9800998ecf8427e
+user_merchants            32  f29c59613b281f18da50d01a953d02d4

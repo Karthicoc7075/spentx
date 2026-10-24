@@ -560,6 +560,8 @@ async function handle(
     const value = upstream.headers.get(name);
     if (value !== null) responseHeaders.set(name, value);
   }
+  responseHeaders.set("X-Content-Type-Options", "nosniff");
+  responseHeaders.set("X-Frame-Options", "DENY");
 
   // HTTP 204 / 205 / 304 must not include a body. Undici's Response
   // constructor throws "Invalid response status code 204" if a body is

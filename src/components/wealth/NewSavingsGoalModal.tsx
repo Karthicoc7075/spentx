@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,11 +12,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAccounts } from "@/hooks/useAccounts";
+import { usePurposes } from "@/hooks/usePurposes";
 import { useSavingsGoals } from "@/hooks/useSavingsGoals";
+import { useTransactions } from "@/hooks/useTransactions";
 import { useToast } from "@/providers/toast-provider";
 import { cn } from "@/lib/utils";
-import { parseAmountInput } from "@/lib/investments";
-import { Calendar, Check, Infinity as InfinityIcon, Loader2, Sparkles, Target } from "lucide-react";
+import { GOAL_TX_CATEGORY, parseAmountInput } from "@/lib/investments";
+import { getDefaultPersonalPurpose } from "@/lib/purposes";
+import { Calendar, Check, Infinity as InfinityIcon, Landmark, Loader2, Sparkles, Target } from "lucide-react";
 import type { SavingsGoal } from "@/types";
 
 const PRESET_ICONS = [
@@ -56,8 +60,20 @@ export function NewSavingsGoalModal({
   initialGoal,
   onSuccess,
 }: NewSavingsGoalModalProps) {
-  const { addGoal, updateGoal } = useSavingsGoals();
+  const { addGoal, updateGoal, addFunds } = useSavingsGoals();
+  const { accounts } = useAccounts();
+  const { purposes } = usePurposes();
+  const { addTransaction, deleteTransaction } = useTransactions();
   const { notify } = useToast();
+
+  const bankAccounts = useMemo(
+    () => accounts.filter((a) => a.isActive !== false && (a.type === "bank" || a.type === "wallet")),
+    [accounts],
+  );
+  const activePurposes = useMemo(
+    () => purposes.filter((p) => p.isActive !== false && !p.deletedAt),
+    [purposes],
+  );
 
   const [name, setName] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
@@ -67,8 +83,22 @@ export function NewSavingsGoalModal({
   const [targetDate, setTargetDate] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("🎯");
   const [selectedColor, setSelectedColor] = useState("indigo");
+  const [deductFromBank, setDeductFromBank] = useState(!initialGoal);
+  const [sourceChoice, setSourceChoice] = useState("");
+  const [purposeChoice, setPurposeChoice] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const sourceAccount =
+    sourceChoice && bankAccounts.some((a) => a.name === sourceChoice)
+      ? sourceChoice
+      : (bankAccounts.find((a) => a.type === "bank")?.name ?? bankAccounts[0]?.name ?? "");
+
+  const purposeId =
+    purposeChoice ||
+    getDefaultPersonalPurpose(activePurposes)?.id ||
+    activePurposes[0]?.id ||
+    "personal";
 
   useEffect(() => {
     if (initialGoal) {
@@ -80,6 +110,7 @@ export function NewSavingsGoalModal({
       );
       setSelectedIcon(initialGoal.icon || "🎯");
       setSelectedColor(initialGoal.color || "indigo");
+      setDeductFromBank(false);
       if (initialGoal.targetDate) {
         setHasDeadline(true);
         setTargetDate(initialGoal.targetDate.slice(0, 10));
@@ -96,6 +127,9 @@ export function NewSavingsGoalModal({
       setTargetDate("");
       setSelectedIcon("🎯");
       setSelectedColor("indigo");
+      setDeductFromBank(true);
+      setSourceChoice("");
+      setPurposeChoice("");
     }
     setError(null);
   }, [initialGoal, open]);
@@ -155,16 +189,45 @@ export function NewSavingsGoalModal({
         });
         if (updated && onSuccess) onSuccess(updated);
       } else {
+        const shouldDeduct = deductFromBank && savedVal > 0 && Boolean(sourceAccount);
+        // When deducting from bank, create goal with 0 saved initially so addFunds increments it atomically with transaction link
         const created = await addGoal({
           name: trimmedName,
           targetAmount: targetVal,
-          savedAmount: savedVal,
+          savedAmount: shouldDeduct ? 0 : savedVal,
           monthlyContribution: monthlyVal,
           targetDate: hasDeadline && targetDate ? targetDate : undefined,
           icon: selectedIcon,
           color: selectedColor,
           isActive: true,
         });
+
+        if (shouldDeduct && created) {
+          let txId: string | undefined;
+          try {
+            const tx = await addTransaction({
+              type: "expense",
+              amount: savedVal,
+              totalAmount: savedVal,
+              merchant: trimmedName,
+              category: GOAL_TX_CATEGORY,
+              account: sourceAccount,
+              purpose: purposeId,
+              source: "manual",
+              date: new Date().toISOString(),
+              transactionDate: new Date().toISOString(),
+              note: `Initial deposit for goal: ${trimmedName}`,
+              tags: ["goal", "savings", `goal:${created.id}`],
+              paymentMethod: "Bank Transfer",
+            });
+            txId = tx.id;
+            await addFunds(created.id, savedVal, { transactionId: txId });
+          } catch (txErr) {
+            if (txId) await deleteTransaction(txId).catch(() => undefined);
+            console.error("Failed to link bank debit to goal", txErr);
+          }
+        }
+
         notify({
           title: "Goal created",
           description: `"${trimmedName}" target set for ₹${targetVal.toLocaleString("en-IN")}.`,
@@ -242,6 +305,65 @@ export function NewSavingsGoalModal({
                 />
               </div>
             </div>
+
+            {!initialGoal && (parseAmountInput(savedAmount) ?? 0) > 0 ? (
+              <div className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label
+                      className="text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                      htmlFor="deduct-goal-bank-toggle"
+                    >
+                      <Landmark className="size-3.5 text-primary" />
+                      Deduct from Bank Account
+                    </Label>
+                    <p className="text-[11px] text-muted-foreground">
+                      Debits your account & records a linked Goal transaction in the ledger.
+                    </p>
+                  </div>
+                  <input
+                    id="deduct-goal-bank-toggle"
+                    type="checkbox"
+                    checked={deductFromBank}
+                    onChange={(e) => setDeductFromBank(e.target.checked)}
+                    className="size-4 rounded accent-primary cursor-pointer"
+                  />
+                </div>
+
+                {deductFromBank ? (
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border/50">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] font-medium text-muted-foreground">Debit Account</Label>
+                      <select
+                        value={sourceAccount}
+                        onChange={(e) => setSourceChoice(e.target.value)}
+                        className="w-full h-8 text-xs rounded-lg border bg-background px-2"
+                      >
+                        {bankAccounts.map((a) => (
+                          <option key={a.id} value={a.name}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[11px] font-medium text-muted-foreground">Purpose</Label>
+                      <select
+                        value={purposeId}
+                        onChange={(e) => setPurposeChoice(e.target.value)}
+                        className="w-full h-8 text-xs rounded-lg border bg-background px-2"
+                      >
+                        {activePurposes.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold">Monthly Contribution (₹, optional)</Label>

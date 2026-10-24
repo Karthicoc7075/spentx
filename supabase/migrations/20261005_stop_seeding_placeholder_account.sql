@@ -59,3 +59,4 @@ where a.name = 'Account 1'
     select 1 from public.transactions t
     where t.account_id = a.id
   );
+

@@ -370,7 +370,7 @@ export function DashboardPage() {
     setSlideOverOpen(false);
     notify({ title: "Transaction saved." });
     try {
-      await addTransaction(values);
+      return await addTransaction(values);
     } catch (err) {
       notify({
         title: "Couldn't save transaction",

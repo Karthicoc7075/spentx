@@ -9,6 +9,7 @@ import {
   Hash,
   IndianRupee,
   Landmark,
+  Lock,
   MapPin,
   Plus,
   ShoppingBag,
@@ -18,6 +19,7 @@ import {
   Tag,
   Target,
   Trash2,
+  TrendingUp,
   Users,
   X,
   type LucideIcon,
@@ -49,6 +51,17 @@ import { useFriends } from "@/hooks/useFriends";
 import { useFriendSplits } from "@/hooks/useFriendSplits";
 import { useOutings } from "@/hooks/useOutings";
 import { usePurposes } from "@/hooks/usePurposes";
+import { useInvestments } from "@/hooks/useInvestments";
+import { useSavingsGoals } from "@/hooks/useSavingsGoals";
+import {
+  INVESTMENT_TYPE_LABELS,
+  INVESTMENT_TYPES,
+  isGoalCategory,
+  isGoalTransaction,
+  isInvestmentCategory,
+  isInvestmentTransaction,
+} from "@/lib/investments";
+import type { InvestmentAssetType } from "@/types";
 import {
   getActivePurposes,
   getDefaultPersonalPurpose,
@@ -180,7 +193,7 @@ type AddTransactionSlideOverProps = {
   mode?: Transaction["type"];
   initialValues?: Transaction;
   /** Not called in Trip mode — that path writes an outing_expense directly. */
-  onSubmit?: (values: Omit<Transaction, "id">) => Promise<void>;
+  onSubmit?: (values: Omit<Transaction, "id">) => Promise<Transaction | void>;
   onDelete?: (transaction: Transaction) => Promise<void>;
   /** Forces Trip mode onto this specific outing (no picker) — used when
    * opened from inside that outing's own "Add expense" flow. Not reachable
@@ -259,6 +272,34 @@ export function AddTransactionSlideOver({
     Record<string, string>
   >({});
   const [tripSubmitting, setTripSubmitting] = useState(false);
+
+  // ---- Investments & Wealth Savings ----------------------------------------
+  const { save: saveInvestmentHolding, investments: holdings = [] } = useInvestments();
+  const { goals: savingsGoals = [], addFunds: addGoalFunds } = useSavingsGoals();
+
+  const initialAssetType = useMemo<InvestmentAssetType>(() => {
+    const assetTag = (initialValues?.tags ?? []).find((t) => t.startsWith("asset:"));
+    if (assetTag) {
+      const parsed = assetTag.replace("asset:", "") as InvestmentAssetType;
+      if (INVESTMENT_TYPES.includes(parsed)) return parsed;
+    }
+    if (initialValues) {
+      const invTag = initialValues.tags?.find((t) => t.startsWith("investment:"))?.replace("investment:", "");
+      const matched = holdings.find((h) =>
+        (invTag && h.id === invTag) ||
+        h.sourceTransactionIds?.includes(initialValues.id) ||
+        h.name.toLowerCase() === initialValues.merchant.toLowerCase()
+      );
+      if (matched && INVESTMENT_TYPES.includes(matched.type)) return matched.type;
+    }
+    return "mutual_fund";
+  }, [initialValues, holdings]);
+
+  const [assetType, setAssetType] = useState<InvestmentAssetType>("mutual_fund");
+
+  useEffect(() => {
+    setAssetType(initialAssetType);
+  }, [initialAssetType, open]);
 
   // ---- Split Expense (Purpose Split / Category Split / Purpose+Category) ----
   const [splitExpenseEnabled, setSplitExpenseEnabled] = useState(false);
@@ -521,17 +562,36 @@ export function AddTransactionSlideOver({
   }, [open, initialValues, currentPurpose, defaultPurposeId, setValue]);
 
   const currentType = watch("type");
+  const category = watch("category");
+
+  const isSelectedInvestment = isInvestmentCategory(category, allCategories);
+  const isSelectedGoal = isGoalCategory(category);
+  const isWealthSavings = isSelectedInvestment || isSelectedGoal;
+
+  const isInitialInvestment = useMemo(() => {
+    if (!initialValues) return false;
+    return isInvestmentTransaction(initialValues, allCategories);
+  }, [initialValues, allCategories]);
+
+  const isInitialGoal = useMemo(() => {
+    if (!initialValues) return false;
+    return isGoalTransaction(initialValues);
+  }, [initialValues]);
+
+  const isLockedWealthCategory = Boolean(initialValues) && (isInitialInvestment || isInitialGoal);
 
   /** Split Expense / Split with Friends are only offered for plain
    * Expense transactions — never for Income, never in Trip mode, never for a
    * transaction already linked to an outing, never for a suppressed derived row
-   * (e.g. the outing rollup transaction). */
+   * (e.g. the outing rollup transaction), and never for Investments or Goals. */
   const canOfferSplit =
     currentType === "expense" &&
     !lockedOutingId &&
     !initialExpense &&
     !hideOwnerToggle &&
-    !isEditingRealOutingTransaction;
+    !isEditingRealOutingTransaction &&
+    !isWealthSavings &&
+    !isLockedWealthCategory;
 
   // Reset / pre-populate the split modes whenever the sheet opens for a
   // (possibly different) transaction, or when canOfferSplit changes (e.g. toggling Expense / Income).
@@ -643,7 +703,6 @@ export function AddTransactionSlideOver({
   ]);
   const amount = watch("amount");
   const merchant = watch("merchant");
-  const category = watch("category");
   const account = watch("account");
   const purpose = watch("purpose");
   const amountNum = Number(amount) || 0;
@@ -982,12 +1041,48 @@ export function AddTransactionSlideOver({
         t.startsWith("last4:") ||
         t.startsWith("transfer_to:") ||
         t === "transfer" ||
-        t === "outing-rollup",
+        t === "outing-rollup" ||
+        t.startsWith("investment:") ||
+        t.startsWith("asset:") ||
+        t === "investment" ||
+        t.startsWith("goal:") ||
+        t === "goal" ||
+        t === "savings",
     );
-    const tags = [
-      ...preservedSystemTags,
-      ...(merchantIdentifier ? [`upi:${merchantIdentifier}`] : []),
-    ];
+
+    const existingHoldingTag = (initialValues?.tags ?? []).find((t) => t.startsWith("investment:"));
+    const investmentHoldingId =
+      existingHoldingTag?.replace("investment:", "") ??
+      (isSelectedInvestment ? crypto.randomUUID() : undefined);
+
+    const matchedGoal = isSelectedGoal
+      ? savingsGoals.find(
+          (g) =>
+            g.name.toLowerCase() === values.merchant.trim().toLowerCase() ||
+            (values.title && g.name.toLowerCase() === values.title.trim().toLowerCase())
+        )
+      : undefined;
+
+    const existingGoalTag = (initialValues?.tags ?? []).find((t) => t.startsWith("goal:"));
+    const goalTag = existingGoalTag ?? (matchedGoal ? `goal:${matchedGoal.id}` : undefined);
+
+    const wealthTags = isSelectedInvestment
+      ? [
+          "investment",
+          `asset:${assetType}`,
+          ...(investmentHoldingId ? [`investment:${investmentHoldingId}`] : []),
+        ]
+      : isSelectedGoal
+        ? ["goal", "savings", ...(goalTag ? [goalTag] : [])]
+        : [];
+
+    const tags = Array.from(
+      new Set([
+        ...preservedSystemTags,
+        ...wealthTags,
+        ...(merchantIdentifier ? [`upi:${merchantIdentifier}`] : []),
+      ]),
+    );
 
     const splitExpenseSplits: Transaction["splits"] =
       canOfferSplit && splitExpenseEnabled && splitExpenseValid
@@ -1022,7 +1117,7 @@ export function AddTransactionSlideOver({
     const submittedItems: Transaction["items"] = [];
 
     const submitFn = onSubmit ?? (async (tx) => {
-      await addTransactionDirect(tx);
+      return await addTransactionDirect(tx);
     });
 
     const isAddingAnother = Boolean(options?.keepOpen && !initialValues);
@@ -1047,11 +1142,15 @@ export function AddTransactionSlideOver({
         (c) => c.name === values.contributorSource || c.id === values.contributorSource,
       );
 
+      const finalCategory = isLockedWealthCategory
+        ? (initialValues?.category ?? values.category)
+        : values.category;
+
       const submitPromise = submitFn({
         type: values.type,
         merchant: values.merchant.trim(),
         title: values.title?.trim() || undefined,
-        category: values.category,
+        category: finalCategory,
         account: resolvedAccount?.name ?? accountName,
         accountName: resolvedAccount?.name ?? accountName,
         accountId: resolvedAccount?.id ?? initialValues?.accountId,
@@ -1102,7 +1201,49 @@ export function AddTransactionSlideOver({
         finishSuccessfulSubmit();
       }
 
-      await submitPromise;
+      const createdTx = (await submitPromise) as Transaction | undefined;
+
+      // Auto-save holding in public.investments when a new investment transaction is recorded
+      if (!initialValues && isSelectedInvestment && investmentHoldingId) {
+        void saveInvestmentHolding({
+          id: investmentHoldingId,
+          name: values.merchant.trim() || "Investment",
+          type: assetType,
+          investedAmount: amountNumber,
+          currentValue: amountNumber,
+          accountId: resolvedAccount?.id ?? null,
+          purpose: resolvedPurpose?.name ?? null,
+          notes: values.note?.trim() || null,
+          sourceTransactionIds: createdTx?.id ? [createdTx.id] : [],
+        }).catch((e) => console.error("Failed to auto-save investment holding", e));
+      } else if (!initialValues && isSelectedGoal && matchedGoal) {
+        // Link new goal contribution to savings goal
+        void addGoalFunds(matchedGoal.id, amountNumber, {
+          transactionId: createdTx?.id,
+          note: values.note?.trim() || `Deposit for ${matchedGoal.name}`,
+        }).catch((e) => console.error("Failed to link savings goal contribution", e));
+      } else if (initialValues && isSelectedInvestment) {
+        // Sync metadata (name, assetType, notes) on existing holding if edited
+        const invTag = initialValues.tags?.find((t) => t.startsWith("investment:"))?.replace("investment:", "");
+        const linkedHolding = holdings.find((h) =>
+          (invTag && h.id === invTag) ||
+          h.sourceTransactionIds?.includes(initialValues.id) ||
+          h.name.toLowerCase() === initialValues.merchant.toLowerCase()
+        );
+        if (linkedHolding) {
+          const nameChanged = values.merchant.trim() && values.merchant.trim() !== linkedHolding.name;
+          const typeChanged = assetType !== linkedHolding.type;
+          const notesChanged = (values.note?.trim() || null) !== (linkedHolding.notes || null);
+          if (nameChanged || typeChanged || notesChanged) {
+            void saveInvestmentHolding({
+              ...linkedHolding,
+              name: values.merchant.trim() || linkedHolding.name,
+              type: assetType,
+              notes: values.note?.trim() || linkedHolding.notes,
+            }).catch((e) => console.error("Failed to update investment holding metadata", e));
+          }
+        }
+      }
     } catch (error) {
       if (fingerprintId) forgetRecentCreate(fingerprintId);
       throw error;
@@ -1589,15 +1730,25 @@ export function AddTransactionSlideOver({
             <Field
               error={errors.merchant?.message}
               icon={FileText}
-              label="Title"
+              label={
+                isSelectedInvestment
+                  ? "Investment Name"
+                  : isSelectedGoal
+                    ? "Goal Name"
+                    : "Title"
+              }
             >
               <Input
                 className={fieldInputClassName}
                 list="merchant-suggestions"
                 placeholder={
-                  currentType === "income"
-                    ? "e.g. Salary, Freelance, Bonus"
-                    : "e.g. Amazon, Uber, Dinner with friends"
+                  isSelectedInvestment
+                    ? "e.g. Parag Parikh Flexi Cap, Tata Motors, Gold ETF"
+                    : isSelectedGoal
+                      ? "e.g. Emergency Pot, New Bike"
+                      : currentType === "income"
+                        ? "e.g. Salary, Freelance, Bonus"
+                        : "e.g. Amazon, Uber, Dinner with friends"
                 }
                 {...register("merchant")}
               />
@@ -1612,7 +1763,7 @@ export function AddTransactionSlideOver({
             <Field
               error={errors.account?.message}
               icon={Landmark}
-              label="Account"
+              label={isWealthSavings ? "Debit Bank Account" : "Account"}
             >
               <select className={fieldSelectClassName} {...register("account")}>
                 <option value="">Select account</option>
@@ -2153,6 +2304,24 @@ export function AddTransactionSlideOver({
                   </span>
                 </div>
               </div>
+            ) : isLockedWealthCategory ? (
+              <Field error={errors.category?.message} icon={Tag} label="Category">
+                <select
+                  className={cn(fieldSelectClassName, "opacity-75 cursor-not-allowed bg-muted/40 font-semibold")}
+                  disabled
+                  value={initialValues?.category ?? category}
+                >
+                  <option value={initialValues?.category ?? category}>
+                    {initialValues?.category ?? category}
+                  </option>
+                </select>
+                <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2.5 py-1.5 rounded-lg border border-amber-500/20">
+                  <Lock className="size-3.5 shrink-0" />
+                  <span>
+                    Category locked: Linked to {isInitialInvestment ? "an Investment holding" : "a Savings Goal"} and cannot be changed.
+                  </span>
+                </div>
+              </Field>
             ) : (
               <Field error={errors.category?.message} icon={Tag} label="Category">
                 <select
@@ -2178,6 +2347,23 @@ export function AddTransactionSlideOver({
                 ) : null}
               </Field>
             )}
+
+            {/* Asset Type selector for Investment */}
+            {isSelectedInvestment ? (
+              <Field icon={TrendingUp} label="Asset Type">
+                <select
+                  className={fieldSelectClassName}
+                  value={assetType}
+                  onChange={(e) => setAssetType(e.target.value as InvestmentAssetType)}
+                >
+                  {INVESTMENT_TYPES.map((typeKey) => (
+                    <option key={typeKey} value={typeKey}>
+                      {INVESTMENT_TYPE_LABELS[typeKey]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
 
             {/* Purpose — single field, or replaced by Purpose Split rows.
                 Trip mode inherits the outing's Purpose automatically. In
