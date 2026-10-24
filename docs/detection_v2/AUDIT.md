@@ -150,8 +150,8 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 #### Phase 1 — Data Models & Storage
 * `Mobile app/SpentX/lib/features/sms/models/raw_queue_item.dart` *(New — In-memory Dart data class representing items read from the native queue via method channel; NOT a Hive box)*
 * `Mobile app/SpentX/lib/features/sms/models/pending_hold.dart` *(New — Wait/pending SMS holding model with 48h expiry)*
-* `Mobile app/SpentX/lib/features/sms/models/pending_item.dart` *(New — Typed pending card item for review screen)*
-* `Mobile app/SpentX/lib/features/sms/v4/models/merchant_rule.dart` *(Modify / Extend — Auto-add disabled flag)*
+* `Mobile app/SpentX/lib/features/sms/models/pending_item.dart` *(New — Typed presentation wrapper for detected_sms_box, pending_accounts, and unparsed SMS; zero new Hive boxes)*
+* `Mobile app/SpentX/lib/core/models/merchant_rule.dart` *(Modify / Extend — Auto-add disabled flag)*
 * `Mobile app/SpentX/test/detection_v2/phase1_models_test.dart` *(New)*
 
 #### Phase 2 — Intake & Native Queue
@@ -215,8 +215,8 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 
 1. **`Mobile app/SpentX/lib/models/transaction.dart`**  
    *Rationale:* Must hold detection `idempotencyKey`, multi-source event references (`sources`), and `impactsTotals = false` so financial calculations exclude failed transactions.
-2. **`Mobile app/SpentX/lib/features/accounts/domain/account_model.dart`**  
-   *Rationale:* Must hold `accountType` (savingsCurrent, creditCard, wallet), `last4`, `bankName`, and `isIgnored` ("Not Mine") flags set during New Account discovery.
+2. **`Mobile app/SpentX/lib/models/account_model.dart`**  
+   *Rationale:* Real stored Account model (Hive settings box); holds `isIgnored` ("Not Mine") flag and account evidence metadata.
 3. **`Mobile app/SpentX/lib/data/local/safe_box_migration.dart`**  
    *Rationale:* Must provide safe Hive migration defaults for existing stored transactions and accounts so no historical user data is corrupted.
 4. **`Mobile app/SpentX/lib/core/finance/tx_ref_key.dart`**  
@@ -370,3 +370,48 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 
 ### 11. Fixtures Reuse
 - Reusing and extending existing regression corpus at `Mobile app/SpentX/assets/sms/sms_regression_corpus.json` (and `assets/Mobile App Account Creation Corpus.json`). No redundant fixture folders created.
+
+---
+
+## 11. Phase 1 Execution & Master Prompt Additions
+
+### 1. Phase 1 Execution Summary
+- **Item A — Stored Account Model Check:** Confirmed that `lib/models/account_model.dart` (`AccountModel`) is the real stored account model (persisted as JSON in `Hive.box('settings').get('onboardingAccounts')`). `lib/features/accounts/domain/account_model.dart` is an unused legacy prototype with no registered Hive adapter.
+- **Item B — Zero New Hive Boxes for Pending Items:** Implemented `lib/features/sms/models/pending_item.dart` as a pure domain/presentation wrapper around existing `detected_sms_box` records (`PendingTransaction`), `pending_accounts` (`PendingAccount`), and unparsed template request candidates. Zero new Hive boxes created.
+- **Model Additions Implemented (Strictly Additive):**
+  - `Transaction` (`lib/models/transaction.dart`): Added `idempotencyKey` (`String?`), `sources` (`List<String>`), and `impactsTotals` (`bool`, default `true`). Updated `toJson()`, `fromJson()`, and `copyWith()`. Note: `impactsTotals` is only emitted in `toJson()` when `false` to maintain byte-for-byte rollback compatibility for existing transactions.
+  - `AccountModel` (`lib/models/account_model.dart`): Added `isIgnored` (`bool`, default `false`). Updated constructor, `toJson()`, `fromJson()`, and `copyWith()`.
+  - `MerchantRule` (`lib/core/models/merchant_rule.dart`): Added `autoAddDisabled` (`bool`, default `false`). Updated constructor, `toMap()`, `fromMap()`, and `copyWith()`.
+  - `RawQueueItem` (`lib/features/sms/models/raw_queue_item.dart`): In-memory Dart data class representing native queue items with `userId`, `attempts`, `lastAttemptAt`, and auto-derived `isNotification`.
+  - `PendingHold` (`lib/features/sms/models/pending_hold.dart`): Wait/pending message model with 48h expiration (`isExpired` calculation).
+- **Test Suite Verification:**
+  - `test/detection_v2/phase1_models_test.dart`: 18 tests created and passing (100% pass).
+  - Foundation and regression tests (`phase0_data_foundations_test`, `phase0_legacy_compat_test`, `phase0_legacy_totals_test`, `pending_account_test`, `pending_sms_owner_test`): all passing.
+
+### 2. Additions Confirmed for Phase 2 (Intake & Native Queue)
+- **Item C — Direct Boot Catch-up Scan & Permission Verification:**
+  - Non-directBootAware receivers do not receive broadcasts before first unlock, and broadcasts are missed when force-stopped.
+  - Add native catch-up scan on `BOOT_COMPLETED` / `USER_UNLOCKED` and on app open, querying telephony inbox SMS newer than the native last-processed timestamp.
+  - Cross-source deduplication prevents duplicate adds.
+  - On notification listener connect, inspect `getActiveNotifications()` for user-selected financial apps.
+  - *Permission confirmation:* Verified that `<uses-permission android:name="android.permission.READ_SMS"/>` is already declared in `Mobile app/SpentX/android/app/src/main/AndroidManifest.xml` (line 5) and documented in `docs/GOOGLE_PLAY_SMS_PERMISSION_DECLARATION.md` and `docs/PRIVACY_POLICY.md`.
+- **Item D — Queue Gates and User Safety:**
+  - Detection OFF gate: Receiver does not enqueue new items; existing items are purged.
+  - Signed-out buffer: Max 7 days or 500 items ring buffer, oldest dropped first.
+  - Per-item User Scoping: Every queue item stores the `userId` it was captured for. On sign-out, purge the queue. Never process items into a different user's account.
+- **Item E — Benchmark & Harness Fix:**
+  - Fix `background_single_writer_test.dart` harness (fake async / proper timeout) before modifying queue code.
+  - Measure 500-SMS processing time on device/emulator and report metrics.
+
+### 3. Additions Confirmed for Phase 4 (Parsers & Unparsed Handling)
+- **Item F — Axis vs PaytmPaymentsBank Parser Bug:**
+  - Fix Axis Bank parser regex precedence conflict where Paytm keywords preempt Axis.
+  - Remove both related tests from `baseline_failures.txt` once verified passing.
+- **Item G — Proposed Replacement Assertion for `sms_regression_corpus_test`:**
+  - Replacement proposal: Verify that every `mustDetect` message resolves the correct `amount`, `type`, `accountLast4`, and `bank` without hardcoding specific legacy template names. Proposal will be submitted for user review and approval before touching the test.
+
+### 4. Additions Confirmed for Phase 8 / 9 (Backend & Sync)
+- **Item H — Supabase Schema & Legacy Compatibility Check:**
+  - Verify Supabase `transactions` table schema for `status` and `impactsTotals` columns. Include safe defaults (`status = 'success'`, `impactsTotals = true`) in the migration if missing.
+  - Verify older app version behavior for synced failed transactions before enabling sync of failed records.
+
