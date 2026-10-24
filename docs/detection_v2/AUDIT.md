@@ -16,7 +16,7 @@
 | **Dependency Injection** | Riverpod Providers (e.g. `transactionProvider`, `categoryProvider`, `pendingAccountProvider`) |
 | **Local Database** | Hive 2.2.3 / `hive_flutter: ^1.1.0` wrapped by `SecureHive` |
 | **Encryption & Keystore** | `SecureHive` via `HiveAesCipher` using random 256-bit AES keys stored in Android Keystore via `flutter_secure_storage: ^10.0.0` (`HiveKeyManager.dart`) |
-| **Hive Type IDs in Use** | • `typeId: 0` ➔ `Account` (`lib/features/accounts/domain/account_model.dart`)<br>• `typeId: 1` ➔ `TransactionModel` (`lib/features/transactions/domain/transaction_model.dart`)<br>*(All other boxes store typed Map or JSON primitives via SecureHive)* |
+| **Real Transaction Model** | **`lib/models/transaction.dart`** is the active model stored by Hive (as serialized JSON in `Hive.box('transactions').get('list')`) and used across `TransactionProvider`, `SyncService`, and UI. Only this file receives additive fields (`idempotencyKey`, `sources`, `impactsTotals`).<br>*(Note: `lib/features/transactions/domain/transaction_model.dart` has `@HiveType(typeId: 1)` but its adapter is never registered; it is an unused legacy prototype).* |
 | **Active Hive Boxes** | `transactions`, `accounts`, `settings`, `vault`, `merchant_aliases`, `categories`, `outings`, `friend_splits`, `friends`, `friend_reminders`, `pending_detections`, `detected_sms_box`, `pending_accounts`, `ignored_detections`, `budgets`, `monthly_plans`, `investments`, `notification_history`, `pending_verification_history`, `wealth_snapshots`, `source_evidence`, `audit_log`, `sms_template_rules`, `sms_detection_rules`, `sms_block_rules`, `merchant_rules_box`, `merchants_box`, `sync_queue` |
 | **Native Android Layer** | `Kotlin 2.1.0` • Android SDK Compile `35` • Min SDK `24` • Target SDK `35`<br>• `SmsReceiver.kt`: Intercepts `android.provider.Telephony.SMS_RECEIVED`<br>• `NotificationListenerService.kt`: Intercepts push notifications from user-picked apps (`notif:<package>`)<br>• `SmsPendingQueue.kt` / `DurableQueue.kt`: Native encrypted SQLite/Prefs queue (reused for raw queueing)<br>• `SpentXBackgroundWorker.kt` & `SmsWorkScheduler.kt`: WorkManager background queue drainage (`workmanager: ^0.7.0`)<br>• `BootReceiver.kt`: Reschedules listeners & workers upon device reboot |
 | **Backend & Sync** | `Supabase` (PostgreSQL 15+, Supabase Auth, Row-Level Security, Realtime Sync)<br>• Web/Admin: Next.js 15 (App Router, React 19, TypeScript, TailwindCSS)<br>• Tables for detection: `sms_template_rules`, `sms_detection_rules`, `sms_block_rules`, `global_settings` (`rules_version`), `merchants`, `categories` |
@@ -119,11 +119,12 @@ SpentX currently possesses a working, multi-layered detection infrastructure, bu
 ## 4. Old Code to Remove Later (Phase 11 Candidates)
 
 The following files and legacy paths are candidates for removal in Phase 11 after the new flow is validated and passing all tests:
-1. `Mobile app/SpentX/lib/features/sms/v4/bank_sms_template_catalog.dart`: Deprecated hardcoded static JSON catalog (replaced by dynamic `sms_template_rules`).
-2. `Mobile app/SpentX/lib/features/sms/detected/detection_queue.dart`: Redundant legacy in-memory deduplication queues replaced by `RawQueueItem` + `TxRefKey`.
-3. `Mobile app/SpentX/lib/features/sms/rules/engine/sms_rule_engine.dart` (`_tryRegexRules` function): Unsafe regex guessing that misclassifies transactions.
-4. `Mobile app/SpentX/lib/features/sms/detected/sms_pipeline_test_runner.dart`: Legacy scratch testing harness replaced by clean unit test suite.
-5. `Mobile app/SpentX/lib/features/sms/rules/sms_template_rules_importer.dart`: One-off manual migration script.
+*(Note: `lib/features/sms/v4/bank_sms_template_catalog.dart` / `assets/sms/bank_sms_templates_v4.json` will **NOT** be removed. It is kept permanently as the bundled offline seed for admin templates when cache is empty on fresh installs without internet).*
+
+1. `Mobile app/SpentX/lib/features/sms/detected/detection_queue.dart`: Redundant legacy in-memory deduplication queues replaced by `RawQueueItem` + `TxRefKey`.
+2. `Mobile app/SpentX/lib/features/sms/rules/engine/sms_rule_engine.dart` (`_tryRegexRules` function): Unsafe regex guessing that misclassifies transactions.
+3. `Mobile app/SpentX/lib/features/sms/detected/sms_pipeline_test_runner.dart`: Legacy scratch testing harness replaced by clean unit test suite.
+4. `Mobile app/SpentX/lib/features/sms/rules/sms_template_rules_importer.dart`: One-off manual migration script.
 
 ---
 
@@ -147,16 +148,16 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 ### Files strictly inside `lib/features/sms/`, `lib/features/sms_parser/`, native detection code, or Supabase detection tables:
 
 #### Phase 1 — Data Models & Storage
-* `Mobile app/SpentX/lib/features/sms/models/raw_queue_item.dart` *(New — Encrypted native queue data model)*
+* `Mobile app/SpentX/lib/features/sms/models/raw_queue_item.dart` *(New — In-memory Dart data class representing items read from the native queue via method channel; NOT a Hive box)*
 * `Mobile app/SpentX/lib/features/sms/models/pending_hold.dart` *(New — Wait/pending SMS holding model with 48h expiry)*
 * `Mobile app/SpentX/lib/features/sms/models/pending_item.dart` *(New — Typed pending card item for review screen)*
 * `Mobile app/SpentX/lib/features/sms/v4/models/merchant_rule.dart` *(Modify / Extend — Auto-add disabled flag)*
 * `Mobile app/SpentX/test/detection_v2/phase1_models_test.dart` *(New)*
 
 #### Phase 2 — Intake & Native Queue
-* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt` *(Modify — Direct reuse and extension of existing SQLite/Prefs queue for raw intake)*
-* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt` *(Modify — Write raw item to queue first before any processing)*
-* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt` *(Modify — Enqueue raw notification before event channel broadcast)*
+* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt` *(Modify — Direct reuse and extension of existing Android Keystore AES-256-GCM encrypted queue for raw intake)*
+* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt` *(Modify — Write raw item to encrypted native queue first before any processing)*
+* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt` *(Modify — Enqueue raw notification to encrypted native queue before event channel broadcast)*
 * `Mobile app/SpentX/lib/features/sms/background/native_queue_client.dart` *(Modify — Idempotent queue drainage and retry handling)*
 * `Mobile app/SpentX/lib/features/sms/sms_service.dart` *(Modify — Inbound dispatch to queue worker)*
 * `Mobile app/SpentX/test/detection_v2/phase2_queue_test.dart` *(New)*
@@ -173,9 +174,9 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/lib/features/sms/rules/engine/sms_template_engine.dart` *(Modify — Admin template lookup precedence)*
 * `Mobile app/SpentX/lib/features/sms_parser/notification_parse_rules.dart` *(Modify — Common & Built-in App rules)*
 * `Mobile app/SpentX/lib/features/sms/core/sms_masker.dart` *(New — Strict masking of account, balance, reference, names)*
-* `Mobile app/SpentX/lib/features/sms/core/template_request_service.dart` *(New — Opt-in masked template request queue)*
+* `Mobile app/SpentX/lib/features/sms/core/template_request_service.dart` *(New — Opt-in masked template request calling Supabase RPC)*
 * `Mobile app/SpentX/test/detection_v2/phase4_parsers_test.dart` *(New)*
-* `Mobile app/SpentX/test/fixtures/sms_corpus/` *(New test fixtures)*
+* `Mobile app/SpentX/assets/sms/sms_regression_corpus.json` *(Extend — Reuse existing regression corpus)*
 
 #### Phase 5 — Account Matching & Discovery
 * `Mobile app/SpentX/lib/features/sms/autosave/strict_account_matcher.dart` *(Modify — Composite bank + last4 + type)*
@@ -196,12 +197,9 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/test/detection_v2/phase8_save_sync_test.dart` *(New)*
 
 #### Phase 9 — Backend Changes
-* `supabase/migrations/20261025000000_detection_v2_schema.sql` *(New — Table `sms_template_requests` with RLS, version triggers, dedupe RPC)*
-* `src/app/api/detection/block-rules/route.ts` *(New / Modify — Versioned block rules endpoint)*
-* `src/app/api/detection/templates/route.ts` *(New / Modify — Versioned templates endpoint)*
-* `src/app/api/detection/categories/route.ts` *(New / Modify — Versioned category list endpoint)*
-* `src/app/api/detection/template-requests/route.ts` *(New — Ingest masked template request)*
-* `src/app/admin/sms-rules/page.tsx` *(Modify — Admin panel template request review)*
+* `supabase/migrations/20261025000000_detection_v2_schema.sql` *(New — Table `sms_template_requests` with RLS insert-only, version triggers, dedupe RPC `upsert_template_request`. Reuses existing `merchants` and `categories` tables; NO new admin_categories table).*
+* `Mobile app/SpentX/test/detection_v2/phase9_backend_rules_test.dart` *(New — Verification test for Supabase rules sync, RLS insert-only template request RPC, and category mappings)*
+* `src/app/admin/sms-rules/page.tsx` *(Modify — Web admin portal review UI for pending template requests)*
 
 #### Phase 10 — UI Integration
 * `Mobile app/SpentX/lib/features/sms/detected/detected_sms_screen.dart` *(Modify — Pending card hierarchy & badge counts)*
@@ -268,40 +266,107 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
    - Refund / Reversal: If the original debit can be matched (same account, amount, merchant, within 30 days), link it to the original; do not count it as income.
 3. **Notification Unparsed ➔ Admin Request:**  
    **NO.** Only Bank SMS sends masked template requests. Notifications rely strictly on built-in app rules and common notification patterns.
-4. **Backend Compatibility & Supabase Rules:**  
-   **YES.** Keep old endpoints and tables working.
+4. **Backend Architecture & Supabase Direct Integration:**  
+   **YES.** App syncs rules directly from Supabase tables with RLS.
    - Enable RLS on every new table.
-   - Table `sms_template_requests`: App users can `INSERT` only (no read, update, or delete). Deduplicated by `format_hash` with an incremental counter via a PostgreSQL RPC function (`upsert_template_request`), not client read.
-   - Tables `sms_block_rules`, `sms_template_rules`, `admin_categories`: App users can `SELECT` only. Admin role only can write.
+   - Table `sms_template_requests`: App users can `INSERT` only (no read, update, or delete). Deduplicated by `format_hash` with an incremental counter via PostgreSQL RPC function `upsert_template_request` called directly by mobile. No Next.js ingest proxy route needed.
+   - Tables `sms_block_rules`, `sms_template_rules`: App users can `SELECT` only. Admin role only can write.
+   - Categories and Merchants: Reuse existing `categories` and `merchants` tables. No new `admin_categories` table is created.
    - Never store raw SMS text in any database table.
-   - Add migrations strictly as new timestamped `.sql` files in `supabase/migrations/`. Never edit historical migrations.
+   - Add migrations strictly as new timestamped `.sql` files in `supabase/migrations/`.
 5. **Pending Hold Expiry:**  
    **48 Hours** configured default timeout for pending/wait SMS holds.
+6. **Sync Rules for Failed & Raw Data:**  
+   Failed transactions **MUST sync** to Supabase with `status = failed` and `impactsTotals = false`. Only raw SMS text and unverified pending detection candidates are kept strictly local on-device and never sync.
+7. **Additive-Only Modifications:**  
+   All changes to `lib/models/transaction.dart`, `account_model.dart`, `transaction_provider.dart`, `sync_service.dart`, `tx_ref_key.dart`, and `transaction_detail_screen.dart` must be strictly ADDITIVE ONLY.
 
 ---
 
-## 9. Baseline Test Results (Run on `main` before Phase 1)
+## 9. Baseline Test Results (Post-Phase 0.5 Test Harness Fixes)
 
-* **Command Run:** `flutter test` across the entire test suite (88 test files in `Mobile app/SpentX/test/`).
+* **Command Run:** `flutter test` across all 88 test files in `Mobile app/SpentX/test/`.
 * **Total Tests Executed:** 1,030 tests
-* **Total Passed:** 954 tests (92.6% pass rate)
-* **Total Failed on `main`:** 76 tests across 12 test files
+* **Total Passed:** 1,022 tests (**99.2% pass rate**, up from 954 — net **+68 tests fixed**)
+* **Total Remaining Failures:** Exactly 8 failures across 5 files (cataloged in [`docs/detection_v2/baseline_failures.txt`](file:///Users/karthi/Documents/SpentX%20Web/spentx-web%20copy%203/docs/detection_v2/baseline_failures.txt))
 
-### Detailed Breakdown of Pre-Existing Failures on `main`:
+### Exact List of Pre-Existing Failures (Baseline Guard):
 
-| # | Test File | Failures | Root Cause on `main` |
-|---|---|:---:|---|
-| 1 | `test/sms_regression_test.dart` | 30 | `MissingPluginException` for `path_provider` in `MasterDebugLog` and uninitialized `SecureHive` test cipher in standalone unit test harness. |
-| 2 | `test/sms_regression_corpus_test.dart` | 12 | `MissingPluginException` for `path_provider` during SMS corpus batch parsing. |
-| 3 | `test/phase2_parsing_test.dart` | 10 | `MasterDebugLog.ruleEngine` invoking unmocked `path_provider` method channel. |
-| 4 | `test/phase0_data_foundations_test.dart` | 7 | Missing `TestWidgetsFlutterBinding` initialization before calling platform channels. |
-| 5 | `test/phase4_accounts_test.dart` | 5 | Unmocked `SecureHiveKeyStore` in standalone account matcher unit tests. |
-| 6 | `test/sms_flow_bugfix_test.dart` | 4 | In-memory pending dedupe hash timing mismatch without mock clock. |
-| 7 | `test/sms_detection_fixes_test.dart` | 2 | Header bank override test asserting legacy `@okaxis` parser behavior. |
-| 8 | `test/sms_auto_save_test.dart` | 2 | In-memory `merchant_rules_box` state leakage between test cases. |
-| 9 | `test/mobile_ui_consistency_test.dart` | 2 | UI consistency assertion failing because intermediate "Choose Method" page was removed from template creation flow. |
-| 10| `test/background_single_writer_test.dart` | 1 | Background worker lock timeout in headless CLI test environment. |
-| 11| `test/detected_sms_tabs_test.dart` | 1 | Tab bar badge controller expecting legacy pending queue box name. |
-| 12| `test/phase1_permissions_sources_test.dart` | 1 | Unmocked permission handler channel during headless run. |
+1. `test/sms_detection_fixes_test.dart: UPI debits Axis UPI is Axis`  
+   *Failure:* Expected `'Axis'`, Actual `'PaytmPaymentsBank'`.  
+   *Root Cause:* Pre-existing app parser bug on `main` where Paytm Payments Bank keyword in `UPI/P2M/.../PAYTM` matches before `Axis`.
+2. `test/mobile_ui_consistency_test.dart: dark: Add Template page follows theme`  
+   *Failure:* Widget finder assertion on template creation page.  
+   *Root Cause:* Outside detection scope; UI layout assertion.
+3. `test/mobile_ui_consistency_test.dart: light: Add Template page follows theme`  
+   *Failure:* Widget finder assertion on template creation page.  
+   *Root Cause:* Outside detection scope; UI layout assertion.
+4. `test/mobile_ui_consistency_test.dart: secondary pages retain the same navigation destinations on narrow screens`  
+   *Failure:* Navigation bar item assertion.  
+   *Root Cause:* Outside detection scope; UI layout assertion.
+5. `test/phase2_parsing_test.dart: regression: HDFC old, modified, unknown; SBI, ICICI, Axis SBI, ICICI and Axis parse with no review reason`  
+   *Failure:* Expected `'Axis'`, Actual `'PaytmPaymentsBank'`.  
+   *Root Cause:* Same pre-existing app parser bug on `main` as #1.
+6. `test/sms_regression_corpus_test.dart: mustDetect — every real message matches a NAMED template`  
+   *Failure:* Expected all 30 real bank messages to match a named template.  
+   *Root Cause:* 14 real bank messages match `UniversalSmsParser` before `BankSmsV4Parser` due to rule engine precedence on `main`. Real message detection passes 30/30, and mustNotDetect passes 20/20.
+7. `test/background_single_writer_test.dart: 500-SMS burst through native batches: every one saved once`  
+   *Failure:* `TimeoutException after 0:00:30.000000` (timed out after 30s processing 500 AES-encrypted records in single-thread test runner).  
+   *Root Cause:* Test execution timeout in CLI test harness.
+8. `test/background_single_writer_test.dart: worker yields to the app: stops after the current item`  
+   *Failure:* Expected `<2>`, Actual `<4>`.  
+   *Root Cause:* Asynchronous task scheduling race in test environment.
 
-> **Strict Baseline Guard:** Later phases must maintain $\ge 954$ passing tests and **MUST NOT add any new test failures** beyond these 12 known pre-existing test files.
+> **Strict Baseline Guard Rule:** Any failing test NOT in `docs/detection_v2/baseline_failures.txt` is considered a NEW failure and must be fixed immediately.
+
+---
+
+## 10. Itemized Phase 0 Review Clarifications
+
+### 1. Transaction Model Confirmation
+- **Stored Model:** **`lib/models/transaction.dart`** is the active model stored by Hive (serialized as JSON maps in `Hive.box('transactions').get('list')`). It is imported and used by `TransactionProvider`, `TransactionRepository`, `SyncService`, `AutoRuleEngine`, `DetectedSmsScreen`, and the rest of the application.
+- **Unused Prototype:** `lib/features/transactions/domain/transaction_model.dart` declares `@HiveType(typeId: 1)` but its adapter is never registered. It is an unused legacy prototype.
+- **Allowed Files Enforcement:** ONLY `lib/models/transaction.dart` receives additive fields (`idempotencyKey`, `sources`, `impactsTotals`).
+
+### 2. Native Queue Encryption & Direct Boot
+- **Storage & Encryption:** In `SmsPendingQueue.kt` and `SecureQueueStore.kt`, queue records are stored in `SharedPreferences` (`spentx_secure_sms_queue_v1`) **encrypted at rest with AES-256-GCM** under Android Keystore alias `"spentx_queue_aes_v1"`. It is NOT stored in plain text.
+- **Direct Boot (Before First Unlock):** In `AndroidManifest.xml`, neither `SmsReceiver` nor `SpentXNotificationListener` declare `android:directBootAware="true"`. Under Android OS security architecture, broadcasts are queued by the OS Telephony provider and delivered *after* first user unlock (`BOOT_COMPLETED`), when Android Keystore credential storage is available. No unencrypted or failing reads occur before first unlock.
+
+### 3. Phase 0.5 Test Harness Fixes
+- **Strict Scope:** TEST FILES ONLY were modified (`test/*`). Zero changes to `lib/`.
+- **Harness Fixes Applied:**
+  - Mocked `plugins.flutter.io/path_provider` channel so `MasterDebugLog` and `SecureHive` resolve temp directories in tests.
+  - Initialized `TestWidgetsFlutterBinding.ensureInitialized()` where missing.
+  - Configured `SecureHive.debugConfigure()` with a test cipher and isolated temp directory in `setUpAll` and reset in `tearDownAll`.
+  - Cleared `merchant_rules_box` between tests in `sms_auto_save_test.dart`.
+- **Result:** Passing test count jumped from 954 to **1,022 passed** (+68 tests fixed). All real app parsing/behavioral bugs were left untouched and cataloged.
+
+### 4. Baseline Guard by Test Name
+- Exact list of 8 pre-existing failing tests saved to `docs/detection_v2/baseline_failures.txt`.
+
+### 5. RawQueueItem Confirmation
+- `RawQueueItem` is strictly an in-memory Dart data class representing items read from the native queue via `MethodChannel('com.spentx.app/detection')`. It is **NOT** a second Hive box or persistent queue.
+
+### 6. Bundled v4 Catalog Retention
+- `lib/features/sms/v4/bank_sms_template_catalog.dart` and `assets/sms/bank_sms_templates_v4.json` are **KEPT** permanently as the offline seed when cache is empty (fresh installs, no network). It has been removed from the Phase 11 deletion candidates.
+
+### 7. Backend Direct Integration
+- Next.js has NO API routes for block rules, templates, or categories. The Flutter app interacts directly with Supabase tables (`sms_block_rules`, `sms_template_rules`, `merchants`, `categories`) via `SmsRulesRefreshService.dart`.
+- Template requests will use Supabase RPC `upsert_template_request` directly with RLS insert-only. No Next.js ingest proxy is built.
+- No new `admin_categories` table will be created; existing `categories` and `merchants` tables are reused.
+- `Mobile app/SpentX/test/detection_v2/phase9_backend_rules_test.dart` added to Allowed Files List.
+
+### 8. Sync Rules
+- Failed transactions (`status = failed`, `impactsTotals = false`) **MUST sync** to Supabase.
+- Only raw SMS text and unverified pending detection candidates are kept strictly local on-device and never sync.
+
+### 9. Existing Detection Gates
+- If `settings.auto_detection == false` or `AuthService.isSignedIn == false`:
+  - `SmsPendingQueue.peek()` returns an empty list, keeping raw items safely buffered in the native queue.
+  - `NativeQueueClient` checks `SmsDetectionSettings.detectEnabled` and session user. If either gate is closed, pending items are neither processed nor acknowledged, preventing silent drops.
+
+### 10. Additive-Only Changes
+- All edits to `lib/models/transaction.dart`, `account_model.dart`, `transaction_provider.dart`, `sync_service.dart`, `tx_ref_key.dart`, and `transaction_detail_screen.dart` will be strictly ADDITIVE ONLY.
+
+### 11. Fixtures Reuse
+- Reusing and extending existing regression corpus at `Mobile app/SpentX/assets/sms/sms_regression_corpus.json` (and `assets/Mobile App Account Creation Corpus.json`). No redundant fixture folders created.
