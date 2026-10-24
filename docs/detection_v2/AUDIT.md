@@ -16,7 +16,7 @@
 | **Dependency Injection** | Riverpod Providers (e.g. `transactionProvider`, `categoryProvider`, `pendingAccountProvider`) |
 | **Local Database** | Hive 2.2.3 / `hive_flutter: ^1.1.0` wrapped by `SecureHive` |
 | **Encryption & Keystore** | `SecureHive` via `HiveAesCipher` using random 256-bit AES keys stored in Android Keystore via `flutter_secure_storage: ^10.0.0` (`HiveKeyManager.dart`) |
-| **Real Transaction Model** | **`lib/models/transaction.dart`** is the active model stored by Hive (as serialized JSON in `Hive.box('transactions').get('list')`) and used across `TransactionProvider`, `SyncService`, and UI. Only this file receives additive fields (`idempotencyKey`, `sources`, `impactsTotals`).<br>*(Note: `lib/features/transactions/domain/transaction_model.dart` has `@HiveType(typeId: 1)` but its adapter is never registered; it is an unused legacy prototype).* |
+| **Real Transaction Model** | **`lib/models/transaction.dart`** is the active model stored by Hive (as serialized JSON in `Hive.box('transactions').get('list')`) and used across `TransactionProvider`, `SyncService`, and UI. Only this file receives additive detection fields (`refKey`, `sources`; `rawMessage` stays local/encrypted). There is **no** `idempotencyKey`. `impactsTotals` is a getter (`Countable.inTotals(this)`), never a stored field.<br>*(Note: `lib/features/transactions/domain/transaction_model.dart` has `@HiveType(typeId: 1)` but its adapter is never registered; it is an unused legacy prototype).* |
 | **Active Hive Boxes** | `transactions`, `accounts`, `settings`, `vault`, `merchant_aliases`, `categories`, `outings`, `friend_splits`, `friends`, `friend_reminders`, `pending_detections`, `detected_sms_box`, `pending_accounts`, `ignored_detections`, `budgets`, `monthly_plans`, `investments`, `notification_history`, `pending_verification_history`, `wealth_snapshots`, `source_evidence`, `audit_log`, `sms_template_rules`, `sms_detection_rules`, `sms_block_rules`, `merchant_rules_box`, `merchants_box`, `sync_queue` |
 | **Native Android Layer** | `Kotlin 2.1.0` • Android SDK Compile `35` • Min SDK `24` • Target SDK `35`<br>• `SmsReceiver.kt`: Intercepts `android.provider.Telephony.SMS_RECEIVED`<br>• `NotificationListenerService.kt`: Intercepts push notifications from user-picked apps (`notif:<package>`)<br>• `SmsPendingQueue.kt` / `DurableQueue.kt`: Native encrypted SQLite/Prefs queue (reused for raw queueing)<br>• `SpentXBackgroundWorker.kt` & `SmsWorkScheduler.kt`: WorkManager background queue drainage (`workmanager: ^0.7.0`)<br>• `BootReceiver.kt`: Reschedules listeners & workers upon device reboot |
 | **Backend & Sync** | `Supabase` (PostgreSQL 15+, Supabase Auth, Row-Level Security, Realtime Sync)<br>• Web/Admin: Next.js 15 (App Router, React 19, TypeScript, TailwindCSS)<br>• Tables for detection: `sms_template_rules`, `sms_detection_rules`, `sms_block_rules`, `global_settings` (`rules_version`), `merchants`, `categories` |
@@ -58,7 +58,7 @@ SpentX currently possesses a working, multi-layered detection infrastructure, bu
 ### E. Auto-Save & User Review
 1. **`AutoRuleEngine.dart`**: Master decision engine. 
    - Foreground: Auto-add known merchants directly; show `DetectionPopup` for unknown.
-   - Background: Auto-add known merchants + post system notification with 5s Undo; post verify notification for unknown.
+   - Background: Auto-add known merchants + post system notification with Undo (current window: 10 minutes, `SmsAutoSaveUndo.window`); post verify notification for unknown.
 2. **`TxRefKey.dart`**: Cross-source deduplication key (`v1:<accountKey>:<dir>:<paise>:<ref>`).
 3. **`Countable.dart`**: Central financial filter ensuring `TxStatus.failed`, `TxStatus.pending`, and unlinked refunds never distort spending totals or balances.
 
@@ -74,7 +74,7 @@ SpentX currently possesses a working, multi-layered detection infrastructure, bu
 | **AB** | Admin Block Rule Match? | `sms_block_rules` in Hive & `SmsRuleEngine.isBlocked` | **Refine**: Load cached admin block rules with bundled fallback regex/keyword list. |
 | **X1** | Ignore and Log Reason | `SmsDetectionDebugLog.log()` | **Reuse**: Masked audit log, zero raw text. |
 | **FF** | Failed or Wait SMS? | `StatusClassifier.classify()` & `SmsRuleEngine.statusOnlyCandidate()` | **Refine**: Explicit separation of `Failed` vs `Wait/Pending`. |
-| **FL** | Save as Failed: Red Badge, ₹0 Impact | `TxStatus.failed`, `Countable.inTotals = false` | **Wire / Formalize**: Saved to ledger with `impactsTotals = false`, red badge in activity. |
+| **FL** | Save as Failed: Red Badge, ₹0 Impact | `TxStatus.failed`, `Countable.inTotals = false` | **Wire / Formalize**: Saved to ledger with `status = failed` (`impactsTotals` getter is then false via `Countable.inTotals`), ₹0 impact, red badge in activity. |
 | **P1** | Hold and Wait for Final SMS | *New pending hold logic* | **New**: Dedicated `PendingHold` model with 48h configurable expiry. |
 | **B** | Common SMS Parser | `UniversalSmsParser.dart` | **Reuse**: Primary parser for standard bank formats. |
 | **B2** | Admin SMS Templates | `SmsTemplateEngine.dart` & `SmsTemplateRule` | **Reuse**: Secondary parser when common parser is incomplete. |
@@ -95,7 +95,7 @@ SpentX currently possesses a working, multi-layered detection infrastructure, bu
 | **AT** | Select Account Type (Savings/CC/Wallet) | `account_auto_create.dart` | **Refine**: Pre-select type from SMS keywords ("credit card", "a/c", "wallet"). |
 | **AA** | Create Account from Bank Name + Last 4 | `PendingAccountProvider.createAccount()` | **Reuse / Wire**: Adds account to user's accounts box. |
 | **RA** | Re-check All Pending SMS of This Account | `discovery_replay.dart` (`reprocessHeldSms`) | **Reuse / Wire**: Replays queued SMS through pipeline. |
-| **J** | Cross-Source Duplicate Check | `TxRefKey.dart` & `SmsDedupeRegistry.dart` | **Refine**: Compare reference ID or 10-minute time window. |
+| **J** | Cross-Source Duplicate Check | `TxRefKey.dart` & `SmsDedupeRegistry.dart` | **Refine**: Two-tier dedupe. Tier A: `messageHash` (sender + exact body + original timestamp). Tier B: `refKey`/`TxRefKey` + `SmsDedupeRegistry`; the 10-minute no-ref window merge applies ONLY between different source types (SMS vs notification). Two items of the same source type with different messageHashes never merge. |
 | **K** | Same Payment Already Recorded? | `TxRefKey.decide()` | **Reuse / Refine**: Identifies duplicate payment across SMS & notification. |
 | **L** | Merge Reliable Evidence | `TxRefKeyConflictAction.merge` & `SourceEvidenceStore` | **Refine**: Merge GPay merchant + Bank SMS UTR into single transaction. |
 | **M** | Check User Merchant Learning | `MerchantLearningService.dart` | **Reuse**: Lookup in `merchant_rules_box`. |
@@ -108,10 +108,10 @@ SpentX currently possesses a working, multi-layered detection infrastructure, bu
 | **UC** | User Selects Merchant, Purpose, Category | `DetectionPopup` / bottom sheet | **Reuse**. |
 | **LM** | Save Merchant Rule for Next Time | `MerchantLearningService.learn()` | **Reuse**. |
 | **S** | Add Transaction | `transactionProvider.addTransaction()` | **Reuse**: Central single-writer entrypoint. |
-| **SV** | Save or Update Transaction with Idempotency Key | `idempotencyKey` / `TxRefKey` | **Refine**: Enforce idempotent insert/update in Hive. |
+| **SV** | Save or Update Transaction (deduped) | Tier A `messageHash` + Tier B `refKey` / `TxRefKey` / `SmsDedupeRegistry` | **Refine**: No `idempotencyKey`; duplicates are blocked by the two-tier dedupe before insert/update in Hive. |
 | **HV** | Encrypted Local Hive | `SecureHive.openBox('transactions')` | **Reuse**. |
 | **DQ** | Remove Raw Item from Queue | `NativeQueueClient.ack()` | **Refine**: Ack/remove item only after Hive write succeeds. |
-| **UN** | Notify: Added - Undo / Edit | `SmsAutoSaveUndo.dart` & `AppToast` | **Reuse**: 5s Undo snackbar / notification. |
+| **UN** | Notify: Added - Undo / Edit | `SmsAutoSaveUndo.dart` & `AppToast` | **Reuse**: Undo snackbar / notification (current window 10 minutes). |
 | **CS** | Cloud Sync if Enabled | `SyncService.dart` | **Reuse**: Push transaction fields only (no raw text). |
 
 ---
@@ -161,6 +161,13 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/lib/features/sms/background/native_queue_client.dart` *(Modify — Idempotent queue drainage and retry handling)*
 * `Mobile app/SpentX/lib/features/sms/sms_service.dart` *(Modify — Inbound dispatch to queue worker)*
 * `Mobile app/SpentX/test/detection_v2/phase2_queue_test.dart` *(New)*
+* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/MainActivity.kt` *(Modify, additive — `getInboxSms` keeps `date`, adds `dateSent`)*
+* `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/BootReceiver.kt` *(Modify — catch-up on BOOT_COMPLETED / USER_UNLOCKED)*
+* `Mobile app/SpentX/lib/features/sms/detected/sms_seen_store.dart` *(Modify — `sms_seen_hashes` SecureHive box, bodyKey fallback, pruning)*
+* `Mobile app/SpentX/lib/features/sms/models/raw_queue_item.dart` *(Modify — messageHash / bodyKey inputs)*
+* `Mobile app/SpentX/lib/features/sms/detected/sms_detection_pipeline.dart` *(Modify — mark hash processed only after save + ack)*
+* `Mobile app/SpentX/test/background_single_writer_test.dart` *(Harness fix only)*
+* Ask first: `AndroidManifest.xml`, `SmsWorkScheduler.kt`, `lib/features/sms/detected/sms_inbox_catch_up.dart`.
 
 #### Phase 3 — Pre-Parse Filters (Bank SMS)
 * `Mobile app/SpentX/lib/features/sms/rules/engine/admin_block_rules_matcher.dart` *(New — Match cached admin block rules + fallback list)*
@@ -193,7 +200,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/test/detection_v2/phase7_merchant_resolution_test.dart` *(New)*
 
 #### Phase 8 — Save, Cleanup, Notify, Sync
-* `Mobile app/SpentX/lib/features/sms/autosave/sms_auto_save_undo.dart` *(Modify — 5s Undo with financial reversal)*
+* `Mobile app/SpentX/lib/features/sms/autosave/sms_auto_save_undo.dart` *(Modify — Undo (10-minute window) with financial reversal)*
 * `Mobile app/SpentX/test/detection_v2/phase8_save_sync_test.dart` *(New)*
 
 #### Phase 9 — Backend Changes
@@ -214,9 +221,9 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 ### Files OUTSIDE detection directories (with strict 1-line rationale for each):
 
 1. **`Mobile app/SpentX/lib/models/transaction.dart`**  
-   *Rationale:* Must hold detection `idempotencyKey`, multi-source event references (`sources`), and `impactsTotals = false` so financial calculations exclude failed transactions.
+   *Rationale:* Holds `refKey`, multi-source references (`sources`) and local-only `rawMessage` (encrypted, never synced; read by "View original SMS"). `impactsTotals` is a getter from `Countable.inTotals(this)` and is never written in `toJson()`; failed transactions are excluded via `status = failed`.
 2. **`Mobile app/SpentX/lib/models/account_model.dart`**  
-   *Rationale:* Real stored Account model (Hive settings box); holds `isIgnored` ("Not Mine") flag and account evidence metadata.
+   *Rationale:* Real stored Account model (Hive settings box); holds `type`, `last4Digits`, `bankKey`, the `isIgnored` ("Not Mine") flag and a `bankName` getter.
 3. **`Mobile app/SpentX/lib/data/local/safe_box_migration.dart`**  
    *Rationale:* Must provide safe Hive migration defaults for existing stored transactions and accounts so no historical user data is corrupted.
 4. **`Mobile app/SpentX/lib/core/finance/tx_ref_key.dart`**  
@@ -228,9 +235,9 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 7. **`Mobile app/SpentX/lib/features/accounts/presentation/widgets/pending_account_card.dart`**  
    *Rationale:* Soft UI card widget for "New Account Found: HDFC •••• 1234 · N transactions waiting" shown on the Pending screen.
 8. **`Mobile app/SpentX/lib/core/providers/transaction_provider.dart`**  
-   *Rationale:* Single-writer ledger entry point that validates idempotencyKey before committing detected transactions to Hive.
+   *Rationale:* Single-writer ledger entry point; detected transactions pass the two-tier dedupe (messageHash, then refKey/TxRefKey + SmsDedupeRegistry) before being committed to Hive.
 9. **`Mobile app/SpentX/lib/core/sync/sync_service.dart`**  
-   *Rationale:* Must ensure cloud sync never uploads raw SMS text, unverified pending candidates, or failed transactions as confirmed expenses.
+   *Rationale:* Sync uses a whitelist (`TransactionMap.toRemote` / `AccountMap.toRemote`): never uploads raw SMS text or pending candidates; failed transactions sync with `status = failed`.
 10. **`Mobile app/SpentX/lib/features/transactions/presentation/transaction_detail_screen.dart`**  
     *Rationale:* Displays the collapsible "View original SMS / Notification source" section on the transaction details screen.
 11. **`Mobile app/SpentX/lib/features/settings/presentation/screens/notification_preferences_screen.dart`**  
@@ -277,7 +284,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 5. **Pending Hold Expiry:**  
    **48 Hours** configured default timeout for pending/wait SMS holds.
 6. **Sync Rules for Failed & Raw Data:**  
-   Failed transactions **MUST sync** to Supabase with `status = failed` and `impactsTotals = false`. Only raw SMS text and unverified pending detection candidates are kept strictly local on-device and never sync.
+   Failed transactions **MUST sync** to Supabase with `status = failed` (`impactsTotals` is a derived getter, not a stored or synced column). Only raw SMS text and unverified pending detection candidates are kept strictly local on-device and never sync.
 7. **Additive-Only Modifications:**  
    All changes to `lib/models/transaction.dart`, `account_model.dart`, `transaction_provider.dart`, `sync_service.dart`, `tx_ref_key.dart`, and `transaction_detail_screen.dart` must be strictly ADDITIVE ONLY.
 
@@ -326,7 +333,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 ### 1. Transaction Model Confirmation
 - **Stored Model:** **`lib/models/transaction.dart`** is the active model stored by Hive (serialized as JSON maps in `Hive.box('transactions').get('list')`). It is imported and used by `TransactionProvider`, `TransactionRepository`, `SyncService`, `AutoRuleEngine`, `DetectedSmsScreen`, and the rest of the application.
 - **Unused Prototype:** `lib/features/transactions/domain/transaction_model.dart` declares `@HiveType(typeId: 1)` but its adapter is never registered. It is an unused legacy prototype.
-- **Allowed Files Enforcement:** ONLY `lib/models/transaction.dart` receives additive fields (`idempotencyKey`, `sources`, `impactsTotals`).
+- **Allowed Files Enforcement:** ONLY `lib/models/transaction.dart` receives additive fields (`refKey`, `sources`). No `idempotencyKey`; `impactsTotals` is a getter, never stored.
 
 ### 2. Native Queue Encryption & Direct Boot
 - **Storage & Encryption:** In `SmsPendingQueue.kt` and `SecureQueueStore.kt`, queue records are stored in `SharedPreferences` (`spentx_secure_sms_queue_v1`) **encrypted at rest with AES-256-GCM** under Android Keystore alias `"spentx_queue_aes_v1"`. It is NOT stored in plain text.
@@ -348,7 +355,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 - `RawQueueItem` is strictly an in-memory Dart data class representing items read from the native queue via `MethodChannel('com.spentx.app/detection')`. It is **NOT** a second Hive box or persistent queue.
 
 ### 6. Bundled v4 Catalog Retention
-- `lib/features/sms/v4/bank_sms_template_catalog.dart` and `assets/sms/bank_sms_templates_v4.json` are **KEPT** permanently as the offline seed when cache is empty (fresh installs, no network). It has been removed from the Phase 11 deletion candidates.
+- `lib/features/sms/v4/bank_sms_template_catalog.dart` and `assets/sms/bank_sms_templates_v4.json` (both paths verified present at `ce003bd`) are **KEPT** permanently as the offline seed when cache is empty (fresh installs, no network). It has been removed from the Phase 11 deletion candidates.
 
 ### 7. Backend Direct Integration
 - Next.js has NO API routes for block rules, templates, or categories. The Flutter app interacts directly with Supabase tables (`sms_block_rules`, `sms_template_rules`, `merchants`, `categories`) via `SmsRulesRefreshService.dart`.
@@ -357,7 +364,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 - `Mobile app/SpentX/test/detection_v2/phase9_backend_rules_test.dart` added to Allowed Files List.
 
 ### 8. Sync Rules
-- Failed transactions (`status = failed`, `impactsTotals = false`) **MUST sync** to Supabase.
+- Failed transactions (`status = failed`) **MUST sync** to Supabase via the `toRemote` whitelist.
 - Only raw SMS text and unverified pending detection candidates are kept strictly local on-device and never sync.
 
 ### 9. Existing Detection Gates
@@ -379,7 +386,7 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 - **Item A — Stored Account Model Check:** Confirmed that `lib/models/account_model.dart` (`AccountModel`) is the real stored account model (persisted as JSON in `Hive.box('settings').get('onboardingAccounts')`). `lib/features/accounts/domain/account_model.dart` is an unused legacy prototype with no registered Hive adapter.
 - **Item B — Zero New Hive Boxes for Pending Items:** Implemented `lib/features/sms/models/pending_item.dart` as a pure domain/presentation wrapper around existing `detected_sms_box` records (`PendingTransaction`), `pending_accounts` (`PendingAccount`), and unparsed template request candidates. Zero new Hive boxes created.
 - **Model Additions Implemented (Strictly Additive):**
-  - `Transaction` (`lib/models/transaction.dart`): Added `idempotencyKey` (`String?`), `sources` (`List<String>`), and `impactsTotals` (`bool`, default `true`). Updated `toJson()`, `fromJson()`, and `copyWith()`. Note: `impactsTotals` is only emitted in `toJson()` when `false` to maintain byte-for-byte rollback compatibility for existing transactions.
+  - `Transaction` (`lib/models/transaction.dart`): Added `sources` (`List<String>`) alongside `refKey`. **Superseded:** the earlier `idempotencyKey` field was removed, and `impactsTotals` is now a getter (`Countable.inTotals(this)`) that is never written in `toJson()`.
   - `AccountModel` (`lib/models/account_model.dart`): Added `isIgnored` (`bool`, default `false`). Updated constructor, `toJson()`, `fromJson()`, and `copyWith()`.
   - `MerchantRule` (`lib/core/models/merchant_rule.dart`): Added `autoAddDisabled` (`bool`, default `false`). Updated constructor, `toMap()`, `fromMap()`, and `copyWith()`.
   - `RawQueueItem` (`lib/features/sms/models/raw_queue_item.dart`): In-memory Dart data class representing native queue items with `userId`, `attempts`, `lastAttemptAt`, and auto-derived `isNotification`.
@@ -412,6 +419,57 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 
 ### 4. Additions Confirmed for Phase 8 / 9 (Backend & Sync)
 - **Item H — Supabase Schema & Legacy Compatibility Check:**
-  - Verify Supabase `transactions` table schema for `status` and `impactsTotals` columns. Include safe defaults (`status = 'success'`, `impactsTotals = true`) in the migration if missing.
+  - Verify Supabase `transactions` table schema for the `status` column (safe default `status = 'success'` in a new migration if missing). There is no `impactsTotals` column: it is derived on-device from `status`.
   - Verify older app version behavior for synced failed transactions before enabling sync of failed records.
+
+---
+
+## 12. Locked Decisions Alignment (handover Section 4)
+
+- **Real models:** `lib/models/transaction.dart` and `lib/models/account_model.dart`. The `lib/features/*/domain` copies are unused prototypes.
+- **No `idempotencyKey`.** It was removed. Any earlier text in this file that mentions it is superseded.
+- **Two-tier dedupe:**
+  - Tier A: `messageHash` = hash(sender + exact body + original timestamp). Stops the same message being processed twice.
+  - Tier B: `refKey` / `TxRefKey` + `SmsDedupeRegistry`. The 10-minute no-ref window merge applies ONLY between different source types. Two SMS (or two notifications) with different messageHashes never merge.
+- **`impactsTotals`** is a getter from `Countable.inTotals(this)` and is never written in `toJson()` or synced.
+- **`AccountModel`:** `type`, `last4Digits`, `bankKey`, `isIgnored`, and a `bankName` getter.
+- **`MerchantRule.autoAddDisabled`.**
+- **`PendingHold`** is stored in the settings key `pending_sms_holds` (48h expiry).
+- **`PendingItem` and `RawQueueItem`** are in-memory only. No new Hive box for them.
+- **"View original SMS"** reads `Transaction.rawMessage` (local, encrypted, never synced).
+- **Sync** uses a whitelist: `TransactionMap.toRemote` / `AccountMap.toRemote`.
+- **Product decisions:**
+  1. A failed notification is treated like a failed SMS (₹0 impact, red badge).
+  2. Credits use income categories only. A refund is linked to the original debit within 30 days.
+  3. Only bank SMS send masked template requests.
+  4. RPC `upsert_template_request`, insert-only RLS, dedupe by `format_hash`. No Next.js route. Reuse the existing `merchants` and `categories` tables. New migrations go in new `.sql` files.
+  5. 48h hold.
+  6. Failed transactions sync. Raw and pending items don't.
+  7. The v4 catalog is kept as the offline seed.
+- **Phase 2 queue rules:**
+  - Store `userId` on every item, plus `lastSignedInUserId`.
+  - Purge on sign-out. Unowned items: max 7 days / 500.
+  - Detection OFF: purge, and don't enqueue.
+  - Catch-up starts from the time detection was re-enabled.
+  - Parked items (5 attempts) become an Unparsed card; purge after 30 days.
+  - Stuck-processing recovery uses a lease/heartbeat.
+  - Ack only after a successful save (`SecureHive.flushOpenBoxes`).
+  - Catch-up runs on BOOT_COMPLETED / USER_UNLOCKED, and `getActiveNotifications()` runs when the listener connects.
+
+## 13. Branch History (2026-10-24)
+
+- **What happened (≈21:22 IST):** the local app branch `feature/smart-detection-flow-v2` was accidentally renamed to `main`. It was then pushed as the first push to the newly created `spentx-app` GitHub repo. Nothing was overwritten.
+- **Restored, with Karthi's approval:**
+  - `main` → `00a2f1e` (the previous local main, from the reflog). Pushed with force-with-lease; local `main` tracks `origin/main`.
+  - `feature/smart-detection-flow-v2` → `ce003bd` (the last Detection v2 commit). Pushed with force-with-lease.
+  - `wip/mixed-fc0efd1` preserves `fc0efd1` ("feat: implement fluid motion system and encrypted backup features": 66 files). It mixes:
+    - motion work
+    - encrypted backup (`file_picker`)
+    - `sync_service` / `supabase_schema_map` changes
+    - unapproved detection changes, including `sms_rule_engine` dropping the v4 bundled step
+
+    Karthi will sort this out separately. Nothing from it is on the feature branch.
+- **Feature branch base:** `ce003bd` sits on top of `sms-template` (`f672ffd`) and the motion commits. Merge `sms-template` into `main` BEFORE this branch.
+- **Known issue at `ce003bd`:** it does not compile. `f672ffd` references `TemplateFieldType.dateTime`, but that constant was only added later in `fc0efd1` (`sms_template_rule.dart`). 52 test files fail to load. It needs a small additive fix (approval pending).
+- **Docs repo:** `feature/smart-detection-flow-v2` was branched from `main` `7737853`. Docs main was not changed.
 
