@@ -1,0 +1,2152 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 5de1477..5720c99 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -105,10 +105,12 @@
+             </intent-filter>
+         </receiver>
+ 
+-        <!-- S4: drain SMS queued before a reboot. -->
++        <!-- S4: drain SMS queued before a reboot. Phase 2: also inbox
++             catch-up after boot / first unlock. -->
+         <receiver android:name=".BootReceiver" android:exported="false">
+             <intent-filter>
+                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
++                <action android:name="android.intent.action.USER_UNLOCKED"/>
+             </intent-filter>
+         </receiver>
+ 
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/BootReceiver.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/BootReceiver.kt
+index af50951..1815fd5 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/BootReceiver.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/BootReceiver.kt
+@@ -3,16 +3,29 @@ package com.spentx.app.spentx
+ import android.content.BroadcastReceiver
+ import android.content.Context
+ import android.content.Intent
++import android.content.pm.PackageManager
++import android.net.Uri
+ 
+ /**
+  * S4: SMS queued before a reboot is saved after it, without waiting for the
+  * next periodic job or for the user to open the app.
++ *
++ * Phase 2: after BOOT_COMPLETED / USER_UNLOCKED the queue is reconciled
++ * (sign-out / detection off) and bank SMS that arrived while the phone was
++ * off or locked are read from the inbox (same 3-day window as the in-app
++ * catch-up, never before detection was switched on) and queued. Dart dedupes
++ * them against anything already processed. SMS text is never logged.
+  */
+ class BootReceiver : BroadcastReceiver() {
+     override fun onReceive(context: Context?, intent: Intent?) {
+-        if (context == null || intent?.action != Intent.ACTION_BOOT_COMPLETED) return
++        val action = intent?.action
++        if (context == null ||
++            (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_USER_UNLOCKED)
++        ) return
+         val app = context.applicationContext
+         try {
++            SmsPendingQueue.reconcile(app)
++            catchUpInbox(app)
+             if (SmsPendingQueue.hasPending(app) ||
+                 TransactionPendingQueue.hasPending(app)
+             ) {
+@@ -22,4 +35,71 @@ class BootReceiver : BroadcastReceiver() {
+             // The periodic job still drains the queue.
+         }
+     }
++
++    companion object {
++        private const val K_SCAN_MARKER = "p2_boot_scan_marker"
++        private const val WINDOW_MS = 3L * 24 * 60 * 60 * 1000L
++        private const val LIMIT = 300
++        private val BANK_HEADER = Regex("^[A-Za-z]{2}-[A-Za-z0-9]{3,}(-[A-Za-z])?$")
++
++        /** Returns how many inbox SMS were queued. */
++        fun catchUpInbox(context: Context): Int {
++            if (!SpentXDetectionPrefs.isUserAuthenticated(context)) return 0
++            if (!SpentXDetectionPrefs.isAutoDetectionEnabled(context)) return 0
++            if (context.checkSelfPermission(android.Manifest.permission.READ_SMS) !=
++                PackageManager.PERMISSION_GRANTED
++            ) return 0
++            val now = System.currentTimeMillis()
++            val marker = synchronized(SecureQueueStore.lock) {
++                try {
++                    SecureQueueStore.active(context).get(K_SCAN_MARKER)?.toLongOrNull() ?: 0L
++                } catch (_: Exception) {
++                    0L
++                }
++            }
++            val since = maxOf(marker, SmsPendingQueue.detectionEnabledAt(context), now - WINDOW_MS)
++            var queued = 0
++            var newest = marker
++            try {
++                context.contentResolver.query(
++                    Uri.parse("content://sms/inbox"),
++                    arrayOf("address", "body", "date", "date_sent"),
++                    "date > ?",
++                    arrayOf(since.toString()),
++                    "date DESC",
++                )?.use { c ->
++                    val iAddr = c.getColumnIndex("address")
++                    val iBody = c.getColumnIndex("body")
++                    val iDate = c.getColumnIndex("date")
++                    val iSent = c.getColumnIndex("date_sent")
++                    var rows = 0
++                    while (c.moveToNext() && rows < LIMIT) {
++                        rows++
++                        val sender = if (iAddr >= 0) c.getString(iAddr) ?: "" else ""
++                        val body = if (iBody >= 0) c.getString(iBody) ?: "" else ""
++                        val date = if (iDate >= 0) c.getLong(iDate) else 0L
++                        val sent = if (iSent >= 0) c.getLong(iSent) else 0L
++                        if (date > newest) newest = date
++                        if (body.isBlank() || SmsPrivacy.isOtpOnly(body)) continue
++                        if (!BANK_HEADER.matches(sender) && !SpentXDetectionPrefs.isKnownBankMessage(body)) continue
++                        val exact = sent > 0
++                        val id = SmsPendingQueue.enqueue(
++                            context, sender, body, if (exact) sent else date, timeExact = exact,
++                        )
++                        if (id != null) queued++
++                    }
++                }
++            } catch (_: Exception) {
++                return queued
++            }
++            if (newest > marker) {
++                synchronized(SecureQueueStore.lock) {
++                    try {
++                        SecureQueueStore.active(context).put(K_SCAN_MARKER, newest.toString())
++                    } catch (_: Exception) {}
++                }
++            }
++            return queued
++        }
++    }
+ }
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/DurableQueue.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/DurableQueue.kt
+index 074ace9..b9fd0e3 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/DurableQueue.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/DurableQueue.kt
+@@ -256,12 +256,14 @@ class DurableQueueCore(
+                 continue
+             }
+             if (!complete) changed = true
+-            if (!owner.isNullOrEmpty() && obj.optString(OWNER).isEmpty()) {
++            // Phase 2: signed-out items wait for claimSignedOut (never stamped).
++            val signedOut = obj.optBoolean(SIGNED_OUT)
++            if (!owner.isNullOrEmpty() && !signedOut && obj.optString(OWNER).isEmpty()) {
+                 obj.put(OWNER, owner)
+                 changed = true
+             }
+             fixed.put(obj)
+-            val mine = owner.isNullOrEmpty() || obj.optString(OWNER) == owner
++            val mine = !signedOut && (owner.isNullOrEmpty() || obj.optString(OWNER) == owner)
+             if (mine && obj.optLong("nextAttemptAt", 0L) <= t) out.add(obj)
+         }
+         if (changed) writeHot(fixed)
+@@ -470,6 +472,155 @@ class DurableQueueCore(
+         return purged
+     }
+ 
++    // ------------------------------------------------------------ Phase 2
++
++    /**
++     * Visits every stored item (hot, overflow, and optionally parked and
++     * held). [f] returns the item to keep (it may change it in place) or
++     * null to remove it. Returns how many items were removed.
++     */
++    fun rewriteAll(
++        includeParked: Boolean,
++        includeHeld: Boolean,
++        wrapStringAs: String = "body",
++        f: (item: JSONObject, part: String) -> JSONObject?,
++    ): Int {
++        migrateLegacyFailed()
++        var removed = 0
++        val hot = readHot()
++        val before = hot.toString()
++        val keep = JSONArray()
++        for (i in 0 until hot.length()) {
++            val obj = normalize(hot.opt(i), wrapStringAs) ?: continue
++            val out = f(obj, PART_QUEUE)
++            if (out == null) removed++ else keep.put(out)
++        }
++        if (keep.toString() != before) writeHot(keep)
++        val stores = mutableListOf(PART_QUEUE to overflow)
++        if (includeParked) stores.add(PART_PARKED to parked)
++        if (includeHeld && held != null) stores.add(PART_HELD to held)
++        for ((part, store) in stores) {
++            for (seq in store.list()) {
++                val arr = readSeg(store, seq) ?: continue
++                val was = arr.toString()
++                val rest = JSONArray()
++                for (i in 0 until arr.length()) {
++                    val obj = normalize(arr.opt(i), wrapStringAs) ?: continue
++                    val out = f(obj, part)
++                    if (out == null) removed++ else rest.put(out)
++                }
++                if (rest.toString() == was) continue
++                if (rest.length() == 0) store.delete(seq) else store.write(seq, rest.toString())
++            }
++        }
++        return removed
++    }
++
++    /** Removes everything: queued, parked and held. Returns how many. */
++    fun purgeAll(): Int = rewriteAll(includeParked = true, includeHeld = true) { _, _ -> null }
++
++    /**
++     * Parked items of [owner] never retried go back to the queue for one
++     * more attempt (attempts = MAX - 1, so a failure parks them again, now
++     * marked [PARKED_RETRIED]). Copy first, removed from parked last.
++     * Returns how many.
++     */
++    fun retryParkedOnce(owner: String): Int {
++        migrateLegacyFailed()
++        val present = ids(readHot())
++        for (seq in overflow.list()) readSeg(overflow, seq)?.let { present.addAll(ids(it)) }
++        val back = mutableListOf<JSONObject>()
++        for (seq in parked.list()) {
++            val arr = readSeg(parked, seq) ?: continue
++            for (i in 0 until arr.length()) {
++                val obj = arr.optJSONObject(i) ?: continue
++                if (!ownedBy(obj, owner) || obj.optBoolean(PARKED_RETRIED)) continue
++                val id = obj.optString("id")
++                if (id.isEmpty() || id in present) continue
++                val copy = JSONObject(obj.toString())
++                copy.put("attempts", MAX_ATTEMPTS - 1)
++                copy.put(PARKED_RETRIED, true)
++                copy.remove("parkedAt")
++                copy.remove("nextAttemptAt")
++                back.add(copy)
++                present.add(id)
++            }
++        }
++        if (back.isEmpty()) return 0
++        append(overflow, back)
++        val moved = back.map { it.optString("id") }.toSet()
++        rewriteAll(includeParked = true, includeHeld = false) { obj, part ->
++            if (part == PART_PARKED && obj.optString("id") in moved) null else obj
++        }
++        return back.size
++    }
++
++    /** [owner]'s parked items that failed again after their one retry. */
++    fun listExhaustedParked(owner: String, wrapStringAs: String): List<JSONObject> {
++        migrateLegacyFailed()
++        val out = mutableListOf<JSONObject>()
++        for (seq in parked.list()) {
++            val arr = readSeg(parked, seq) ?: continue
++            for (i in 0 until arr.length()) {
++                val obj = normalize(arr.opt(i), wrapStringAs) ?: continue
++                if (ownedBy(obj, owner) && obj.optBoolean(PARKED_RETRIED)) out.add(obj)
++            }
++        }
++        return out
++    }
++
++    /** Removes parked items by id. Returns how many. */
++    fun removeParked(ids: Collection<String>): Int {
++        if (ids.isEmpty()) return 0
++        return rewriteAll(includeParked = true, includeHeld = false) { obj, part ->
++            if (part == PART_PARKED && obj.optString("id") in ids) null else obj
++        }
++    }
++
++    /**
++     * Items queued while signed out ([SIGNED_OUT] = true) are kept at most
++     * [maxAgeMillis] and [maxCount] (newest kept). Returns how many removed.
++     */
++    fun capSignedOut(maxAgeMillis: Long, maxCount: Int): Int {
++        val cutoff = now() - maxAgeMillis
++        val order = mutableListOf<Pair<String, Long>>()
++        var removed = rewriteAll(includeParked = true, includeHeld = true) { obj, _ ->
++            if (!obj.optBoolean(SIGNED_OUT)) return@rewriteAll obj
++            val at = obj.optLong("queuedAt", obj.optLong("timestamp", 0L))
++            if (at in 1 until cutoff) return@rewriteAll null
++            order.add(obj.optString("id") to at)
++            obj
++        }
++        if (order.size > maxCount) {
++            val drop = order.sortedBy { it.second }.take(order.size - maxCount).map { it.first }.toSet()
++            removed += rewriteAll(includeParked = true, includeHeld = true) { obj, _ ->
++                if (obj.optBoolean(SIGNED_OUT) && obj.optString("id") in drop) null else obj
++            }
++        }
++        return removed
++    }
++
++    /**
++     * Sign-in of [owner]: items queued while signed out for the same user
++     * ([SIGNED_OUT_USER]) become theirs; signed-out items of anyone else,
++     * and other users' items, are removed. Returns how many removed.
++     */
++    fun claimSignedOut(owner: String): Int =
++        rewriteAll(includeParked = true, includeHeld = true) { obj, _ ->
++            if (obj.optBoolean(SIGNED_OUT)) {
++                if (obj.optString(SIGNED_OUT_USER) == owner) {
++                    obj.remove(SIGNED_OUT)
++                    obj.put(OWNER, owner)
++                    obj
++                } else {
++                    null
++                }
++            } else {
++                val o = obj.optString(OWNER)
++                if (o.isEmpty() || o == owner) obj else null
++            }
++        }
++
+     /**
+      * Older builds kept at most 20 parked items in the preferences entry.
+      * Copy them into the parked segments, verify, then empty the old entry.
+@@ -511,6 +662,16 @@ class DurableQueueCore(
+     companion object {
+         /** Field naming the user an item belongs to. */
+         const val OWNER = "owner"
++        /** Phase 2: queued while nobody was signed in. */
++        const val SIGNED_OUT = "signedOut"
++        /** Phase 2: the last signed-in user when a signed-out item arrived. */
++        const val SIGNED_OUT_USER = "signedOutUser"
++        /** Phase 2: a parked item that already had its one retry. */
++        const val PARKED_RETRIED = "parkedRetried"
++        const val PART_QUEUE = "queue"
++        const val PART_PARKED = "parked"
++        const val PART_HELD = "held"
++        const val THIRTY_DAYS_MS = 30L * 24 * 60 * 60 * 1000L
+         const val HOT_MAX = 100
+         const val SEG_MAX = 100
+         const val MAX_ATTEMPTS = 5
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/MainActivity.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/MainActivity.kt
+index 18c80bc..0ed7890 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/MainActivity.kt
+@@ -41,6 +41,30 @@ class MainActivity : FlutterFragmentActivity() {
+             }
+             return true
+         }
++
++        /** Phase 2: strong reference (SharedPreferences keeps listeners weakly). */
++        private var queuePrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
++
++        /**
++         * Phase 2: sign-out and detection on/off reach the SMS queue at once
++         * (purge / claim), not only on the next enqueue or peek.
++         */
++        fun registerQueuePrefsListener(context: Context) {
++            if (queuePrefsListener != null) return
++            val app = context.applicationContext
++            val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
++                if (key == "flutter.spentx_user_authenticated" || key == "flutter.auto_detection") {
++                    Thread {
++                        try {
++                            SmsPendingQueue.reconcile(app)
++                        } catch (_: Exception) {}
++                    }.start()
++                }
++            }
++            queuePrefsListener = listener
++            app.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
++                .registerOnSharedPreferenceChangeListener(listener)
++        }
+     }
+ 
+     /** S4: this activity's Hive writer lock owner (see [HiveWriterLock]). */
+@@ -84,6 +108,7 @@ class MainActivity : FlutterFragmentActivity() {
+         super.onCreate(savedInstanceState)
+         // S6: Start secured on initial launch (splash/auth/lock).
+         ScreenshotProtection.setSecure(this, true)
++        registerQueuePrefsListener(this)
+     }
+ 
+     override fun onResume() {
+@@ -201,6 +226,17 @@ class MainActivity : FlutterFragmentActivity() {
+                 "isSecureFlagActive" -> {
+                     result.success(ScreenshotProtection.isSecure(this))
+                 }
++                // Phase 2: parked SMS on app start (retry once, then Unparsed card).
++                "parkedExhaustedSms" -> {
++                    result.success(SmsPendingQueue.listExhaustedParked(applicationContext))
++                }
++                "removeParkedSms" -> {
++                    val ids = call.argument<List<String>>("ids") ?: emptyList()
++                    result.success(SmsPendingQueue.removeParked(applicationContext, ids))
++                }
++                "retryParkedSmsOnce" -> {
++                    result.success(SmsPendingQueue.retryParkedOnce(applicationContext))
++                }
+                 else -> if (!QueueChannel.handle(this, call, result)) result.notImplemented()
+             }
+         }
+@@ -358,11 +394,13 @@ class MainActivity : FlutterFragmentActivity() {
+                 while (it.moveToNext() && messages.size < cap) {
+                     val dateSent = if (dateSentIndex >= 0) it.getLong(dateSentIndex) else 0L
+                     val dateVal = if (dateIndex >= 0) it.getLong(dateIndex) else 0L
+-                    val effectiveDate = if (dateSent > 0) dateSent else dateVal
++                    // "date" = provider receive time (history import, as
++                    // before); "dateSent" = service-center time (catch-up).
+                     messages.add(mapOf(
+                         "body" to (it.getString(bodyIndex) ?: ""),
+                         "sender" to (it.getString(addressIndex) ?: ""),
+-                        "date" to effectiveDate
++                        "date" to dateVal,
++                        "dateSent" to dateSent
+                     ))
+                 }
+             }
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt
+index db17b1a..1ffc2e6 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt
+@@ -2,12 +2,32 @@ package com.spentx.app.spentx
+ 
+ import android.service.notification.NotificationListenerService
+ import android.service.notification.StatusBarNotification
++import java.security.MessageDigest
+ 
+ class SmsNotificationListenerService : NotificationListenerService() {
+ 
+     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+         super.onNotificationPosted(sbn)
+         if (sbn == null) return
++        handle(sbn)
++    }
++
++    /**
++     * Phase 2: payment notifications posted while the listener was not
++     * connected (app update, reboot, process killed) are still in the tray.
++     * The stable hash makes re-reading them safe (already processed ->
++     * skipped in Dart).
++     */
++    override fun onListenerConnected() {
++        super.onListenerConnected()
++        try {
++            activeNotifications?.forEach { if (it != null) handle(it) }
++        } catch (_: Exception) {
++            // Listener not bound yet / revoked: nothing to catch up.
++        }
++    }
++
++    private fun handle(sbn: StatusBarNotification) {
+ 
+         // Signed out: nothing new is read. Already queued items are kept.
+         if (!SpentXDetectionPrefs.isUserAuthenticated(this)) return
+@@ -52,16 +72,22 @@ class SmsNotificationListenerService : NotificationListenerService() {
+         // "notif:<package>"), so templates, controlled notification rules,
+         // Needs review and cross-source dedup are shared. Only a cheap
+         // pre-gate runs here; Dart decides everything else.
+-        // Phase 2: Deduplicate re-posted or updated notifications with identical content
++        // Cheap money gate first: no amount + money word (or an OTP) -> never
++        // queued, never deduped.
++        if (!shouldForward(fullText)) return
++
++        // Phase 2: stable identity of this notification: package + key +
++        // text + Notification.when (never postTime, which changes when the
++        // same notification is re-posted). The in-memory LRU is only a
++        // pre-check; Dart dedupes durably on the same hash.
+         val notifKey = sbn.key ?: "${sbn.packageName}_${sbn.id}"
++        val whenMs = sbn.notification.`when`.takeIf { it > 0 } ?: sbn.postTime
++        val messageHash = stableHash(sbn.packageName, notifKey, fullText, whenMs)
+         synchronized(recentNotificationsLock) {
+-            val existing = recentNotificationTexts[notifKey]
+-            if (existing != null && existing == fullText) {
+-                return
+-            }
+-            recentNotificationTexts[notifKey] = fullText
+-            if (recentNotificationTexts.size > 200) {
+-                val it = recentNotificationTexts.keys.iterator()
++            if (recentNotificationHashes.contains(messageHash)) return
++            recentNotificationHashes.add(messageHash)
++            if (recentNotificationHashes.size > 200) {
++                val it = recentNotificationHashes.iterator()
+                 if (it.hasNext()) {
+                     it.next()
+                     it.remove()
+@@ -71,7 +97,10 @@ class SmsNotificationListenerService : NotificationListenerService() {
+ 
+         val sender = NOTIFICATION_SENDER_PREFIX + sbn.packageName
+         val id = try {
+-            SmsPendingQueue.enqueue(applicationContext, sender, fullText, sbn.postTime)
++            SmsPendingQueue.enqueue(
++                applicationContext, sender, fullText, whenMs,
++                timeExact = true, messageHash = messageHash,
++            )
+         } catch (_: Exception) {
+             null
+         }
+@@ -80,7 +109,9 @@ class SmsNotificationListenerService : NotificationListenerService() {
+             val data = mutableMapOf<String, Any>(
+                 "sender" to sender,
+                 "body" to fullText,
+-                "timestamp" to sbn.postTime,
++                "timestamp" to whenMs,
++                "messageHash" to messageHash,
++                "timeExact" to true,
+             )
+             if (id != null) data["queueId"] = id
+             sink.success(data)
+@@ -91,7 +122,14 @@ class SmsNotificationListenerService : NotificationListenerService() {
+ 
+     companion object {
+         private val recentNotificationsLock = Any()
+-        private val recentNotificationTexts = LinkedHashMap<String, String>()
++        private val recentNotificationHashes = LinkedHashSet<String>()
++
++        /** sha256 hex of package, key, text and Notification.when. */
++        fun stableHash(packageName: String, key: String, text: String, whenMs: Long): String {
++            val digest = MessageDigest.getInstance("SHA-256")
++                .digest("$packageName\u0000$key\u0000$text\u0000$whenMs".toByteArray(Charsets.UTF_8))
++            return digest.joinToString("") { "%02x".format(it) }
++        }
+ 
+         /** Sender id of a forwarded notification (Dart: notificationSenderPrefix). */
+         const val NOTIFICATION_SENDER_PREFIX = "notif:"
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt
+index 3332389..51cb89f 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt
+@@ -8,34 +8,86 @@ import org.json.JSONObject
+  * Stored encrypted (Android Keystore). Read with [peek], removed per item with
+  * [ack] after Dart processed it; failures retry via [fail] (see [RetryQueue]).
+  *
+- * Each item belongs to the user signed in when it arrived. Signing out or
+- * turning detection off never deletes queued items: they wait, unprocessed,
+- * until their owner is signed in with detection on, or the owner clears
+- * them from Settings. Another user's items are never handed to Dart.
++ * Phase 2 ([reconcile]):
++ * - Each item carries its user. Signing out purges everything queued and
++ *   clears the stored session uid; the last signed-in user is remembered.
++ * - While signed out (detection on), new SMS are queued without an owner,
++ *   tagged with the last signed-in user, at most 7 days / 500 items. The
++ *   same user signing back in gets them processed; a different user's
++ *   sign-in purges them.
++ * - Detection off: nothing is queued and existing items are purged. When
++ *   detection is switched back on, the time is recorded (catch-up starts
++ *   there, never earlier).
++ * - Parked items are retried once on the next app start, then filed as an
++ *   Unparsed card by Dart and removed; parked items older than 30 days are
++ *   purged.
+  */
+ object SmsPendingQueue {
+-    private val queue = RetryQueue(key = "sms_queue")
++    private const val KEY = "sms_queue"
++    private val queue = RetryQueue(key = KEY)
++
++    private const val K_LAST_AUTH = "p2_last_auth"
++    private const val K_LAST_UID = "p2_last_signed_in_uid"
++    private const val K_LAST_DETECTION = "p2_last_detection"
++    private const val K_DETECTION_ENABLED_AT = "p2_detection_enabled_at"
++
++    const val SIGNED_OUT_MAX_AGE_MS = DurableQueueCore.SEVEN_DAYS_MS
++    const val SIGNED_OUT_MAX_COUNT = 500
++
++    /** Same storage as [RetryQueue] (callers hold [SecureQueueStore.lock]). */
++    private fun core(context: Context) = DurableQueueCore(
++        kv = SecureQueueStore.active(context),
++        key = KEY,
++        overflow = SecureQueueStore.segments(context, "$KEY/queue"),
++        parked = SecureQueueStore.segments(context, "$KEY/parked"),
++        held = SecureQueueStore.segments(context, "$KEY/held"),
++    )
+ 
+     /**
+      * [timestamp] = when the SMS was received (first part), the transaction
+-     * time. Returns the queued item's id, or null when nothing was queued
+-     * (signed out, or a pure one-time-code text that is never stored).
++     * time; [timeExact] = false when it is not the service-center time.
++     * [messageHash] = a stable hash computed natively (notifications).
++     * Returns the queued item's id, or null when nothing was queued
++     * (detection off, or a pure one-time-code text that is never stored).
+      */
+-    fun enqueue(context: Context, sender: String?, body: String, timestamp: Long = System.currentTimeMillis()): String? {
+-        if (!SpentXDetectionPrefs.isUserAuthenticated(context)) return null
++    fun enqueue(
++        context: Context,
++        sender: String?,
++        body: String,
++        timestamp: Long = System.currentTimeMillis(),
++        timeExact: Boolean = true,
++        messageHash: String? = null,
++    ): String? {
++        reconcile(context)
++        if (!SpentXDetectionPrefs.isAutoDetectionEnabled(context)) return null
+         if (SmsPrivacy.isOtpOnly(body)) return null
+-        return queue.add(
+-            context,
+-            JSONObject()
+-                .put("sender", sender ?: "")
+-                .put("body", body)
+-                .put("timestamp", if (timestamp > 0) timestamp else System.currentTimeMillis()),
+-            owner = SpentXDetectionPrefs.sessionUid(context),
+-        )
++        val now = System.currentTimeMillis()
++        val item = JSONObject()
++            .put("sender", sender ?: "")
++            .put("body", body)
++            .put("timestamp", if (timestamp > 0) timestamp else now)
++            .put("timeExact", timeExact && timestamp > 0)
++            .put("queuedAt", now)
++        if (!messageHash.isNullOrEmpty()) item.put("messageHash", messageHash)
++        if (!SpentXDetectionPrefs.isUserAuthenticated(context)) {
++            return synchronized(SecureQueueStore.lock) {
++                val last = lastSignedInUid(context)
++                item.put(DurableQueueCore.SIGNED_OUT, true)
++                if (!last.isNullOrEmpty()) item.put(DurableQueueCore.SIGNED_OUT_USER, last)
++                val c = core(context)
++                val id = c.add(item, owner = null)
++                c.capSignedOut(SIGNED_OUT_MAX_AGE_MS, SIGNED_OUT_MAX_COUNT)
++                id
++            }
++        }
++        val owner = SpentXDetectionPrefs.sessionUid(context)
++        if (!owner.isNullOrEmpty()) item.put("userId", owner)
++        return queue.add(context, item, owner = owner)
+     }
+ 
+     /** The signed-in user's items to process now; empty when detection is off. */
+     fun peek(context: Context): List<Map<String, Any?>> {
++        reconcile(context)
+         val owner = processingOwner(context) ?: return emptyList()
+         return queue.peek(context, wrapStringAs = "body", owner = owner).map { toMap(it) }
+     }
+@@ -45,15 +97,17 @@ object SmsPendingQueue {
+     fun fail(context: Context, id: String, error: String?): Boolean = queue.fail(context, id, error)
+ 
+     /** S4: something to process now (worker / boot scheduling). */
+-    fun hasPending(context: Context): Boolean =
+-        processingOwner(context) != null && queue.pendingCount(context) > 0
++    fun hasPending(context: Context): Boolean {
++        reconcile(context)
++        return processingOwner(context) != null && queue.pendingCount(context) > 0
++    }
+ 
+     /** The signed-in user's queued and parked SMS (Settings review list). */
+     fun listForReview(context: Context): List<Map<String, Any?>> {
+         val owner = SpentXDetectionPrefs.sessionUid(context) ?: return emptyList()
+-        return queue.listOwned(context, owner, wrapStringAs = "body").map {
+-            toMap(it) + mapOf("queue" to "sms", "parked" to it.optBoolean("parked"))
+-        }
++        return queue.listOwned(context, owner, wrapStringAs = "body")
++            .filter { !it.optBoolean(DurableQueueCore.SIGNED_OUT) }
++            .map { toMap(it) + mapOf("queue" to "sms", "parked" to it.optBoolean("parked")) }
+     }
+ 
+     /** User-confirmed "Clear": removes only the signed-in user's items. */
+@@ -62,16 +116,105 @@ object SmsPendingQueue {
+         return queue.removeOwned(context, owner)
+     }
+ 
+-    /** S5: purges failed items older than 7 days. */
+-    fun purgeExpired(context: Context, maxAgeMillis: Long = DurableQueueCore.SEVEN_DAYS_MS): Int =
++    /** Phase 2: parked SMS are purged after 30 days (daily worker). */
++    fun purgeExpired(context: Context, maxAgeMillis: Long = DurableQueueCore.THIRTY_DAYS_MS): Int =
+         queue.purgeExpiredParked(context, maxAgeMillis)
+ 
++    /** Phase 2, app start: parked items of the user get one more attempt. */
++    fun retryParkedOnce(context: Context): Int {
++        reconcile(context)
++        val owner = processingOwner(context) ?: return 0
++        return synchronized(SecureQueueStore.lock) { core(context).retryParkedOnce(owner) }
++    }
++
++    /** Phase 2, app start: parked items that failed again after their retry. */
++    fun listExhaustedParked(context: Context): List<Map<String, Any?>> {
++        reconcile(context)
++        val owner = processingOwner(context) ?: return emptyList()
++        return synchronized(SecureQueueStore.lock) {
++            core(context).listExhaustedParked(owner, wrapStringAs = "body").map { toMap(it) }
++        }
++    }
++
++    /** Phase 2: removes parked items Dart filed as Unparsed cards. */
++    fun removeParked(context: Context, ids: Collection<String>): Int =
++        synchronized(SecureQueueStore.lock) { core(context).removeParked(ids) }
++
++    /** When detection was last switched on (ms), or 0. */
++    fun detectionEnabledAt(context: Context): Long = synchronized(SecureQueueStore.lock) {
++        try {
++            SecureQueueStore.active(context).get(K_DETECTION_ENABLED_AT)?.toLongOrNull() ?: 0L
++        } catch (_: Exception) {
++            0L
++        }
++    }
++
++    private fun lastSignedInUid(context: Context): String? = try {
++        SecureQueueStore.active(context).get(K_LAST_UID)?.takeIf { it.isNotEmpty() }
++    } catch (_: Exception) {
++        null
++    }
++
++    /**
++     * Phase 2: applies sign-in / sign-out / detection changes to the queue.
++     * Cheap when nothing changed. Called before every enqueue / peek, on
++     * boot, when the session uid is set, and from a preferences listener.
++     */
++    fun reconcile(context: Context) {
++        synchronized(SecureQueueStore.lock) {
++            try {
++                val kv = SecureQueueStore.active(context)
++                val auth = SpentXDetectionPrefs.isUserAuthenticated(context)
++                val detection = SpentXDetectionPrefs.isAutoDetectionEnabled(context)
++                val lastAuth = kv.get(K_LAST_AUTH)
++                val lastDetection = kv.get(K_LAST_DETECTION)
++                val c = core(context)
++
++                // Detection off: nothing waits in the queue.
++                if (!detection) {
++                    c.purgeAll()
++                } else if (lastDetection == "0") {
++                    kv.put(K_DETECTION_ENABLED_AT, System.currentTimeMillis().toString())
++                }
++                val det = if (detection) "1" else "0"
++                if (lastDetection != det) kv.put(K_LAST_DETECTION, det)
++
++                if (!auth) {
++                    if (lastAuth == "1") {
++                        // Sign-out: purge, forget the session (the last
++                        // signed-in user is kept for signed-out items).
++                        c.purgeAll()
++                        SpentXDetectionPrefs.clearSessionUidOnSignOut(context)
++                    }
++                    c.capSignedOut(SIGNED_OUT_MAX_AGE_MS, SIGNED_OUT_MAX_COUNT)
++                    if (lastAuth != "0") kv.put(K_LAST_AUTH, "0")
++                    return
++                }
++
++                // Signed in, uid not stored yet: wait for setSessionUid.
++                val uid = SpentXDetectionPrefs.sessionUid(context) ?: return
++                val last = kv.get(K_LAST_UID)
++                val signedIn = lastAuth == "0"
++                if (signedIn || (!last.isNullOrEmpty() && last != uid)) {
++                    c.claimSignedOut(uid)
++                }
++                if (last != uid) kv.put(K_LAST_UID, uid)
++                if (lastAuth != "1") kv.put(K_LAST_AUTH, "1")
++            } catch (_: Exception) {
++                // Queue storage unavailable: retried on the next call.
++            }
++        }
++    }
++
+     private fun toMap(it: JSONObject): Map<String, Any?> = mapOf(
+         "id" to it.optString("id"),
+         "sender" to it.optString("sender", ""),
+         "body" to it.optString("body", ""),
+         "timestamp" to it.optLong("timestamp", 0L),
+         "attempts" to it.optInt("attempts", 0),
++        "userId" to it.optString(DurableQueueCore.OWNER, "").ifEmpty { null },
++        "messageHash" to it.optString("messageHash", "").ifEmpty { null },
++        "timeExact" to it.optBoolean("timeExact", true),
+     )
+ }
+ 
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt
+index c4717ac..efe7293 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt
+@@ -9,9 +9,11 @@ import android.util.Log
+ class SmsReceiver : BroadcastReceiver() {
+     override fun onReceive(context: Context?, intent: Intent?) {
+         if (context == null || intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+-        // Signed out: nothing new is read. Already queued items are kept.
+-        if (!SpentXDetectionPrefs.isUserAuthenticated(context)) return
++        // Phase 2: detection off -> nothing is queued (and the queue is
++        // purged). Signed out -> queued for the last signed-in user (7 days /
++        // 500 at most), processed only if that same user signs back in.
+         if (!SpentXDetectionPrefs.isAutoDetectionEnabled(context)) return
++        val signedIn = SpentXDetectionPrefs.isUserAuthenticated(context)
+ 
+         try {
+             val parts = Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return
+@@ -31,13 +33,16 @@ class SmsReceiver : BroadcastReceiver() {
+             for ((sender, entry) in grouped) {
+                 val body = entry.first.toString()
+                 if (body.isBlank()) continue
+-                val ts = if (entry.second > 0) entry.second else System.currentTimeMillis()
++                // timestampMillis is the service-center time (provider
++                // date_sent). Missing (0): receive time, matched by body.
++                val timeExact = entry.second > 0
++                val ts = if (timeExact) entry.second else System.currentTimeMillis()
+                 Log.d("SmsReceiver", "SMS received (${body.length} chars)")
+ 
+                 // S4: queue first (encrypted). The item is removed only after
+                 // the one Hive writer saved it, so a crash mid-save keeps it.
+                 val id = try {
+-                    SmsPendingQueue.enqueue(context.applicationContext, sender, body, ts)
++                    SmsPendingQueue.enqueue(context.applicationContext, sender, body, ts, timeExact)
+                 } catch (e: Exception) {
+                     Log.e("SmsReceiver", "Could not queue SMS: ${e.javaClass.simpleName}")
+                     null
+@@ -48,11 +53,13 @@ class SmsReceiver : BroadcastReceiver() {
+                 // swiped away (the notification listener keeps the process
+                 // up), and success() on a dead engine silently dropped it.
+                 val sink = MainActivity.eventSink
++                if (!signedIn) continue
+                 if (sink != null && MainActivity.isEngineAttached) {
+                     val data = mutableMapOf<String, Any>(
+                         "sender" to sender,
+                         "body" to body,
+                         "timestamp" to ts,
++                        "timeExact" to timeExact,
+                     )
+                     // Dart acks this id after the save.
+                     if (id != null) data["queueId"] = id
+diff --git a/android/app/src/main/kotlin/com/spentx/app/spentx/SpentXDetectionPrefs.kt b/android/app/src/main/kotlin/com/spentx/app/spentx/SpentXDetectionPrefs.kt
+index 099818a..3b87ca3 100644
+--- a/android/app/src/main/kotlin/com/spentx/app/spentx/SpentXDetectionPrefs.kt
++++ b/android/app/src/main/kotlin/com/spentx/app/spentx/SpentXDetectionPrefs.kt
+@@ -56,6 +56,15 @@ object SpentXDetectionPrefs {
+     }
+ 
+     fun setSessionUid(context: Context, uid: String?) {
++        writeSessionUid(context, uid)
++        // Phase 2: a new / cleared session is applied to the SMS queue.
++        SmsPendingQueue.reconcile(context)
++    }
++
++    /** Phase 2: sign-out detected natively; the queue was purged already. */
++    internal fun clearSessionUidOnSignOut(context: Context) = writeSessionUid(context, null)
++
++    private fun writeSessionUid(context: Context, uid: String?) {
+         synchronized(SecureQueueStore.lock) {
+             try {
+                 if (uid.isNullOrBlank()) {
+diff --git a/lib/features/sms/background/native_queue_client.dart b/lib/features/sms/background/native_queue_client.dart
+index 9e38358..c8a5cf3 100644
+--- a/lib/features/sms/background/native_queue_client.dart
++++ b/lib/features/sms/background/native_queue_client.dart
+@@ -1,8 +1,13 @@
++import 'dart:async';
++
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter/services.dart';
+ 
+ import '../../../data/local/hive_service.dart';
++import '../autosave/sms_session_user.dart';
+ import '../detected/sms_detection_debug_log.dart';
++import '../detected/sms_seen_store.dart';
++import '../models/raw_queue_item.dart';
+ 
+ /// One raw SMS the native receiver queued while Flutter was not ready.
+ class NativeSmsItem {
+@@ -11,12 +16,56 @@ class NativeSmsItem {
+     required this.body,
+     this.sender,
+     this.receivedAt,
++    this.userId,
++    this.messageHash,
++    this.timeExact = true,
+   });
+ 
+   final String id;
+   final String body;
+   final String? sender;
+   final DateTime? receivedAt;
++
++  /// Phase 2: the user the item was queued for.
++  final String? userId;
++
++  /// Phase 2: hash computed natively (notifications), else null.
++  final String? messageHash;
++
++  /// Phase 2: false when [receivedAt] is not the service-center time.
++  final bool timeExact;
++
++  static NativeSmsItem fromRaw(Map<dynamic, dynamic> raw) {
++    final ts = raw['timestamp'];
++    final ms = ts is num ? ts.toInt() : int.tryParse('$ts');
++    final uid = raw['userId']?.toString();
++    final hash = raw['messageHash']?.toString();
++    return NativeSmsItem(
++      id: (raw['id'] ?? '').toString(),
++      body: (raw['body'] ?? '').toString(),
++      sender: raw['sender']?.toString(),
++      receivedAt:
++          (ms != null && ms > 0) ? DateTime.fromMillisecondsSinceEpoch(ms) : null,
++      userId: (uid == null || uid.isEmpty) ? null : uid,
++      messageHash: (hash == null || hash.isEmpty) ? null : hash,
++      timeExact: raw['timeExact'] is bool ? raw['timeExact'] as bool : true,
++    );
++  }
++
++  /// Phase 2: an item queued for another user (or while nobody is signed
++  /// in here) is never handled or acked by this session.
++  bool get belongsToCurrentUser {
++    final owner = userId;
++    if (owner == null) return true;
++    return SmsSessionUser.currentUid == owner;
++  }
++
++  /// Values the pipeline reads from the zone while this item is handled.
++  Map<String, Object?> get zoneMeta => {
++    'messageHash': messageHash,
++    'timeExact': timeExact,
++    'userId': userId,
++  };
+ }
+ 
+ /// Result of one pass over a native queue.
+@@ -138,32 +187,76 @@ class NativeQueueClient {
+   static Future<NativeQueueRun> processSms(
+     Future<void> Function(NativeSmsItem item) handle, {
+     MethodChannel channel = defaultChannel,
+-  }) {
++  }) async {
++    // Phase 2: the processed-message store (encrypted box) is open before
++    // any item, and pruned daily (the 15-minute worker runs this too).
++    try {
++      if (await SmsSeenStore.ensureOpen()) await SmsSeenStore.pruneIfDue();
++    } catch (_) {}
+     return _run(
+       channel: channel,
+       queue: 'sms',
+       peekMethod: 'peekPendingSms',
+       legacyMethod: 'getPendingSms',
++      accept: (raw) => NativeSmsItem.fromRaw(raw).belongsToCurrentUser,
+       handle: (raw) async {
+-        final body = (raw['body'] ?? '').toString();
+-        if (body.trim().isEmpty) return;
+-        final ts = raw['timestamp'];
+-        final ms = ts is num ? ts.toInt() : int.tryParse('$ts');
+-        await handle(
+-          NativeSmsItem(
+-            id: (raw['id'] ?? '').toString(),
+-            body: body,
+-            sender: raw['sender']?.toString(),
+-            receivedAt:
+-                (ms != null && ms > 0)
+-                    ? DateTime.fromMillisecondsSinceEpoch(ms)
+-                    : null,
+-          ),
++        final item = NativeSmsItem.fromRaw(raw);
++        if (item.body.trim().isEmpty) return;
++        await runZoned(
++          () => handle(item),
++          zoneValues: {rawQueueItemZoneKey: item.zoneMeta},
+         );
+       },
+     );
+   }
+ 
++  /// Phase 2, app start: parked SMS that failed again after their one retry
++  /// are filed with [fileCard] (an Unparsed review card), flushed, then
++  /// removed natively. Returns how many were filed.
++  static Future<int> fileExhaustedParked(
++    Future<void> Function(NativeSmsItem item) fileCard, {
++    MethodChannel channel = defaultChannel,
++  }) async {
++    List<dynamic>? items;
++    try {
++      items = await channel.invokeMethod<List<dynamic>>('parkedExhaustedSms');
++    } catch (_) {
++      return 0;
++    }
++    final filed = <String>[];
++    for (final raw in items ?? const []) {
++      if (raw is! Map) continue;
++      final item = NativeSmsItem.fromRaw(raw);
++      if (item.id.isEmpty || !item.belongsToCurrentUser) continue;
++      try {
++        if (item.body.trim().isNotEmpty) await fileCard(item);
++        filed.add(item.id);
++      } catch (_) {
++        // Kept parked; tried again on the next app start.
++      }
++    }
++    if (filed.isEmpty) return 0;
++    try {
++      await beforeAck();
++      await channel.invokeMethod<int>('removeParkedSms', {'ids': filed});
++    } catch (_) {
++      return 0;
++    }
++    return filed.length;
++  }
++
++  /// Phase 2, app start: parked SMS never retried go back to the queue for
++  /// one more attempt. Returns how many.
++  static Future<int> retryParkedOnce({
++    MethodChannel channel = defaultChannel,
++  }) async {
++    try {
++      return await channel.invokeMethod<int>('retryParkedSmsOnce') ?? 0;
++    } catch (_) {
++      return 0;
++    }
++  }
++
+   static Future<NativeQueueRun> processTransactions(
+     Future<void> Function(String payload) handle, {
+     MethodChannel channel = defaultChannel,
+@@ -187,6 +280,7 @@ class NativeQueueClient {
+     required String peekMethod,
+     required String legacyMethod,
+     required Future<void> Function(Map<dynamic, dynamic> raw) handle,
++    bool Function(Map<dynamic, dynamic> raw)? accept,
+   }) {
+     final previous = _tail;
+     final next = previous.then(
+@@ -196,6 +290,7 @@ class NativeQueueClient {
+         peekMethod: peekMethod,
+         legacyMethod: legacyMethod,
+         handle: handle,
++        accept: accept,
+       ),
+     );
+     _tail = next.then((_) {}, onError: (_) {});
+@@ -215,6 +310,7 @@ class NativeQueueClient {
+     required String peekMethod,
+     required String legacyMethod,
+     required Future<void> Function(Map<dynamic, dynamic> raw) handle,
++    bool Function(Map<dynamic, dynamic> raw)? accept,
+   }) async {
+     final run = NativeQueueRun();
+     while (true) {
+@@ -226,6 +322,7 @@ class NativeQueueClient {
+         peekMethod: peekMethod,
+         legacyMethod: legacyMethod,
+         handle: handle,
++        accept: accept,
+       );
+       if (run.yielded || size < nativeBatchSize || run.done == before) {
+         return run;
+@@ -241,6 +338,7 @@ class NativeQueueClient {
+     required String peekMethod,
+     required String legacyMethod,
+     required Future<void> Function(Map<dynamic, dynamic> raw) handle,
++    bool Function(Map<dynamic, dynamic> raw)? accept,
+   }) async {
+     List<dynamic>? items;
+     var acks = true;
+@@ -271,6 +369,8 @@ class NativeQueueClient {
+         break;
+       }
+       final id = (item['id'] ?? '').toString();
++      // Phase 2: another user's item: neither handled nor acked.
++      if (accept != null && !accept(item)) continue;
+       if (acks && _recentlyDone.contains(id)) {
+         // Saved here already; only its ack was lost. Never handled twice.
+         try {
+diff --git a/lib/features/sms/detected/sms_detection_pipeline.dart b/lib/features/sms/detected/sms_detection_pipeline.dart
+index f6446ed..eba64f9 100644
+--- a/lib/features/sms/detected/sms_detection_pipeline.dart
++++ b/lib/features/sms/detected/sms_detection_pipeline.dart
+@@ -1,3 +1,5 @@
++import 'dart:async';
++
+ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:hive_flutter/hive_flutter.dart';
+@@ -7,6 +9,7 @@ import '../../../core/providers/transaction_provider.dart';
+ import '../autosave/sms_session_user.dart';
+ import '../../sms_parser/models/transaction_parsed.dart';
+ import '../../sms_parser/notification_parse_rules.dart';
++import '../../sms_parser/sms_parse_confidence.dart';
+ import '../../sms_parser/sms_direction_helper.dart';
+ import '../../sms_parser/sms_transaction_filters.dart';
+ import '../rules/engine/sms_rule_engine.dart';
+@@ -101,6 +104,14 @@ class SmsDetectionPipeline {
+     /// app would (auto-add known merchants, queue the rest for review). Used
+     /// by the inbox catch-up so a batch of old SMS does not stack popups.
+     bool preferBackground = false,
++
++    /// Phase 2: hash computed natively (notifications). Default: derived
++    /// from sender + body + [receivedAt].
++    String? messageHash,
++
++    /// Phase 2: false when [receivedAt] is not the SMS service-center time
++    /// (date_sent = 0); dedupe then also matches sender + body (5 min).
++    bool? timeExact,
+   }) async {
+     final body = rawMessage.trim();
+ 
+@@ -145,19 +156,32 @@ class SmsDetectionPipeline {
+     final at = receivedAt ?? DateTime.now();
+ 
+     // Flow v2: message-level deduplication via deterministic RawQueueItem.messageHash
++    // A native queue item being handled carries its hash / time quality in
++    // the zone (set by NativeQueueClient), also on the background path.
++    final zoneMeta = Zone.current[rawQueueItemZoneKey];
++    final meta = zoneMeta is Map ? zoneMeta : const <String, Object?>{};
+     final rawItem = RawQueueItem(
+       body: body,
+       sender: sender ?? '',
+       source: _sourceLabel(source),
+       receivedAt: at,
++      timeExact: timeExact ?? (meta['timeExact'] is bool ? meta['timeExact'] as bool : true),
++      messageHash: messageHash ?? meta['messageHash']?.toString(),
+     );
+     final msgHash = rawItem.messageHash;
+     if (source != SmsDetectionSource.accountReplay &&
+-        SmsSeenStore.containsHash(msgHash)) {
++        SmsSeenStore.isDuplicate(
++          messageHash: msgHash,
++          bodyKey: rawItem.bodyKey,
++          at: at,
++          timeExact: rawItem.timeExact,
++        )) {
+       return SmsPipelineOutcome.skippedDuplicate;
+     }
+ 
+-    final dedupeKey = '${body.hashCode}_${sender ?? ''}_${at.minute}';
++    // In-memory guard for the same message on two paths at once. Keyed on
++    // the message hash: two different SMS with the same text are not one.
++    final dedupeKey = msgHash;
+     if (source != SmsDetectionSource.accountReplay &&
+         _recentHashes.contains(dedupeKey)) {
+       if (Hive.isBoxOpen('pending_detections')) {
+@@ -176,10 +200,42 @@ class SmsDetectionPipeline {
+     if (_recentHashes.length > 80) {
+       _recentHashes.remove(_recentHashes.first);
+     }
+-    // Persistent record so the inbox catch-up never re-runs this message (30-day retention).
+-    await SmsSeenStore.markHashProcessed(msgHash, at: at);
++    final SmsPipelineOutcome outcome;
++    try {
++      outcome = await _routeUnique(
++        body: body,
++        sender: sender,
++        source: source,
++        at: at,
++        showVerifyPopup: showVerifyPopup,
++        preferBackground: preferBackground,
++      );
++    } catch (_) {
++      // Not processed: a retry of this message must not be skipped.
++      _recentHashes.remove(dedupeKey);
++      rethrow;
++    }
++    // Phase 2: marked only after the final outcome was saved (the caller
++    // flushes and acks next). 30-day retention.
++    await SmsSeenStore.markProcessed(
++      messageHash: msgHash,
++      bodyKey: rawItem.bodyKey,
++      at: at,
++      timeExact: rawItem.timeExact,
++    );
+     await SmsSeenStore.add(body);
++    return outcome;
++  }
+ 
++  /// Everything after dedupe: block rules, filters, parse and filing.
++  static Future<SmsPipelineOutcome> _routeUnique({
++    required String body,
++    required String? sender,
++    required SmsDetectionSource source,
++    required DateTime at,
++    required bool showVerifyPopup,
++    required bool preferBackground,
++  }) async {
+     if (SmsRuleEngine.isBlocked(body)) {
+       SmsRuleEngine.ignoreMessage(
+         body,
+@@ -510,6 +566,46 @@ class SmsDetectionPipeline {
+     return SmsPipelineOutcome.pendingVerification;
+   }
+ 
++  /// Phase 2: a queued SMS that kept failing (parked, retried once). Filed
++  /// as an Unparsed Needs-review card so it is never silently lost; the raw
++  /// queue item is removed after this returns.
++  static Future<SmsPipelineOutcome> fileUnreadable({
++    required String body,
++    String? sender,
++    required DateTime at,
++  }) async {
++    final text = body.trim();
++    if (text.isEmpty) return SmsPipelineOutcome.skippedEmpty;
++    final base = SmsRuleEngine.unparsedCandidate(
++      text,
++      smsReceivedTime: at,
++      sender: sender,
++    );
++    final parsed = TransactionParsed(
++      amount: base?.amount ?? 0,
++      direction: base?.direction ?? TransactionDirection.expense,
++      bank: base?.bank ?? '',
++      accountLast4: base?.accountLast4 ?? '',
++      name: unreadableTitle,
++      rawIdentifier: unreadableTitle,
++      mode: TransactionMode.unknown,
++      accountFlow: AccountFlow.personal,
++      dateTime: at,
++      rawMessage: text,
++      parseSource: 'parked',
++      reviewReason: SmsParseConfidence.unparsed,
++    );
++    return _fileForReview(
++      body: text,
++      parsed: parsed,
++      source: SmsDetectionSource.pendingFlush,
++      at: at,
++      sender: sender,
++    );
++  }
++
++  static const unreadableTitle = "Couldn't read this SMS - Tap to review";
++
+   /// Notification / native JSON payload.
+   /// If the payload already carries our transactionId (click or queued notif), short-circuit:
+   /// rely on Hive id-only queue + click handler. Avoids reparse, false dups, and extra notifications.
+diff --git a/lib/features/sms/detected/sms_inbox_catch_up.dart b/lib/features/sms/detected/sms_inbox_catch_up.dart
+index 563ac3d..6cc2e6f 100644
+--- a/lib/features/sms/detected/sms_inbox_catch_up.dart
++++ b/lib/features/sms/detected/sms_inbox_catch_up.dart
+@@ -76,8 +76,16 @@ class SmsInboxCatchUp {
+       if (activityStart != null && activityStart.isAfter(since)) {
+         since = activityStart;
+       }
+-
+-      final rows = await SmsService.readInboxRaw(since: since, limit: 300);
++      // Phase 2: after detection was switched back on, only SMS received
++      // since then (no flood of the days it was off).
++      final enabledAt = SmsService.detectionEnabledAt();
++      if (enabledAt != null && enabledAt.isAfter(since)) since = enabledAt;
++
++      await SmsSeenStore.ensureOpen();
++      final rows = await SmsService.readInboxForCatchUp(
++        since: since,
++        limit: 300,
++      );
+       if (rows.isEmpty) return 0;
+ 
+       final known = knownBodies();
+@@ -92,7 +100,10 @@ class SmsInboxCatchUp {
+           rawMessage: row.body,
+           sender: row.sender,
+           source: SmsDetectionSource.catchUp,
+-          receivedAt: row.date,
++          // Service-center time, same as the live receiver uses; matches
++          // the queued copy's hash. Provider date_sent = 0 -> body match.
++          receivedAt: row.sentAt ?? row.date,
++          timeExact: row.sentAt != null,
+           preferBackground: true,
+         );
+         known.add(norm(row.body));
+diff --git a/lib/features/sms/detected/sms_seen_store.dart b/lib/features/sms/detected/sms_seen_store.dart
+index c445ee5..3d7b3bf 100644
+--- a/lib/features/sms/detected/sms_seen_store.dart
++++ b/lib/features/sms/detected/sms_seen_store.dart
+@@ -1,10 +1,20 @@
++import 'dart:convert';
++
++import 'package:crypto/crypto.dart';
+ import 'package:hive_flutter/hive_flutter.dart';
+ 
+-/// Remembers which SMS bodies have already been through the detection
+-/// pipeline, so the inbox catch-up never runs a message a second time.
++import '../../../data/local/hive_service.dart';
++
++/// Remembers which SMS have already been through the detection pipeline.
+ ///
+-/// Stores a 32-bit FNV-1a hash of the whitespace-normalised body (never the
+-/// text itself) in the `settings` box, capped at [_max] entries.
++/// Two stores, neither keeps message text:
++///  * [contains] / [add]: a 32-bit FNV-1a hash of the body in the `settings`
++///    box (capped at [_max]); the inbox catch-up skips those bodies.
++///  * Flow v2 (Phase 2): the encrypted SecureHive box [boxName]. Keys
++///    `h:<messageHash>` → transaction time (ms), and `b:<bodyKey>` → a flat
++///    list of `[time ms, exact 0/1]` pairs. An SMS is marked only after its
++///    final outcome was saved (see the pipeline). Entries older than 30 days
++///    are pruned on app start and by the daily worker ([pruneIfDue]).
+ class SmsSeenStore {
+   SmsSeenStore._();
+ 
+@@ -13,7 +23,7 @@ class SmsSeenStore {
+ 
+   /// FNV-1a 32-bit of the trimmed, whitespace-collapsed body.
+   static int hashBody(String body) {
+-    final norm = body.trim().replaceAll(RegExp(r'\s+'), ' ');
++    final norm = _norm(body);
+     var hash = 0x811C9DC5;
+     for (final unit in norm.codeUnits) {
+       hash ^= unit & 0xFF;
+@@ -26,6 +36,9 @@ class SmsSeenStore {
+     return hash;
+   }
+ 
++  static String _norm(String body) =>
++      body.trim().replaceAll(RegExp(r'\s+'), ' ');
++
+   static bool contains(String body) {
+     if (!Hive.isBoxOpen('settings')) return false;
+     final list = Hive.box('settings').get(_key);
+@@ -47,49 +60,163 @@ class SmsSeenStore {
+     await box.put(_key, list);
+   }
+ 
+-  // --- Phase 2: Processed Message Hash Store (Transport Deduplication) ---
+-  static const _processedHashesKey = 'processed_message_hashes';
++  // --- Phase 2: processed message store (encrypted, own box) --------------
++
++  /// Encrypted SecureHive box holding processed-message keys (no text).
++  static const boxName = 'sms_seen_hashes';
++
++  /// Older Phase 2 builds kept the hashes in `settings` under this key.
++  static const _legacyKey = 'processed_message_hashes';
++  static const _pruneKey = '_last_prune_ms';
++  static const retention = Duration(days: 30);
++
++  /// Body fallback window: used only when one side has no service-center
++  /// time (date_sent = 0, or a notification), so its hash cannot match.
++  static const bodyWindow = Duration(minutes: 5);
++  static const _maxPerBody = 20;
++
++  static Box? get _box => Hive.isBoxOpen(boxName) ? Hive.box(boxName) : null;
++
++  /// Opens [boxName] (encrypted) when needed. False when it cannot be opened
++  /// right now (e.g. damaged in a background isolate): the caller then
++  /// processes without the durable check (tier B still dedupes records).
++  static Future<bool> ensureOpen() async {
++    if (_box == null) {
++      try {
++        await SecureHive.openBox(boxName);
++      } catch (_) {
++        return false;
++      }
++    }
++    await _migrateLegacy();
++    return _box != null;
++  }
++
++  static Future<void> _migrateLegacy() async {
++    final box = _box;
++    if (box == null || !Hive.isBoxOpen('settings')) return;
++    final settings = Hive.box('settings');
++    final raw = settings.get(_legacyKey);
++    if (raw is! Map) return;
++    final entries = <String, int>{};
++    raw.forEach((k, v) {
++      if (v is num) entries['h:$k'] = v.toInt();
++    });
++    if (entries.isNotEmpty) await box.putAll(entries);
++    await settings.delete(_legacyKey);
++  }
++
++  /// sha256(sender \0 normalised body): same text from the same sender.
++  static String bodyKey(String sender, String body) =>
++      sha256.convert(utf8.encode('$sender\u0000${_norm(body)}')).toString();
+ 
+   /// Checks if [messageHash] has already been processed by the pipeline.
+-  static bool containsHash(String messageHash) {
+-    if (!Hive.isBoxOpen('settings')) return false;
+-    final map = Hive.box('settings').get(_processedHashesKey);
+-    if (map is! Map) return false;
+-    return map.containsKey(messageHash);
++  static bool containsHash(String messageHash) =>
++      _box?.containsKey('h:$messageHash') ?? false;
++
++  /// Already processed: the exact hash, or (when either side has no exact
++  /// service-center time) the same sender + body within [bodyWindow].
++  static bool isDuplicate({
++    required String messageHash,
++    required String bodyKey,
++    required DateTime at,
++    bool timeExact = true,
++  }) {
++    final box = _box;
++    if (box == null) return false;
++    if (box.containsKey('h:$messageHash')) return true;
++    final list = box.get('b:$bodyKey');
++    if (list is! List) return false;
++    final ms = at.millisecondsSinceEpoch;
++    for (var i = 0; i + 1 < list.length; i += 2) {
++      final ts = list[i];
++      final exact = list[i + 1] == 1;
++      if (ts is! int) continue;
++      if (timeExact && exact) continue;
++      if ((ts - ms).abs() <= bodyWindow.inMilliseconds) return true;
++    }
++    return false;
++  }
++
++  /// Records a message whose final outcome was saved.
++  static Future<void> markProcessed({
++    required String messageHash,
++    required String bodyKey,
++    required DateTime at,
++    bool timeExact = true,
++  }) async {
++    final box = _box;
++    if (box == null) return;
++    final ms = at.millisecondsSinceEpoch;
++    final raw = box.get('b:$bodyKey');
++    final list = raw is List ? List<int>.from(raw.whereType<int>()) : <int>[];
++    list..add(ms)..add(timeExact ? 1 : 0);
++    while (list.length > _maxPerBody * 2) {
++      list.removeRange(0, 2);
++    }
++    await box.putAll({'h:$messageHash': ms, 'b:$bodyKey': list});
+   }
+ 
+-  /// Records [messageHash] as processed with the current timestamp (or [at]).
+-  /// Survives app restarts as it is written directly to the `settings` Hive box.
++  /// Records [messageHash] as processed at [at] (default now).
+   static Future<void> markHashProcessed(
+     String messageHash, {
+     DateTime? at,
+   }) async {
+-    if (!Hive.isBoxOpen('settings')) return;
+-    final box = Hive.box('settings');
+-    final raw = box.get(_processedHashesKey);
+-    final map = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+-    final timestamp = (at ?? DateTime.now()).millisecondsSinceEpoch;
+-    map[messageHash] = timestamp;
+-    await box.put(_processedHashesKey, map);
++    final box = _box;
++    if (box == null) return;
++    await box.put('h:$messageHash', (at ?? DateTime.now()).millisecondsSinceEpoch);
+   }
+ 
+-  /// Prunes message hashes older than [maxAge] (defaults to 30 days).
+-  /// Returns the count of pruned entries.
++  /// Prunes entries older than [maxAge] (default 30 days). Returns how many
++  /// message hashes were removed.
+   static Future<int> pruneOldHashes({
+-    Duration maxAge = const Duration(days: 30),
++    Duration maxAge = retention,
+     DateTime? now,
+   }) async {
+-    if (!Hive.isBoxOpen('settings')) return 0;
+-    final box = Hive.box('settings');
+-    final raw = box.get(_processedHashesKey);
+-    if (raw is! Map) return 0;
+-    final map = Map<String, dynamic>.from(raw);
+-    final cutoff = (now ?? DateTime.now()).subtract(maxAge).millisecondsSinceEpoch;
+-    final initialCount = map.length;
+-    map.removeWhere((_, ts) => ts is num && ts < cutoff);
+-    if (map.length != initialCount) {
+-      await box.put(_processedHashesKey, map);
++    final box = _box;
++    if (box == null) return 0;
++    final t = now ?? DateTime.now();
++    final cutoff = t.subtract(maxAge).millisecondsSinceEpoch;
++    final remove = <dynamic>[];
++    final update = <String, List<int>>{};
++    var pruned = 0;
++    for (final k in box.keys) {
++      if (k is! String) continue;
++      final v = box.get(k);
++      if (k.startsWith('h:')) {
++        if (v is num && v < cutoff) {
++          remove.add(k);
++          pruned++;
++        }
++      } else if (k.startsWith('b:') && v is List) {
++        final kept = <int>[];
++        for (var i = 0; i + 1 < v.length; i += 2) {
++          final ts = v[i];
++          if (ts is int && ts >= cutoff) kept..add(ts)..add(v[i + 1] as int);
++        }
++        if (kept.isEmpty) {
++          remove.add(k);
++        } else if (kept.length != v.length) {
++          update[k] = kept;
++        }
++      }
++    }
++    if (remove.isNotEmpty) await box.deleteAll(remove);
++    if (update.isNotEmpty) await box.putAll(update);
++    await box.put(_pruneKey, t.millisecondsSinceEpoch);
++    return pruned;
++  }
++
++  /// Daily prune (the 15-minute worker and every drain call this).
++  static Future<int> pruneIfDue({DateTime? now}) async {
++    final box = _box;
++    if (box == null) return 0;
++    final t = now ?? DateTime.now();
++    final last = box.get(_pruneKey);
++    if (last is int &&
++        t.millisecondsSinceEpoch - last < const Duration(days: 1).inMilliseconds) {
++      return 0;
+     }
+-    return initialCount - map.length;
++    return pruneOldHashes(now: t);
+   }
+ }
+diff --git a/lib/features/sms/models/raw_queue_item.dart b/lib/features/sms/models/raw_queue_item.dart
+index d74141f..ce08039 100644
+--- a/lib/features/sms/models/raw_queue_item.dart
++++ b/lib/features/sms/models/raw_queue_item.dart
+@@ -2,6 +2,12 @@ import 'dart:convert';
+ import 'package:crypto/crypto.dart';
+ import 'package:uuid/uuid.dart';
+ 
++import '../detected/sms_seen_store.dart';
++
++/// Zone key under which [NativeQueueClient] exposes the queue item being
++/// handled (`messageHash`, `timeExact`, `userId`) to the pipeline.
++const rawQueueItemZoneKey = #spentxRawQueueItem;
++
+ /// In-memory Dart representation of a raw item (SMS or notification)
+ /// enqueued natively and dispatched to Dart via MethodChannel.
+ ///
+@@ -18,11 +24,24 @@ class RawQueueItem {
+   final DateTime? lastAttemptAt;
+   final bool isNotification;
+ 
++  /// True when [receivedAt] is the SMS service-center time (date_sent /
++  /// timestampMillis). False when it was unknown (0) and a local time was
++  /// used instead; dedupe then also compares sender + body (5 min).
++  final bool timeExact;
++
++  /// Hash computed natively (notifications: package + key + text + when).
++  final String? _hashOverride;
++
+   /// Flow v2: Deterministic message hash for message-level deduplication
+   /// (e.g. catch-up scan vs broadcast receiver of the same SMS).
+-  String get messageHash => sha256
+-      .convert(utf8.encode('$sender\u0000$body\u0000${receivedAt.millisecondsSinceEpoch}'))
+-      .toString();
++  String get messageHash =>
++      _hashOverride ??
++      sha256
++          .convert(utf8.encode('$sender\u0000$body\u0000${receivedAt.millisecondsSinceEpoch}'))
++          .toString();
++
++  /// Same sender + text (time ignored), for the body fallback.
++  String get bodyKey => SmsSeenStore.bodyKey(sender, body);
+ 
+   RawQueueItem({
+     String? id,
+@@ -34,7 +53,11 @@ class RawQueueItem {
+     this.attempts = 0,
+     this.lastAttemptAt,
+     bool? isNotification,
++    this.timeExact = true,
++    String? messageHash,
+   })  : id = id ?? const Uuid().v4(),
++        _hashOverride =
++            (messageHash == null || messageHash.isEmpty) ? null : messageHash,
+         receivedAt = receivedAt ?? DateTime.now(),
+         isNotification = isNotification ??
+             (source != 'sms' && source.startsWith('notif:'));
+@@ -50,6 +73,8 @@ class RawQueueItem {
+         if (lastAttemptAt != null)
+           'lastAttemptAt': lastAttemptAt!.toIso8601String(),
+         'isNotification': isNotification,
++        'timeExact': timeExact,
++        if (_hashOverride != null) 'messageHash': _hashOverride,
+       };
+ 
+   factory RawQueueItem.fromMap(Map<dynamic, dynamic> map) {
+@@ -88,6 +113,8 @@ class RawQueueItem {
+       attempts: (map['attempts'] as num? ?? 0).toInt(),
+       lastAttemptAt: lastAttemptDate,
+       isNotification: isNotif,
++      timeExact: map['timeExact'] is bool ? map['timeExact'] as bool : true,
++      messageHash: map['messageHash']?.toString(),
+     );
+   }
+ 
+@@ -101,6 +128,7 @@ class RawQueueItem {
+     int? attempts,
+     DateTime? lastAttemptAt,
+     bool? isNotification,
++    bool? timeExact,
+   }) {
+     return RawQueueItem(
+       id: id ?? this.id,
+@@ -112,6 +140,11 @@ class RawQueueItem {
+       attempts: attempts ?? this.attempts,
+       lastAttemptAt: lastAttemptAt ?? this.lastAttemptAt,
+       isNotification: isNotification ?? this.isNotification,
++      timeExact: timeExact ?? this.timeExact,
++      messageHash:
++          (body == null && sender == null && receivedAt == null)
++              ? _hashOverride
++              : null,
+     );
+   }
+ 
+diff --git a/lib/features/sms/rules/models/sms_template_rule.dart b/lib/features/sms/rules/models/sms_template_rule.dart
+index c079aed..e2d4127 100644
+--- a/lib/features/sms/rules/models/sms_template_rule.dart
++++ b/lib/features/sms/rules/models/sms_template_rule.dart
+@@ -190,6 +190,7 @@ class TemplateFieldType {
+   static const merchantName = 'merchantName';
+   /// User-facing "Title" tag — same priority as [merchantName]; always wins over fallback extraction.
+   static const title = 'title';
++  static const dateTime = 'dateTime';
+   static const date = 'date';
+   static const time = 'time';
+   static const atmWithdraw = 'atmWithdraw';
+@@ -209,6 +210,7 @@ class TemplateFieldType {
+     referenceId,
+     merchantName,
+     title,
++    dateTime,
+     date,
+     time,
+     atmWithdraw,
+@@ -230,6 +232,7 @@ class TemplateFieldType {
+       case referenceId: return 'Reference ID';
+       case merchantName: return 'Merchant Name';
+       case title: return 'Title';
++      case dateTime: return 'Date & Time';
+       case date: return 'Date';
+       case time: return 'Time';
+       case atmWithdraw: return 'ATM Withdraw';
+diff --git a/lib/features/sms/sms_service.dart b/lib/features/sms/sms_service.dart
+index 0ad2dc3..4035d58 100644
+--- a/lib/features/sms/sms_service.dart
++++ b/lib/features/sms/sms_service.dart
+@@ -1,3 +1,6 @@
++import 'dart:async';
++
++import 'package:flutter/foundation.dart';
+ import 'package:flutter/services.dart';
+ import 'package:hive_flutter/hive_flutter.dart';
+ import 'package:permission_handler/permission_handler.dart';
+@@ -7,6 +10,7 @@ import '../../core/services/notification_permission_service.dart';
+ import '../sms_parser/models/transaction_parsed.dart';
+ import 'background/native_queue_client.dart';
+ import 'detected/sms_detection_pipeline.dart';
++import 'detected/sms_seen_store.dart';
+ import '../sms_parser/notification_parse_rules.dart';
+ 
+ /// Listens for inbound SMS via EventChannel (native [SmsReceiver]) and processes
+@@ -20,10 +24,27 @@ class SmsService {
+ 
+   static bool _initialized = false;
+ 
++  /// Phase 2: when auto detection was last switched on. The inbox catch-up
++  /// never reads SMS from before this (no flood after re-enabling).
++  static const detectionEnabledAtKey = 'sms_detection_enabled_at';
++
++  /// Phase 2: the processed-message store is open (and pruned) before the
++  /// first SMS is handled.
++  static Future<void> _ready = Future.value();
++
++  static Future<void> _openSeenStore() async {
++    try {
++      if (await SmsSeenStore.ensureOpen()) await SmsSeenStore.pruneIfDue();
++    } catch (_) {}
++  }
++
+   static void init() {
+     if (_initialized) return;
+     _initialized = true;
+ 
++    _ready = _openSeenStore();
++    _watchDetectionToggle();
++
+     _channel.receiveBroadcastStream().listen((dynamic event) {
+       if (event is! Map) return;
+       // S4: native queued this SMS first; its copy is acked after the save.
+@@ -41,14 +62,20 @@ class SmsService {
+         );
+         return;
+       }
++      final hash = event['messageHash']?.toString();
++      final exact = event['timeExact'];
+       NativeQueueClient.handleLive(
+         queue: 'sms',
+         id: queueId,
+         channel: _permissionsChannel,
+         handle:
+-            () => SmsDetectionPipeline.processInbound(
++            () async {
++              await _ready;
++              await SmsDetectionPipeline.processInbound(
+               rawMessage: body,
+               sender: sender,
++              messageHash: (hash == null || hash.isEmpty) ? null : hash,
++              timeExact: exact is bool ? exact : null,
+               // A payment-app notification (Phase 2) uses the same engine.
+               source:
+                   notificationPackageOf(sender) != null
+@@ -59,11 +86,72 @@ class SmsService {
+                   ts is int && ts > 0
+                       ? DateTime.fromMillisecondsSinceEpoch(ts)
+                       : null,
+-            ),
++            );
++            },
+       );
+     });
+ 
+-    _flushPendingFromNative();
++    unawaited(_startupQueuePass());
++  }
++
++  /// App start: parked SMS first (Phase 2), then the normal drain.
++  static Future<void> _startupQueuePass() async {
++    await _ready;
++    try {
++      if (SmsDetectionPipeline.isAutoDetectionEnabled) {
++        await processParkedOnStart();
++      }
++    } catch (_) {}
++    await _flushPendingFromNative();
++  }
++
++  /// Phase 2: a parked SMS (failed 5 times) is retried once on the next app
++  /// start. One that failed again after that retry becomes an Unparsed
++  /// "Couldn't read this SMS - Tap to review" card and its raw copy is
++  /// removed from the native queue. Parked items older than 30 days are
++  /// purged natively.
++  @visibleForTesting
++  static Future<void> processParkedOnStart({
++    MethodChannel channel = _permissionsChannel,
++  }) async {
++    await NativeQueueClient.fileExhaustedParked(
++      (item) => SmsDetectionPipeline.fileUnreadable(
++        body: item.body,
++        sender: item.sender,
++        at: item.receivedAt ?? DateTime.now(),
++      ),
++      channel: channel,
++    );
++    await NativeQueueClient.retryParkedOnce(channel: channel);
++  }
++
++  static StreamSubscription<BoxEvent>? _detectionWatch;
++
++  static void _watchDetectionToggle() {
++    if (!Hive.isBoxOpen('settings')) return;
++    final box = Hive.box('settings');
++    var wasOn = box.get('auto_detection', defaultValue: true) == true;
++    _detectionWatch ??= box.watch(key: 'auto_detection').listen((event) {
++      final isOn = event.value == true;
++      if (isOn && !wasOn) unawaited(recordDetectionEnabled());
++      wasOn = isOn;
++    });
++  }
++
++  /// Phase 2: call when auto detection goes from off to on.
++  static Future<void> recordDetectionEnabled({DateTime? now}) async {
++    if (!Hive.isBoxOpen('settings')) return;
++    await Hive.box('settings').put(
++      detectionEnabledAtKey,
++      (now ?? DateTime.now()).toIso8601String(),
++    );
++  }
++
++  static DateTime? detectionEnabledAt() {
++    if (!Hive.isBoxOpen('settings')) return null;
++    return DateTime.tryParse(
++      Hive.box('settings').get(detectionEnabledAtKey)?.toString() ?? '',
++    );
+   }
+ 
+   /// SMS queued while app was killed / Flutter engine not ready.
+@@ -172,6 +260,46 @@ class SmsService {
+     }
+   }
+ 
++  /// Phase 2: inbox rows for the catch-up, with the SMS service-center time
++  /// (`dateSent`, null when the provider has 0). [readInboxRaw] keeps the
++  /// original `date` (history import is unchanged).
++  static Future<
++    List<({String body, String sender, DateTime date, DateTime? sentAt})>
++  >
++  readInboxForCatchUp({DateTime? since, int limit = 300}) async {
++    try {
++      if (!await Permission.sms.isGranted) return const [];
++      final List<dynamic>? messages = await _permissionsChannel.invokeMethod(
++        'getInboxSms',
++        {'sinceMillis': since?.millisecondsSinceEpoch ?? 0, 'limit': limit},
++      );
++      if (messages == null) return const [];
++      final rows =
++          <({String body, String sender, DateTime date, DateTime? sentAt})>[];
++      for (final msg in messages) {
++        if (msg is! Map) continue;
++        final body = (msg['body'] as String? ?? '').trim();
++        if (body.isEmpty) continue;
++        final timestamp = msg['date'];
++        final sent = msg['dateSent'];
++        rows.add((
++          body: body,
++          sender: msg['sender'] as String? ?? '',
++          date: DateTime.fromMillisecondsSinceEpoch(
++            timestamp is int ? timestamp : 0,
++          ),
++          sentAt:
++              sent is int && sent > 0
++                  ? DateTime.fromMillisecondsSinceEpoch(sent)
++                  : null,
++        ));
++      }
++      return rows;
++    } catch (_) {
++      return const [];
++    }
++  }
++
+   /// Developer-only inbox access for the Real-Time SMS Test screen. This is
+   /// deliberately separate from the app's live detection path, so old device
+   /// messages can be inspected for parser testing without becoming activity
+diff --git a/test/background_single_writer_test.dart b/test/background_single_writer_test.dart
+index 699a80e..0941c57 100644
+--- a/test/background_single_writer_test.dart
++++ b/test/background_single_writer_test.dart
+@@ -52,6 +52,8 @@ const _boxes = [
+   'notification_history',
+   'master_debug_log',
+   'sync_queue',
++  // Phase 2: processed-message store (dedupe), cleared between tests.
++  'sms_seen_hashes',
+ ];
+ 
+ /// Saved records from SMS: pending reviews + booked transactions.
+diff --git a/test/detection_v2/phase2_queue_test.dart b/test/detection_v2/phase2_queue_test.dart
+index 72d3ab2..e00447a 100644
+--- a/test/detection_v2/phase2_queue_test.dart
++++ b/test/detection_v2/phase2_queue_test.dart
+@@ -1,9 +1,16 @@
++import 'dart:async';
+ import 'dart:io';
+ import 'package:flutter/services.dart';
++import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+ import 'package:flutter_test/flutter_test.dart';
+ import 'package:hive_flutter/hive_flutter.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ import 'package:spentx/core/services/auth_service.dart';
++import 'package:spentx/data/local/hive_service.dart';
++import 'package:spentx/features/sms/autosave/sms_session_user.dart';
++import 'package:spentx/features/sms/background/native_queue_client.dart';
++import 'package:spentx/features/sms/sms_service.dart';
++import 'package:spentx/features/sms/detected/detected_sms_storage.dart';
+ import 'package:spentx/features/sms/detected/sms_detection_pipeline.dart';
+ import 'package:spentx/features/sms/detected/sms_seen_store.dart';
+ import 'package:spentx/features/sms/models/raw_queue_item.dart';
+@@ -16,11 +23,20 @@ void main() {
+   setUpAll(() async {
+     tempDir = await Directory.systemTemp.createTemp('p2_queue_test_');
+     Hive.init(tempDir.path);
++    // Phase 2 harness: pipeline side effects (review history, notification
++    // history) open SecureHive boxes asynchronously; without a test cipher
++    // they fail after the test completed once more tests follow.
++    FlutterSecureStorage.setMockInitialValues({});
++    SecureHive.debugConfigure(
++      hiveDir: tempDir.path,
++      cipher: HiveAesCipher(Hive.generateSecureKey()),
++    );
+     await Hive.openBox('settings');
+     await Hive.openBox('categories');
+     await Hive.openBox('transactions');
+     await Hive.openBox('pending_detections');
+     await Hive.openBox('detected_sms_box');
++    await Hive.openBox(SmsSeenStore.boxName);
+ 
+     // Mock platform channels
+     for (final ch in [
+@@ -48,6 +64,7 @@ void main() {
+     await settings.clear();
+     await settings.put('auto_detection', true);
+     await settings.put('master_debug_logging', false);
++    await Hive.box(SmsSeenStore.boxName).clear();
+     SmsDetectionPipeline.backgroundSessionVerified = true;
+   });
+ 
+@@ -120,9 +137,10 @@ void main() {
+       await SmsSeenStore.markHashProcessed(testHash);
+       expect(SmsSeenStore.containsHash(testHash), isTrue);
+ 
+-      // Verify directly inside Hive settings box
+-      final storedMap = Hive.box('settings').get('processed_message_hashes') as Map;
+-      expect(storedMap.containsKey(testHash), isTrue);
++      // Verify directly inside the processed-message box (Phase 2: the
++      // encrypted SecureHive box sms_seen_hashes, not the settings map).
++      final store = Hive.box(SmsSeenStore.boxName);
++      expect(store.containsKey('h:$testHash'), isTrue);
+ 
+       // Simulate app restart by checking re-read from storage
+       expect(SmsSeenStore.containsHash(testHash), isTrue);
+@@ -213,4 +231,294 @@ void main() {
+       expect(outcome2, equals(SmsPipelineOutcome.skippedDuplicate));
+     });
+   });
++
++  group('Phase 2 fixes (t459u 5.1 / 5.3)', () {
++    test('date_sent = 0: live copy + inbox copy within 5 minutes -> 1', () async {
++      const sender = 'AX-KOTAKB';
++      const body =
++          'Rs 333.00 debited from Kotak a/c XX9911 to VPA chai@upi on 24-10-26. Not you? Call 18602662666';
++      final liveAt = DateTime(2026, 10, 24, 18, 0, 5); // receipt time, not SC time
++      final inboxAt = liveAt.add(const Duration(seconds: 90)); // provider 'date'
++
++      final first = await SmsDetectionPipeline.processInbound(
++        rawMessage: body,
++        sender: sender,
++        source: SmsDetectionSource.smsBroadcast,
++        receivedAt: liveAt,
++        timeExact: false,
++        preferBackground: true,
++      );
++      expect(first, isNot(equals(SmsPipelineOutcome.skippedDuplicate)));
++
++      final second = await SmsDetectionPipeline.processInbound(
++        rawMessage: body,
++        sender: sender,
++        source: SmsDetectionSource.catchUp,
++        receivedAt: inboxAt,
++        timeExact: false,
++        preferBackground: true,
++      );
++      expect(second, equals(SmsPipelineOutcome.skippedDuplicate));
++    });
++
++    test('two different SMS from the same sender -> 2', () async {
++      const sender = 'VM-HDFCBK';
++      final at = DateTime(2026, 10, 24, 19, 0);
++      final a = await SmsDetectionPipeline.processInbound(
++        rawMessage:
++            'Rs 41.00 debited from a/c **7788 on 24-Oct-26 to VPA tea@upi. Avl Bal Rs 900.00',
++        sender: sender,
++        source: SmsDetectionSource.smsBroadcast,
++        receivedAt: at,
++        preferBackground: true,
++      );
++      final b = await SmsDetectionPipeline.processInbound(
++        rawMessage:
++            'Rs 59.00 debited from a/c **7788 on 24-Oct-26 to VPA snack@upi. Avl Bal Rs 841.00',
++        sender: sender,
++        source: SmsDetectionSource.smsBroadcast,
++        receivedAt: at,
++        preferBackground: true,
++      );
++      expect(a, isNot(equals(SmsPipelineOutcome.skippedDuplicate)));
++      expect(b, isNot(equals(SmsPipelineOutcome.skippedDuplicate)));
++    });
++
++    test('identical text with different service-center times -> 2 (no minute-bucket merge)', () async {
++      const sender = 'VM-HDFCBK';
++      const body =
++          'Rs 20.00 debited from a/c **7788 on 24-Oct-26 to VPA metro@upi. Avl Bal Rs 500.00';
++      final at = DateTime(2026, 10, 24, 20, 0, 1);
++      final a = await SmsDetectionPipeline.processInbound(
++        rawMessage: body,
++        sender: sender,
++        source: SmsDetectionSource.smsBroadcast,
++        receivedAt: at,
++        preferBackground: true,
++      );
++      final b = await SmsDetectionPipeline.processInbound(
++        rawMessage: body,
++        sender: sender,
++        source: SmsDetectionSource.smsBroadcast,
++        receivedAt: at.add(const Duration(seconds: 20)),
++        preferBackground: true,
++      );
++      expect(a, isNot(equals(SmsPipelineOutcome.skippedDuplicate)));
++      expect(b, isNot(equals(SmsPipelineOutcome.skippedDuplicate)));
++    });
++
++    group('queue items after sign-out (userId on every item)', () {
++      const channel = MethodChannel('test.p2/queue');
++      late List<Map<dynamic, dynamic>> queued;
++      late List<String> acked;
++
++      setUp(() {
++        NativeQueueClient.debugReset();
++        NativeQueueClient.beforeAck = () async {};
++        acked = [];
++        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++            .setMockMethodCallHandler(channel, (call) async {
++              switch (call.method) {
++                case 'peekPendingSms':
++                  return queued
++                      .where((e) => !acked.contains(e['id']))
++                      .toList();
++                case 'ackPending':
++                  acked.addAll(
++                    ((call.arguments as Map)['ids'] as List).cast<String>(),
++                  );
++                  return true;
++              }
++              return null;
++            });
++      });
++
++      tearDown(() {
++        SmsSessionUser.debugUid = null;
++        NativeQueueClient.debugReset();
++        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++            .setMockMethodCallHandler(channel, null);
++      });
++
++      Map<String, Object?> item(String id, String? uid) => {
++        'id': id,
++        'sender': 'VM-SBIINB',
++        'body': 'queued text $id',
++        'timestamp': 1792837182000,
++        'userId': uid,
++        'timeExact': true,
++      };
++
++      test('same user signs back in -> processed and acked', () async {
++        SmsSessionUser.debugUid = 'user-a';
++        queued = [item('q1', 'user-a')];
++        final handled = <String>[];
++        await NativeQueueClient.processSms(
++          (i) async => handled.add(i.id),
++          channel: channel,
++        );
++        expect(handled, ['q1']);
++        expect(acked, ['q1']);
++      });
++
++      test('different user signs in -> never handled, never acked', () async {
++        SmsSessionUser.debugUid = 'user-b';
++        queued = [item('q2', 'user-a'), item('q3', 'user-b')];
++        final handled = <String>[];
++        await NativeQueueClient.processSms(
++          (i) async => handled.add(i.id),
++          channel: channel,
++        );
++        expect(handled, ['q3']);
++        expect(acked, ['q3']);
++      });
++
++      test('queue meta (messageHash / timeExact) reaches the pipeline', () async {
++        SmsSessionUser.debugUid = 'user-a';
++        queued = [
++          {...item('q4', 'user-a'), 'messageHash': 'native-hash-1', 'timeExact': false},
++        ];
++        Map? seen;
++        await NativeQueueClient.processSms(
++          (i) async {
++            seen = Zone.current[rawQueueItemZoneKey] as Map?;
++            expect(i.messageHash, 'native-hash-1');
++            expect(i.timeExact, isFalse);
++            expect(i.zoneMeta['messageHash'], 'native-hash-1');
++          },
++          channel: channel,
++        );
++        expect(seen?['messageHash'], 'native-hash-1');
++        expect(seen?['timeExact'], isFalse);
++        expect(acked, ['q4']);
++      });
++    });
++
++    test('re-enabling detection: catch-up starts from the enable time', () async {
++      final enabledAt = DateTime(2026, 10, 24, 21, 15);
++      expect(SmsService.detectionEnabledAt(), isNull);
++      await SmsService.recordDetectionEnabled(now: enabledAt);
++      expect(SmsService.detectionEnabledAt(), enabledAt);
++      // SmsInboxCatchUp.runIfDue uses max(3-day window, activity start,
++      // detectionEnabledAt) as `since`, and native filters `date >= since`
++      // (asserted in the inbox-read test below), so days spent with
++      // detection off are never imported.
++    });
++
++    group('inbox reads (permissions channel)', () {
++      const perms = MethodChannel('com.spentx.app/permissions');
++      const handler = MethodChannel('flutter.baseflow.com/permissions/methods');
++      Map<dynamic, dynamic>? lastArgs;
++
++      setUp(() {
++        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++            .setMockMethodCallHandler(handler, (call) async {
++              if (call.method == 'checkPermissionStatus') return 1;
++              return null;
++            });
++        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++            .setMockMethodCallHandler(perms, (call) async {
++              if (call.method != 'getInboxSms') return null;
++              lastArgs = call.arguments as Map;
++              return [
++                {
++                  'body': 'row one',
++                  'sender': 'VM-ICICIB',
++                  'date': 1792837200000,
++                  'dateSent': 1792837182000,
++                },
++                {
++                  'body': 'row two',
++                  'sender': 'VM-ICICIB',
++                  'date': 1792837300000,
++                  'dateSent': 0,
++                },
++              ];
++            });
++      });
++
++      tearDown(() {
++        for (final ch in [perms, handler]) {
++          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++              .setMockMethodCallHandler(ch, null);
++        }
++        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++            .setMockMethodCallHandler(perms, (_) async => null);
++      });
++
++      test('history import output is unchanged: readInboxRaw uses "date"', () async {
++        final rows = await SmsService.readInboxRaw();
++        expect(rows.length, 2);
++        expect(rows[0].date.millisecondsSinceEpoch, 1792837200000);
++        expect(rows[1].date.millisecondsSinceEpoch, 1792837300000);
++      });
++
++      test('catch-up read exposes dateSent (null when 0) and passes since', () async {
++        final since = DateTime(2026, 10, 24, 21, 15);
++        final rows = await SmsService.readInboxForCatchUp(since: since);
++        expect(lastArgs?['sinceMillis'], since.millisecondsSinceEpoch);
++        expect(rows[0].sentAt?.millisecondsSinceEpoch, 1792837182000);
++        expect(rows[0].date.millisecondsSinceEpoch, 1792837200000);
++        expect(rows[1].sentAt, isNull);
++      });
++    });
++
++    test('parked SMS that fail their retry become an Unparsed review card', () async {
++      const channel = MethodChannel('test.p2/parked');
++      final calls = <String>[];
++      List<String>? removed;
++      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++          .setMockMethodCallHandler(channel, (call) async {
++            calls.add(call.method);
++            switch (call.method) {
++              case 'parkedExhaustedSms':
++                return [
++                  {
++                    'id': 'p1',
++                    'sender': 'VM-AXISBK',
++                    'body': 'Garbled bank text the parser cannot read 77',
++                    'timestamp': 1792837182000,
++                  },
++                ];
++              case 'removeParkedSms':
++                removed =
++                    ((call.arguments as Map)['ids'] as List).cast<String>();
++                return 1;
++              case 'retryParkedSmsOnce':
++                return 0;
++            }
++            return null;
++          });
++      NativeQueueClient.beforeAck = () async {};
++      final filed = <String>[];
++      final n = await NativeQueueClient.fileExhaustedParked(
++        (item) async => filed.add(item.id),
++        channel: channel,
++      );
++      await NativeQueueClient.retryParkedOnce(channel: channel);
++      expect(n, 1);
++      expect(filed, ['p1']);
++      expect(removed, ['p1']);
++      expect(calls, ['parkedExhaustedSms', 'removeParkedSms', 'retryParkedSmsOnce']);
++      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++          .setMockMethodCallHandler(channel, null);
++    });
++
++    test('fileUnreadable files a pending card titled for review', () async {
++      final outcome = await SmsDetectionPipeline.fileUnreadable(
++        body: 'Garbled bank text the parser cannot read 88',
++        sender: 'VM-AXISBK',
++        at: DateTime(2026, 10, 24, 22, 0),
++      );
++      expect(outcome, SmsPipelineOutcome.pendingVerification);
++      final cards = DetectedSmsStorage.getAll()
++          .where((p) => p.receiver == SmsDetectionPipeline.unreadableTitle)
++          .toList();
++      expect(cards.length, 1);
++      expect(
++        SmsDetectionPipeline.unreadableTitle,
++        "Couldn't read this SMS - Tap to review",
++      );
++    });
++  });
+ }
