@@ -1,16 +1,11 @@
 # SpentX Detection Flow v2 — Pre-Existing Baseline Failures
-# Date: October 24, 2026
-# Branch: feature/smart-detection-flow-v2
-# Total Tests: 1030 | Passed: 1022 | Failed: 8
+# Date: October 25, 2026
+# Repo: Mobile app/SpentX (Karthicoc7075/spentx-app), real folder
+# Branch: feature/smart-detection-flow-v2 @ f49fa45
+# Total Tests: 1047 | Passed: 1046 | Failed: 1
 #
 # RULE: Any failing test NOT in this file is a new failure and MUST be fixed immediately.
-# Tests in this file represent genuine pre-existing app logic issues or out-of-scope UI tests on main.
+# The 8 failures listed in the Oct 24 baseline all pass in the real folder.
+# The failure below also fails at 0439ab1 (before Phase 2), so it is pre-existing.
 
-test/sms_detection_fixes_test.dart: UPI debits Axis UPI is Axis
-test/mobile_ui_consistency_test.dart: dark: Add Template page follows theme
-test/mobile_ui_consistency_test.dart: light: Add Template page follows theme
-test/mobile_ui_consistency_test.dart: secondary pages retain the same navigation destinations on narrow screens
-test/phase2_parsing_test.dart: regression: HDFC old, modified, unknown; SBI, ICICI, Axis SBI, ICICI and Axis parse with no review reason
-test/sms_regression_corpus_test.dart: mustDetect — every real message matches a NAMED template
-test/background_single_writer_test.dart: 500-SMS burst through native batches: every one saved once
-test/background_single_writer_test.dart: worker yields to the app: stops after the current item
+test/detected_sms_tabs_test.dart: Ignored ignored item whose SMS was already saved under another id is refused
