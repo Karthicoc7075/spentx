@@ -1,9 +1,11 @@
 # SpentX Detection Flow v2 — Pre-Existing Baseline Failures
 # Date: October 25, 2026
 # Repo: Mobile app/SpentX (Karthicoc7075/spentx-app), real folder
-# Branch: feature/smart-detection-flow-v2 @ 76e2f83 (Phase 3 pending-confirmation design)
+# Branch: feature/smart-detection-flow-v2 @ 4323173 (Phase 4 parsers & unparsed)
 # Command: flutter test
-# Total Tests: 1118 | Passed: 1117 | Skipped: 0 | Failed: 1
+# Total Tests: 1151 | Passed: 1150 | Skipped: 0 | Failed: 1
+# (Phase 4 added 33 tests: masker, template requests, app rules + pipeline,
+# corpus field cases, Unparsed UI. Before: 1118/1117/1 at 76e2f83.)
 # (Pending design added 32 tests: matcher, pending confirmation, pending UI;
 # the Phase 3 skipped test is un-skipped in 05d15d6.
 # Earlier: 1086/1084/1 skip/1 fail at fad98e9; 1073/1072/1 at 316c40e.)

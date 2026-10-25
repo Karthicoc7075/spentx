@@ -532,3 +532,31 @@ Approved by Karthi (steps 1-8, all answers "A"). Supersedes the 48h hidden hold 
   4. A replaced unverified card loses the title/category typed on it.
   5. A reference matching two booked rows is treated as a duplicate (nothing changes).
   6. Callers outside the approved files (e.g. `detection_queue.dart`) do not show the new chip/badges.
+
+## 17. Phase 4 Status (2026-10-25)
+
+- **Status:** done, pending phone test. Phase 5 not started.
+- **Choices (Karthi, t485u):** parser order and the named corpus test kept, plus a new field-level test (Item G, option B); template-request sending OFF until the Phase 9 SQL; the notification fall-through is kept; the money-words check still applies to fallback/universal results and to account discovery; template requests are internal and masked only (no settings UI); a tagged Unparsed card is read again through the pipeline; app rules were written conservatively from public formats.
+- **App commits:**
+  - `5c7f3e3`: `SmsMasker`. It masks account, balance, amount, ref, UPI, URL, name, date and time, and turns any digit left over into `#`. It also gives a `formatHash`.
+  - `e995924`: `TemplateRequestService`. It keeps a local masked outbox (settings key `template_request_outbox`, max 50, deduped by hash, owner uid stored). `sendingEnabled = false`.
+  - `b1d05f7`: built-in app notification rules for GPay, PhonePe, Paytm, CRED and PayZapp. Each app's rules apply only to that app, and only after the common rules.
+  - `db26431`: pipeline changes:
+    - After the parse, the money-words check applies to discovery and to non-strict layers. Strict layers are `v4_template`, `template`, `regex_rule` and `notification_rule`.
+    - A bank SMS with money words that nothing could read, or that only the fallback read, asks for a template (local outbox only).
+    - Notifications never ask for a template.
+  - `d0cbd32`: the engine fills the payee from `UPI/P2M|P2A/<ref>/<name>`, only when the name is empty or Unknown. Corpus `fieldCases` were added, with a field-level test.
+  - `4323173`: Detected SMS gets an "Unparsed · tap to tag" chip:
+    - Tapping a bank SMS card opens the template creator. After the template is saved, the SMS is read again through the pipeline.
+    - The old card is removed only when the pipeline took the SMS (auto-added, filed again, account discovery, or already recorded). Otherwise it is put back unchanged.
+    - Cards with no bank or no text open the normal review.
+- **Real samples needed:** the app notification rules (GPay, PhonePe, Paytm, CRED, PayZapp) come from public formats, not real notifications. Collect real samples on the phone before trusting them.
+- **Phase 9 SQL needed (not written, not run):** table `sms_template_requests` (format_hash unique, masked_text, bank, sender, count, first/last seen, RLS insert-only for the owner), plus RPC `upsert_template_request(p_format_hash, p_masked_text, p_bank, p_sender, p_count)`. Sending stays OFF until Karthi runs it.
+- **Tests:** 1151 total, 1150 pass, 0 skipped, 1 pre-existing failure (`detected_sms_tabs_test`, Phase 10). There are 33 new tests: masker 5, template request 5, parsers + pipeline 14, field cases 1, Unparsed UI 8. `test/detection_v2/phase4_template_request_test.dart` is an extra test-only file that was not on the approved list.
+- **Risks:**
+  1. SMS read by a strict layer are now trusted without money words. Before, the money-words check ran before every parse.
+  2. Template requests stay on the phone until Phase 9; the outbox drops the oldest entries past 50.
+  3. The app notification rules are unverified against real notifications.
+  4. The payee fill is narrow (Axis-style `UPI/P2M|P2A/` only).
+  5. The read-again path uses the `accountReplay` source, so it skips the seen-store dedupe. It relies on the ledger/card dedupe instead, and it carries no sender (the card does not store one).
+  6. An Unparsed card is judged a bank SMS by its bank name. A notification card with a bank name would open the template creator.
