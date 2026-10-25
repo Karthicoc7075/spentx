@@ -496,3 +496,17 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 - **Tests:** 1052 total, 1051 pass, 1 pre-existing failure (`detected_sms_tabs_test`, Phase 10).
 - **Known gap:** after a sign-out wipe, the same user signing in again can get an older start date back from `DeviceUserState`. The 3-day catch-up lookback and the kept seen hashes limit the effect.
 
+## 15. Phase 3 Status (2026-10-25)
+
+- **Status:** done, pending phone test. Phase 4 not started.
+- **App commits:** `29e6166` (SmsHoldConfig 48h + SmsHoldManager), `9695d29` (user vs admin block rules, appliesToNotifications), `2ced94a` (Transaction.isFailed + red Failed badge), `0972ec4` (pipeline order), `4be2304` (notification paths skip unflagged admin rows), `fad98e9` (phase3_preparse_test).
+- **Order now:** user block rules → admin block rules (SMS only, unless `applies_to_notifications`) → pending hold / close / expire → existing money-words check and parsers (unchanged).
+- **Pending holds:** hidden for 48h (`SmsHoldConfig`). They close on a matching final message (same ref, or amount + window + account/bank). Expired holds go to Needs Review when the next message arrives.
+- **SQL (not run, Karthi runs it):** `supabase/migrations/20261025120000_p3_block_rules_notifications.sql` adds `sms_block_rules.applies_to_notifications boolean not null default false`.
+- **Offline check:** a test proves OTP and promo SMS are still blocked by the built-in list when the admin cache is empty.
+- **Tests:** 1086 total, 1084 pass, 1 skipped, 1 pre-existing failure (`detected_sms_tabs_test`, Phase 10).
+- **Superseded:** §8.6 / §10.8 ("failed transactions must sync") is superseded by Karthi's Phase 3 answer: failed transactions stay on the phone only, until Phase 9.
+- **Blockers (need approval of files outside Phase 3):**
+  1. `lib/core/sync/sync_service.dart`: needed to keep failed rows local. Change: skip `status == 'failed'` in `queueTransactionUpsert` and in the `requeueAllLocalDataAndPush` loop, and keep local failed rows during the reconcile merge. Until then, failed SMS stay on the Phase 2 Needs Review path, with no ledger save and no auto-save.
+  2. `lib/features/sms_parser/sms_non_transaction_rules.dart`: the existing money-words check still applies admin regex rows to notifications. It needs an `isNotification` flag that skips admin rows without `applies_to_notifications`. One test is skipped for this.
+- **Phase 9 note:** fix the website `src/lib/transaction-summary.ts` to exclude failed/pending, then enable sync of failed transactions.
