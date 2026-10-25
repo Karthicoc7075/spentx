@@ -2,7 +2,7 @@
 
 > **Date:** October 24, 2026  
 > **Branch:** `feature/smart-detection-flow-v2`  
-> **Status:** Phase 0 Complete — Approved with Finalized Decisions & Baseline Test Results  
+> **Status:** Phase 0 Complete — Approved with Finalized Decisions & Baseline Test Results. Phase 2 done, pending phone test (2026-10-25, see §14).  
 > **Scope:** Audit, Mapping, Allowed Files List, Baseline Test Results, and Final Architectural Decisions  
 
 ---
@@ -155,6 +155,8 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/test/detection_v2/phase1_models_test.dart` *(New)*
 
 #### Phase 2 — Intake & Native Queue
+**Status: done, pending phone test** (app branch @ `2f0d98a`, see §14).
+
 * `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsPendingQueue.kt` *(Modify — Direct reuse and extension of existing Android Keystore AES-256-GCM encrypted queue for raw intake)*
 * `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/SmsReceiver.kt` *(Modify — Write raw item to encrypted native queue first before any processing)*
 * `Mobile app/SpentX/android/app/src/main/kotlin/com/spentx/app/spentx/NotificationListenerService.kt` *(Modify — Enqueue raw notification to encrypted native queue before event channel broadcast)*
@@ -194,12 +196,19 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `Mobile app/SpentX/test/detection_v2/phase6_duplicate_merge_test.dart` *(New)*
 
 #### Phase 7 — Merchant Resolution
+> **Carry-forward note:** `auto_rule_engine.dart:762` still passes the SMS body to the debug log (it is redacted there). Remove it in Phase 7.
+
 * `Mobile app/SpentX/lib/features/sms/v4/merchant_learning_service.dart` *(Modify — Normalize key & rule lookup)*
 * `Mobile app/SpentX/lib/features/sms/autosave/merchant_category_engine.dart` *(Modify — Admin category matching & Separate Income Categories)*
 * `Mobile app/SpentX/lib/features/sms/detected/auto_rule_engine.dart` *(Modify — Separate income path & auto-add check)*
 * `Mobile app/SpentX/test/detection_v2/phase7_merchant_resolution_test.dart` *(New)*
 
 #### Phase 8 — Save, Cleanup, Notify, Sync
+> **Carry-forward from Phase 2: batch flush/ack speed fix (deferred).**
+> - Measured (500-SMS burst): S4 `3a1fced` 6.25 s, Phase 1 8.0 s, `0439ab1` 7.96 s, Phase 2 HEAD 7.4–9 s. Each 100-message chunk is slower than the last.
+> - Cause, per SMS: a full `transactions['list']` scan, a detected-box (`_findExistingPending`) scan, an encrypted whole-list rewrite, and `SecureHive.flushOpenBoxes` (~19 boxes) plus a native ack. The seen-store itself is small (~50 ms per 500).
+> - Why deferred: batching the flush risks a duplicate after a crash (transaction flushed, hash not). The fix needs a design where the transaction itself records its `messageHash`, so a replay finds it in the ledger.
+
 * `Mobile app/SpentX/lib/features/sms/autosave/sms_auto_save_undo.dart` *(Modify — Undo (10-minute window) with financial reversal)*
 * `Mobile app/SpentX/test/detection_v2/phase8_save_sync_test.dart` *(New)*
 
@@ -209,6 +218,8 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 * `src/app/admin/sms-rules/page.tsx` *(Modify — Web admin portal review UI for pending template requests)*
 
 #### Phase 10 — UI Integration
+> **Carry-forward note:** fix the pre-existing failure `test/detected_sms_tabs_test.dart: Ignored ignored item whose SMS was already saved under another id is refused` (see `baseline_failures.txt`).
+
 * `Mobile app/SpentX/lib/features/sms/detected/detected_sms_screen.dart` *(Modify — Pending card hierarchy & badge counts)*
 * `Mobile app/SpentX/test/detection_v2/phase10_ui_test.dart` *(New)*
 
@@ -455,6 +466,11 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
   - Stuck-processing recovery uses a lease/heartbeat.
   - Ack only after a successful save (`SecureHive.flushOpenBoxes`).
   - Catch-up runs on BOOT_COMPLETED / USER_UNLOCKED, and `getActiveNotifications()` runs when the listener connects.
+- **Different user signs in (decided 2026-10-25):**
+  - Clear the native queue (`claimSignedOut` on a user change) and the Dart pending holds (`pending_sms_holds`, they hold the old user's payment data).
+  - Keep the seen hashes, so SMS already processed for the old user are not re-imported into the new account.
+  - Catch-up for the new user starts at their sign-in time.
+  - Same user signing in again keeps everything. Implemented in `SmsService.applySessionOwner` (owner kept in the `sms_seen_hashes` box, which survives the sign-out wipe).
 
 ## 13. Branch History (2026-10-24)
 
@@ -472,4 +488,11 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
 - **Feature branch base:** `ce003bd` sits on top of `sms-template` (`f672ffd`) and the motion commits. Merge `sms-template` into `main` BEFORE this branch.
 - **Known issue at `ce003bd`:** it does not compile. `f672ffd` references `TemplateFieldType.dateTime`, but that constant was only added later in `fc0efd1` (`sms_template_rule.dart`). 52 test files fail to load. It needs a small additive fix (approval pending).
 - **Docs repo:** `feature/smart-detection-flow-v2` was branched from `main` `7737853`. Docs main was not changed.
+
+## 14. Phase 2 Status (2026-10-25)
+
+- **Status:** done, pending phone test. Phase 3 not started.
+- **App branch** `feature/smart-detection-flow-v2` commits after the Phase 2 base: `4408a10`, `73b3927`, `e5b06f1`, `4df0f61`, `5f69abd` (test date relative to now), `432ff54` (different-user sign-in), `2f0d98a` (logs: error type only, no payee/merchant names).
+- **Tests:** 1052 total, 1051 pass, 1 pre-existing failure (`detected_sms_tabs_test`, Phase 10).
+- **Known gap:** after a sign-out wipe, the same user signing in again can get an older start date back from `DeviceUserState`. The 3-day catch-up lookback and the kept seen hashes limit the effect.
 
