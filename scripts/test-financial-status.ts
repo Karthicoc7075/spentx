@@ -10,6 +10,7 @@ import { isOutingSpendStatus } from '../src/lib/outing-sync';
 import { isSpendingExpense, sumInvestments } from '../src/lib/investments';
 import { filterTransactions } from '../src/lib/utils';
 import { createDefaultGlobalFilters } from '../src/lib/filter-defaults';
+import { sumVisibleSpending, summarizeTransactions } from '../src/lib/transaction-summary';
 import type { Account, Outing, OutingExpense, Transaction, TransactionStatus } from '../src/types';
 
 const tx = (partial: Partial<Transaction> = {}): Transaction => ({
@@ -73,5 +74,15 @@ check('unknown rollup cannot hide a confirmed spend', () => {
   const spend = tx({ outingId: 'trip' });
   const rollup = tx({ id: 'rollup', outingId: 'trip', status: 'unknown', tags: ['outing-rollup'], totalAmount: 900 });
   assert.equal(computePeriodTotals([spend, rollup]).expense, 100);
+});
+check('transaction summary strip: pending / failed from the phone count nothing', () => {
+  const rows = [tx(), tx({ id: 'p', status: 'pending' }), tx({ id: 'f', status: 'failed' }),
+    tx({ id: 'r', status: 'reversed' }), tx({ id: 'u', status: 'unknown' })];
+  assert.equal(sumVisibleSpending(rows), 100);
+  const s = summarizeTransactions(rows, { dateFrom: '2026-10-01', dateTo: '2026-10-31' });
+  assert.equal(s.totalExpense, 100);
+  assert.equal(s.transactionCount, 5);
+  const pendingOpening = tx({ id: 'o', type: 'income', category: 'Opening Balance', status: 'pending', totalAmount: 50, amount: 50 });
+  assert.equal(summarizeTransactions([pendingOpening], { dateFrom: '2026-10-01', dateTo: '2026-10-31' }).openingBalanceIncome, 0);
 });
 console.log(`All ${passed} financial-status checks passed`);

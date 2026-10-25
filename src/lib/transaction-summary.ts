@@ -11,6 +11,7 @@ import {
   sumPeriodIncome,
   sumPeriodReturns,
 } from "@/lib/period-totals";
+import { isConfirmedTransaction } from "@/lib/transaction-status";
 import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
 import type {
   Account,
@@ -115,13 +116,9 @@ export function sumVisibleSpending(transactions: Transaction[]) {
   const countedRollupOutings = new Set<string>();
 
   return transactions.reduce((sum, transaction) => {
-    if (
-      transaction.isActive === false ||
-      Boolean(transaction.deletedAt) ||
-      transaction.status === "unverified" ||
-      transaction.status === "rejected" ||
-      transaction.status === "deleted"
-    ) {
+    // Detection v2: pending / failed / reversed / unknown rows (from the
+    // phone) move no money — same rule as the period totals.
+    if (!isConfirmedTransaction(transaction)) {
       return sum;
     }
     if (transaction.type !== "expense") return sum;
@@ -190,6 +187,7 @@ export function summarizeTransactions(
   const openingFromTxs = ledger
     .filter(
       (transaction) =>
+        isConfirmedTransaction(transaction) &&
         transaction.type === "income" &&
         (transaction.category ?? "").toLowerCase() === openingBalanceCategory,
     )
