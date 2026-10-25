@@ -457,6 +457,30 @@ export async function adminDeleteDefaultCategory(id: string): Promise<void> {
   await rpc<void>("admin_delete_default_category", { p_id: id });
 }
 
+// --- Default categories = category_catalog (admin RPCs, audited) ----------
+
+/** Add or edit a catalog default (also re-activates a removed one). */
+export async function adminUpsertCatalogCategory(params: {
+  slug: string;
+  name: string;
+  type: "income" | "expense";
+  color: string;
+  icon: string;
+}): Promise<void> {
+  await rpc<void>("admin_upsert_category_catalog", {
+    p_slug: params.slug,
+    p_name: params.name,
+    p_type: params.type,
+    p_color: params.color,
+    p_icon: params.icon,
+  });
+}
+
+/** Remove (deactivate) or restore a catalog default. Never deletes the row. */
+export async function adminSetCatalogCategoryActive(slug: string, active: boolean): Promise<void> {
+  await rpc<void>("admin_set_category_catalog_active", { p_slug: slug, p_active: active });
+}
+
 // --- Generic audited row update ------------------------------------------
 
 export async function adminUpdateRow(

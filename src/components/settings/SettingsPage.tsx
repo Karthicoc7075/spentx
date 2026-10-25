@@ -81,7 +81,6 @@ import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { queryKeys } from "@/lib/query-keys";
 import {
   defaultAppConfig,
-  defaultCategories,
   defaultPurposes,
   defaultStarterAccounts,
   defaultUserSettings,
@@ -125,12 +124,11 @@ import { useToast } from "@/providers/toast-provider";
 import { cn } from "@/lib/utils";
 import { getCategoryIcon, getPurposeIcon } from "@/lib/transaction-ui";
 import { IconPicker, ColorPicker, InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
-import { updateDefaultCategories } from "@/lib/data-rebuild";
+import { MINIMAL_FALLBACK_CATEGORIES } from "@/lib/category-catalog";
 import type {
   Account,
   AppConfig,
   Category,
-  DefaultCategory,
   Purpose,
   ThemePreference,
   UserProfile,
@@ -191,7 +189,7 @@ export function SettingsPage() {
   const { resolvedTheme, setTheme, theme } = useTheme();
   const [activeSection, setActiveSection] = useState(sidebarItems[0].name);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [defaultCategoryList, setDefaultCategoryList] = useState<Category[]>(defaultCategories);
+  const [defaultCategoryList, setDefaultCategoryList] = useState<Category[]>(MINIMAL_FALLBACK_CATEGORIES);
   const [customCategories, setCustomCategories] = useState<Category[]>([]);
   const [purposes, setPurposes] = useState<Purpose[]>([]);
   const [settings, setSettings] = useState<UserSettings>(defaultUserSettings);
@@ -291,7 +289,7 @@ export function SettingsPage() {
         { id: "acc-cash", name: "Cash", type: "cash", openingBalance: 10000 },
         { id: "acc-bank-1", name: "HDFC Bank", type: "bank", last4: "1234", openingBalance: 50000 }
       ]);
-      setDefaultCategoryList(defaultCategories);
+      setDefaultCategoryList(MINIMAL_FALLBACK_CATEGORIES);
       setCustomCategories([]);
       setPurposes(defaultPurposes);
       setSettings(defaultUserSettings);
@@ -2336,43 +2334,6 @@ export function SettingsPage() {
                   >
                     <Save className="size-4 mr-2" />
                     Save global settings
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-10 font-bold cursor-pointer"
-                    onClick={async () => {
-                      // FIRESTORE_REBUILD_SPEC §2.19 / Step 8.7 — the shared
-                      // default category list lives on globalSettings.app and is
-                      // written admin-only via updateDefaultCategories. This
-                      // seeds it once from the bundled list; edits propagate to
-                      // every signed-in user live (useCategories subscribes).
-                      if (!user?.id) return;
-                      const seedList: DefaultCategory[] = defaultCategories.map(
-                        (c, index) => ({
-                          id: c.id,
-                          name: c.name,
-                          type: c.type,
-                          color: c.color,
-                          icon: c.icon ?? "",
-                          order: index,
-                          isInvestment: c.isInvestment ?? false,
-                        }),
-                      );
-                      await updateDefaultCategories(user.id, seedList);
-                      const seeded = defaultCategories.map((c) => ({
-                        ...c,
-                        isDefault: true,
-                        source: "global" as const,
-                      }));
-                      setDefaultCategoryList(seeded);
-                      syncSettingsCache(queryClient, user?.id, {
-                        categories: mergeCategories(seeded, customCategories),
-                      });
-                      notify({ title: "Default categories saved to Global Settings" });
-                    }}
-                  >
-                    <Layers className="size-4 mr-2" />
-                    Seed default categories
                   </Button>
                 </div>
               </CardContent>

@@ -168,7 +168,7 @@ export type Category = {
   type: TransactionType;
   color: string;
   icon?: string;
-  /** @deprecated defaults now live in globalSettings.defaultCategories */
+  /** @deprecated defaults now come from category_catalog (source: "global") */
   isDefault?: boolean;
   canDelete?: boolean;
   /** Soft-delete flag — archived categories are never hard-deleted. */

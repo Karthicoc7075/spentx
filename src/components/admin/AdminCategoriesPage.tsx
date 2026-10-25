@@ -14,12 +14,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  adminAddDefaultCategory,
-  adminDeleteDefaultCategory,
-  adminUpdateDefaultCategory,
-} from "@/lib/admin-api";
-import { fetchGlobalSettings } from "@/lib/supabase-data";
+import { adminSetCatalogCategoryActive, adminUpsertCatalogCategory } from "@/lib/admin-api";
+import { fetchCatalogDefaults } from "@/lib/supabase-data";
 import { getCategoryIcon } from "@/lib/transaction-ui";
 import { InlineIconPicker, InlineColorPicker, saveCustomPaletteColor } from "@/components/shared/IconPicker";
 import { queryKeys } from "@/lib/query-keys";
@@ -35,21 +31,20 @@ type FormState = {
   icon: string;
 };
 
+/** category_catalog slug: ^[a-z0-9_]+$ */
 function slugify(name: string) {
-  return (
-    "cat-" +
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-  );
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 // Dedicated CRUD for the shared default category list. These categories
 // appear in EVERY user's picker — changes here are global, and the confirm
-// copy says so. Writes go through admin RPCs into global_settings, the same
-// row all clients read (queryKeys.globalSettings, refetch-on-focus), so
-// changes propagate to open sessions the same way existing edits do.
+// copy says so. The list is public.category_catalog (the only source of
+// default categories for web + app); writes go through audited admin RPCs.
+// Catalog changes bump rules_version, so apps re-sync them; web sessions
+// refetch queryKeys.categoryCatalog. "Remove" deactivates, never deletes.
 export function AdminCategoriesPage() {
   const { notify } = useToast();
   const queryClient = useQueryClient();
@@ -57,12 +52,11 @@ export function AdminCategoriesPage() {
   const [pendingDelete, setPendingDelete] = useState<DefaultCategory | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const { data: settings, isLoading, error, refetch } = useQuery({
-    queryKey: ["admin-global-settings"],
-    queryFn: fetchGlobalSettings,
+  const { data: categories = [], isLoading, error, refetch } = useQuery({
+    queryKey: ["admin-category-catalog"],
+    queryFn: fetchCatalogDefaults,
   });
 
-  const categories = settings?.defaultCategories ?? [];
   const income = categories
     .filter((category) => category.type === "income")
     .sort((a, b) => a.order - b.order);
@@ -71,9 +65,9 @@ export function AdminCategoriesPage() {
     .sort((a, b) => a.order - b.order);
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["admin-global-settings"] });
+    queryClient.invalidateQueries({ queryKey: ["admin-category-catalog"] });
     // Same cache key every user session reads for pickers.
-    queryClient.invalidateQueries({ queryKey: queryKeys.globalSettings() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.categoryCatalog() });
   };
 
   const handleSave = async () => {
@@ -85,8 +79,17 @@ export function AdminCategoriesPage() {
     setIsSaving(true);
     try {
       if (form.mode === "add") {
-        await adminAddDefaultCategory({
-          id: form.id || slugify(form.name),
+        const slug = form.id || slugify(form.name);
+        if (!slug) {
+          notify({ title: "Name required", description: "Use letters or numbers in the name." });
+          return;
+        }
+        if (categories.some((category) => category.id === slug)) {
+          notify({ title: "Already exists", description: `"${slug}" is already a default — edit it instead.` });
+          return;
+        }
+        await adminUpsertCatalogCategory({
+          slug,
           name: form.name.trim(),
           type: form.type,
           color: form.color,
@@ -97,9 +100,10 @@ export function AdminCategoriesPage() {
           description: `"${form.name.trim()}" is now in every user's ${form.type} picker.`,
         });
       } else {
-        await adminUpdateDefaultCategory({
-          id: form.id,
+        await adminUpsertCatalogCategory({
+          slug: form.id,
           name: form.name.trim(),
+          type: form.type,
           color: form.color,
           icon: form.icon,
         });
@@ -122,7 +126,7 @@ export function AdminCategoriesPage() {
     if (!pendingDelete) return;
     setIsSaving(true);
     try {
-      await adminDeleteDefaultCategory(pendingDelete.id);
+      await adminSetCatalogCategoryActive(pendingDelete.id, false);
       notify({
         title: "Category removed",
         description: `"${pendingDelete.name}" removed from future pickers. Historical transactions keep their label.`,

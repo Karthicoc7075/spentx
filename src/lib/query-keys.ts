@@ -2,6 +2,7 @@ export const queryKeys = {
   accounts: (userId?: string) => ["accounts", userId] as const,
   categories: (userId?: string) => ["categories", userId] as const,
   globalSettings: () => ["globalSettings"] as const,
+  categoryCatalog: () => ["categoryCatalog"] as const,
   purposes: (userId?: string) => ["purposes", userId] as const,
   transactions: (userId?: string) => ["transactions", userId] as const,
   sharedTransactions: (token: string) => ["sharedTransactions", token] as const,

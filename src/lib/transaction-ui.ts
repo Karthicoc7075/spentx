@@ -123,6 +123,14 @@ const categoryIconMap: Record<string, LucideIcon> = {
 
 import { ICON_MAP } from "@/components/shared/IconPicker";
 
+/** True when [icon] is a lucide name the pickers can draw (catalog rows may
+ * carry mobile Material names, which the web must not show as a receipt). */
+export function isKnownCategoryIcon(icon: string): boolean {
+  if (ICON_MAP[icon] || categoryIconMap[icon]) return true;
+  const lower = icon.toLowerCase();
+  return Object.keys(ICON_MAP).some((key) => key.toLowerCase() === lower);
+}
+
 export function getCategoryIcon(nameOrIcon?: string, fallbackName?: string): LucideIcon {
   if (!nameOrIcon && !fallbackName) return Receipt;
   if (nameOrIcon && ICON_MAP[nameOrIcon]) return ICON_MAP[nameOrIcon];

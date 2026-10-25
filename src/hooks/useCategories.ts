@@ -2,42 +2,20 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchCustomCategories, fetchGlobalSettings, fetchSharedCategories } from "@/lib/supabase-data";
-import { defaultCategories } from "@/lib/mock-data";
+import { fetchCustomCategories, fetchDefaultCategories, fetchSharedCategories } from "@/lib/supabase-data";
+import { MINIMAL_FALLBACK_CATEGORIES, mergeDefaultAndCustom } from "@/lib/category-catalog";
 import { cacheKeys, readQueryCache, writeQueryCache } from "@/lib/query-cache";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
 import { useViewerAccess } from "@/providers/viewer-provider";
 import { useShareSession } from "@/providers/share-provider";
-import type { Category, DefaultCategory } from "@/types";
-
-const FALLBACK_GLOBAL: Category[] = defaultCategories.map((c) => ({
-  ...c,
-  isDefault: true,
-  source: "global",
-}));
-
-function mapGlobalDefaults(list: DefaultCategory[]): Category[] {
-  return [...list]
-    .sort((a, b) => a.order - b.order)
-    .map((c) => ({
-      id: c.id,
-      name: c.name,
-      type: c.type,
-      color: c.color,
-      icon: c.icon,
-      isDefault: true,
-      canDelete: false,
-      isActive: true,
-      source: "global" as const,
-      isInvestment: c.isInvestment ?? false,
-    }));
-}
+import type { Category } from "@/types";
 
 /**
- * Merged category list:
- * - Signed-in / owner view: globalSettings.defaultCategories + user's custom categories
- * - Shared viewer: globalSettings.defaultCategories + custom categories on that token's splits
+ * Merged category list (defaults come only from category_catalog):
+ * - Signed-in / owner view: catalog defaults + user's own categories (one per
+ *   type + name; the user's row wins; defaults they deleted stay hidden)
+ * - Shared viewer: catalog defaults + custom categories on that token's splits
  */
 export function useCategories() {
   const { user, isConfigured, isReady } = useAuthReady();
@@ -46,14 +24,8 @@ export function useCategories() {
   const effectiveUserId = dataOwnerId ?? user?.id;
 
   const globalQuery = useQuery<Category[]>({
-    queryKey: queryKeys.globalSettings(),
-    queryFn: async (): Promise<Category[]> => {
-      const settings = await fetchGlobalSettings();
-      if (settings?.defaultCategories?.length) {
-        return mapGlobalDefaults(settings.defaultCategories);
-      }
-      return FALLBACK_GLOBAL;
-    },
+    queryKey: queryKeys.categoryCatalog(),
+    queryFn: fetchDefaultCategories,
     enabled: isReady || !isConfigured,
     staleTime: 60_000,
     refetchOnWindowFocus: true,
@@ -91,20 +63,14 @@ export function useCategories() {
   const sharedData = sharedQuery.data;
 
   const categories = useMemo(() => {
-    const defaults = globalDefaults ?? FALLBACK_GLOBAL;
-    const byKey = new Map<string, Category>();
-    for (const cat of defaults) byKey.set(cat.id, cat);
-
+    const defaults = globalDefaults ?? MINIMAL_FALLBACK_CATEGORIES;
     if (share) {
-      for (const cat of sharedData ?? []) {
-        byKey.set(cat.id, { ...cat, source: "custom" });
-      }
-      return [...byKey.values()];
+      return mergeDefaultAndCustom(
+        defaults,
+        (sharedData ?? []).map((cat) => ({ ...cat, source: "custom" as const })),
+      );
     }
-
-    const custom = customData ?? [];
-    for (const cat of custom) byKey.set(cat.id, cat);
-    return [...byKey.values()];
+    return mergeDefaultAndCustom(defaults, customData ?? []);
   }, [share, globalDefaults, customData, sharedData]);
 
   return {

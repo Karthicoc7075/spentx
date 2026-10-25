@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { defaultPurposes } from "@/lib/mock-data";
+import { mergeDefaultAndCustom } from "@/lib/category-catalog";
 import { cacheKeys, writeQueryCache } from "@/lib/query-cache";
 import { queryKeys } from "@/lib/query-keys";
 import { normalizePurposes } from "@/lib/purposes";
@@ -9,17 +10,7 @@ export function mergeCategories(
   defaults: Category[],
   custom: Category[],
 ): Category[] {
-  const seen = new Set<string>();
-  const merged: Category[] = [];
-
-  for (const category of [...defaults, ...custom]) {
-    const key = category.id || category.name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(category);
-  }
-
-  return merged.sort((a, b) => a.name.localeCompare(b.name));
+  return mergeDefaultAndCustom(defaults, custom).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function resolveStoredPurposes(stored: Purpose[]) {

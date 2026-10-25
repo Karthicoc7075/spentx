@@ -11,8 +11,16 @@ import {
 } from "@/lib/user-bootstrap";
 import { hasSupabaseConfig } from "@/lib/supabase/env";
 import {
+  CATALOG_COLUMNS,
+  MINIMAL_FALLBACK_CATEGORIES,
+  catalogDefaults,
+  defaultToCategory,
+  mergeDefaultAndCustom,
+  type CatalogRow,
+} from "@/lib/category-catalog";
+import { isKnownCategoryIcon } from "@/lib/transaction-ui";
+import {
   defaultAppConfig,
-  defaultCategories,
   defaultUserSettings,
   defaultNotificationPreferences,
 } from "@/lib/mock-data";
@@ -1669,14 +1677,22 @@ export async function deleteAccount(userId: string | undefined, accountId: strin
   });
 }
 
+/** Active category_catalog rows as default categories (admin view uses the
+ * slug ids directly). Empty when the catalog can't be read. */
+export async function fetchCatalogDefaults(): Promise<DefaultCategory[]> {
+  const { data, error } = await client()
+    .from("category_catalog")
+    .select(CATALOG_COLUMNS)
+    .eq("is_active", true)
+    .order("sort_order", { ascending: true });
+  if (error || !Array.isArray(data)) return [];
+  return catalogDefaults(data as CatalogRow[], isKnownCategoryIcon);
+}
+
+/** Default categories = category_catalog only; tiny fallback when unreadable. */
 export async function fetchDefaultCategories(): Promise<Category[]> {
-  const data = await throwIfError(
-    client().from("global_settings").select("default_categories").eq("id", "app").maybeSingle(),
-  );
-  const list = (data as Row | null)?.default_categories;
-  return Array.isArray(list) && list.length > 0
-    ? list.map((item) => toCategory(item, "global"))
-    : defaultCategories.map((item) => ({ ...item, source: "global" as const }));
+  const list = await fetchCatalogDefaults();
+  return list.length > 0 ? list.map(defaultToCategory) : MINIMAL_FALLBACK_CATEGORIES;
 }
 
 export async function fetchCustomCategories(userId?: string) {
@@ -1730,7 +1746,9 @@ export async function fetchCategories(userId?: string) {
     fetchDefaultCategories(),
     fetchCustomCategories(userId),
   ]);
-  return [...defaults, ...custom.filter((category) => category.isActive !== false)];
+  return mergeDefaultAndCustom(defaults, custom).filter(
+    (category) => category.isActive !== false,
+  );
 }
 
 export async function fetchPurposes(userId?: string) {
