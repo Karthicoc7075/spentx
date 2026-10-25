@@ -1,9 +1,10 @@
 # SpentX Detection Flow v2 — Pre-Existing Baseline Failures
 # Date: October 25, 2026
 # Repo: Mobile app/SpentX (Karthicoc7075/spentx-app), real folder
-# Branch: feature/smart-detection-flow-v2 @ 4323173 (Phase 4 parsers & unparsed)
+# Branch: feature/smart-detection-flow-v2 @ 0b77b09 (Phase 7 + final check)
 # Command: flutter test
-# Total Tests: 1151 | Passed: 1150 | Skipped: 0 | Failed: 1
+# Total Tests: 1178 | Passed: 1178 | Skipped: 0 | Failed: 0
+# (Phases 5-7 added 27 tests. Phase 4 was 1151/1150/1 at 4323173.)
 # (Phase 4 added 33 tests: masker, template requests, app rules + pipeline,
 # corpus field cases, Unparsed UI. Before: 1118/1117/1 at 76e2f83.)
 # (Pending design added 32 tests: matcher, pending confirmation, pending UI;
@@ -19,4 +20,5 @@
 # The failure below also fails at 0439ab1 (before Phase 2), so it is
 # pre-existing. Fix scheduled for Phase 10.
 
-test/detected_sms_tabs_test.dart: Ignored ignored item whose SMS was already saved under another id is refused
+# FIXED in 6698a85 (P7.5): test/detected_sms_tabs_test.dart: Ignored ignored item whose SMS was already saved under another id is refused
+# No known failures.

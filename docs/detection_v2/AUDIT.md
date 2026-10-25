@@ -560,3 +560,42 @@ Approved by Karthi (steps 1-8, all answers "A"). Supersedes the 48h hidden hold 
   4. The payee fill is narrow (Axis-style `UPI/P2M|P2A/` only).
   5. The read-again path uses the `accountReplay` source, so it skips the seen-store dedupe. It relies on the ledger/card dedupe instead, and it carries no sender (the card does not store one).
   6. An Unparsed card is judged a bank SMS by its bank name. A notification card with a bank name would open the template creator.
+
+## 18. Phase 5: Accounts (kinds, Not Mine, new-account notification)
+- **Status:** done. Emulator: launch only (sign-in needs a phone OTP).
+- **Outer:** `de554d3`, migration `20261025150000_p5_account_bank_subtype.sql`. It is additive and has not been run.
+- **App:**
+  - `1fe0aee`: Savings, Current, Credit card and Wallet account kinds, stored in `bank_subtype`. An old Bank account reads as Savings.
+  - `790794b`: Not Mine hides account cards (restorable). Add re-checks that account's pending SMS.
+  - `6a27696`: the "New <Bank> account ••1234 found" notification (Add / Not Mine). The cross-source merge fills only empty evidence.
+
+## 19. Phase 6: Save, refund link, notifications
+- **Status:** done.
+- **App:**
+  - `b011468`: a refund links to its purchase within 30 days (reference first, else one unique same-merchant match). Credit SMS get income categories.
+  - `c68d11f`: the Added notification "Added ₹X Merchant" with Edit and Undo, and a per-item Verify "Detected ₹X on Merchant".
+  - `290e057`: ledger dedupe by messageHash (release rows keep only the hash), Added headline wiring, and the Phase 6 tests.
+
+## 20. Phase 7: Web, template requests, badges, cleanup, and the final check
+- **Outer:**
+  - `ceda50e`: the web summary counts only confirmed transactions.
+  - `241ad31`: migration `20261025170000_p7_sms_template_requests.sql` (not run).
+  - `e7cbded`: the admin Template Requests page, plus an "also block notifications" toggle on block rules.
+- **App:**
+  - `5fad2a3`: masked template requests are sent through the RPC on sign-in. Sending stops at the first failure and retries on the next start.
+  - `6698a85`: Verify refuses to save an SMS that is already in the ledger, even after the 14-day registry forgets it. This fixes the baseline `detected_sms_tabs` failure.
+  - `df4b9e5`: amber Pending and red Failed badges (tile, account detail, home, transactions, detail, SMS Activity, Lab), plus popup state pills.
+  - `0b2e143`: removed 13 unreferenced legacy files. Nothing imported or routed to them, and no test used them. `/sms-activity` routes to DetectedSmsScreen.
+  - `0be74ad`: the Phase 7 tests, including a guard that fails if any log line includes the raw SMS.
+  - `0b77b09` (final check):
+    - Editing an account keeps its own type. Before, it was forced to Bank.
+    - The fallback parser no longer takes "with Rs…" as the payee.
+- **Tests:** 1178 total, 1178 pass, 0 fail.
+- **Analyze:** 21 info-level issues, all pre-existing. No warnings, no errors.
+- **Web:** `npm test` and tsc both pass.
+- **Parser check:** 202 of 272 agree with the Python reference.
+- **Emulator (emulator-5554):**
+  - 11 SMS injected (success, refund, pending→success, pending→failed, failed, OTP, promo, unknown account, duplicate). No raw text appears in logcat.
+  - The app is signed out, so it does not process SMS (by design). The in-app scenarios still need the real phone.
+  - Launch, Log in and Create account screens render. FLAG_SECURE is on.
+  - A debug cold start takes about 90s on the emulator. Taps during the splash cause an "Input dispatching timed out (no focused window)" ANR.
