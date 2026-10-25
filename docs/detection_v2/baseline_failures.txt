@@ -1,9 +1,10 @@
 # SpentX Detection Flow v2 — Pre-Existing Baseline Failures
 # Date: October 25, 2026
 # Repo: Mobile app/SpentX (Karthicoc7075/spentx-app), real folder
-# Branch: feature/smart-detection-flow-v2 @ 2f0d98a
+# Branch: feature/smart-detection-flow-v2 @ 316c40e (after merging main/design work, e1bbe00)
 # Command: flutter test --reporter expanded
-# Total Tests: 1052 | Passed: 1051 | Failed: 1
+# Total Tests: 1073 | Passed: 1072 | Failed: 1
+# The design merge's narrow-screen nav font test now expects 11.5 (cdcb80e) and passes.
 #
 # RULE: Any failing test NOT in this file is a new failure and MUST be fixed immediately.
 # The 8 failures listed in the Oct 24 baseline all pass in the real folder.
