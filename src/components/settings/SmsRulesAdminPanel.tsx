@@ -547,6 +547,23 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
                   )
                 }
               />
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                <span className="grid gap-0.5">
+                  <span className="text-sm font-medium">Also block app notifications</span>
+                  <span className="text-xs text-muted-foreground">
+                    Off: SMS only. On: the same rule also hides matching payment-app
+                    notifications. Needs the P3 block-rules SQL.
+                  </span>
+                </span>
+                <Switch
+                  checked={editingBlock.appliesToNotifications === true}
+                  onCheckedChange={(checked) =>
+                    setEditingBlock((current) =>
+                      current ? { ...current, appliesToNotifications: checked } : current,
+                    )
+                  }
+                />
+              </div>
             </div>
           ) : null}
           <div className="flex shrink-0 gap-2 border-t border-border bg-muted/40 px-5 py-3">

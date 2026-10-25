@@ -380,9 +380,26 @@ export type SmsBlockRule = {
   sampleMessage?: string;
   similarityThreshold: number;
   isActive: boolean;
+  /** Detection v2: also blocks app notifications (default: SMS only).
+   * Undefined when the server has not got the column yet. */
+  appliesToNotifications?: boolean;
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+/** Detection v2: a masked SMS format phones could not parse (no raw text). */
+export type SmsTemplateRequest = {
+  id: string;
+  formatHash: string;
+  maskedText: string;
+  bank: string;
+  sender: string;
+  count: number;
+  userCount: number;
+  status: "new" | "added" | "ignored";
+  firstSeen?: string;
+  lastSeen?: string;
 };
 
 export type KpiDelta = {

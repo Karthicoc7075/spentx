@@ -60,6 +60,7 @@ import type {
   SmartAlert,
   SmartView,
   SmsBlockRule,
+  SmsTemplateRequest,
   SmsDetectionRule,
   SmsTemplateRule,
   Transaction,
@@ -4779,6 +4780,9 @@ function smsBlock(row: Row): SmsBlockRule {
     sampleMessage: row.sample_message ?? "",
     similarityThreshold: Number(row.similarity_threshold ?? 0.8),
     isActive: row.is_active ?? true,
+    ...(typeof row.applies_to_notifications === "boolean"
+      ? { appliesToNotifications: row.applies_to_notifications }
+      : {}),
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -4878,6 +4882,9 @@ export async function saveSmsBlockRule(rule: SmsBlockRule, adminId?: string) {
           sample_message: rule.sampleMessage ?? "",
           similarity_threshold: rule.similarityThreshold,
           is_active: rule.isActive,
+          // Sent only once the column exists (the row came back with it, or
+          // the admin set it), so an older server keeps saving rules.
+          applies_to_notifications: rule.appliesToNotifications,
           created_by: isUuid(adminId) ? adminId : undefined,
           updated_at: new Date().toISOString(),
         }),
@@ -4886,6 +4893,47 @@ export async function saveSmsBlockRule(rule: SmsBlockRule, adminId?: string) {
       .single(),
   );
   return smsBlock(data as Row);
+}
+
+function smsTemplateRequest(row: Row): SmsTemplateRequest {
+  const status = String(row.status ?? "new");
+  return {
+    id: row.id,
+    formatHash: row.format_hash ?? "",
+    maskedText: row.masked_text ?? "",
+    bank: row.bank ?? "",
+    sender: row.sender ?? "",
+    count: Number(row.count ?? 0),
+    userCount: Number(row.user_count ?? 0),
+    status: status === "added" || status === "ignored" ? status : "new",
+    firstSeen: row.first_seen ?? undefined,
+    lastSeen: row.last_seen ?? undefined,
+  };
+}
+
+/** Admin: masked formats phones could not parse, most seen first. */
+export async function fetchSmsTemplateRequests() {
+  const data = await throwIfError(
+    client()
+      .from("sms_template_requests")
+      .select("*")
+      .order("count", { ascending: false })
+      .limit(500),
+  );
+  return ((data as Row[]) ?? []).map(smsTemplateRequest);
+}
+
+/** Admin: mark a request added (a template now covers it) or ignored. */
+export async function setSmsTemplateRequestStatus(
+  id: string,
+  status: SmsTemplateRequest["status"],
+) {
+  await throwIfError(
+    client()
+      .from("sms_template_requests")
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq("id", id),
+  );
 }
 
 export async function deleteSmsBlockRule(ruleId: string) {
