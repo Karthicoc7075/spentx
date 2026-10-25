@@ -1,11 +1,12 @@
 # SpentX Detection Flow v2 — Pre-Existing Baseline Failures
 # Date: October 25, 2026
 # Repo: Mobile app/SpentX (Karthicoc7075/spentx-app), real folder
-# Branch: feature/smart-detection-flow-v2 @ fad98e9 (end of Phase 3)
-# Command: flutter test --reporter expanded
-# Total Tests: 1086 | Passed: 1084 | Skipped: 1 | Failed: 1
-# (Phase 3 added 13 tests in phase3_preparse_test; 1 is skipped until
-# sms_non_transaction_rules.dart is approved. Before Phase 3: 1073/1072/1 at 316c40e.)
+# Branch: feature/smart-detection-flow-v2 @ 76e2f83 (Phase 3 pending-confirmation design)
+# Command: flutter test
+# Total Tests: 1118 | Passed: 1117 | Skipped: 0 | Failed: 1
+# (Pending design added 32 tests: matcher, pending confirmation, pending UI;
+# the Phase 3 skipped test is un-skipped in 05d15d6.
+# Earlier: 1086/1084/1 skip/1 fail at fad98e9; 1073/1072/1 at 316c40e.)
 # The design merge's narrow-screen nav font test now expects 11.5 (cdcb80e) and passes.
 #
 # RULE: Any failing test NOT in this file is a new failure and MUST be fixed immediately.

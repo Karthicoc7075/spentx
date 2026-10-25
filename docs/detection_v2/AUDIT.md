@@ -510,3 +510,25 @@ The following files and legacy paths are candidates for removal in Phase 11 afte
   1. `lib/core/sync/sync_service.dart`: needed to keep failed rows local. Change: skip `status == 'failed'` in `queueTransactionUpsert` and in the `requeueAllLocalDataAndPush` loop, and keep local failed rows during the reconcile merge. Until then, failed SMS stay on the Phase 2 Needs Review path, with no ledger save and no auto-save.
   2. `lib/features/sms_parser/sms_non_transaction_rules.dart`: the existing money-words check still applies admin regex rows to notifications. It needs an `isNotification` flag that skips admin rows without `applies_to_notifications`. One test is skipped for this.
 - **Phase 9 note:** fix the website `src/lib/transaction-summary.ts` to exclude failed/pending, then enable sync of failed transactions.
+
+## 16. Phase 3 Pending-Confirmation Design (2026-10-25)
+
+Approved by Karthi (steps 1-8, all answers "A"). Supersedes the 48h hidden hold in §15.
+
+- **App commits:** `f648331` (48h hold removed; a pending SMS is a quiet To-verify card; leftover `pending_sms_holds` drained once), `628536e` (sync: failed rows stay local unless already synced or queued), `05d15d6` (non-transaction rules: admin rows apply to notifications only when `applies_to_notifications`; test un-skipped), `3253310` (`PendingConfirmationMatcher`), `08d3b62` (`saveFailedLocal`, `setSmsTxStatus`; failed rows never block a retry), `2ae7707` (pipeline routes the bank's final SMS to its pending item), `76e2f83` (Detected SMS amber chip + confirm line).
+- **Deleted:** `sms_hold_manager.dart`. **Reverted:** `pending_hold.dart`.
+- **Pending card:** a pending SMS becomes ONE card in Detected SMS → To verify, with an amber "Waiting for bank confirmation" chip. No popup, no notification. Verify shows "Saved as Pending · ₹0 until the bank confirms".
+- **Matching (1-A):** reference number first (within 7 days); otherwise same account (last4/card), exact amount, same direction, within 72h (the final SMS may be up to 10 min earlier). No account (notifications show "Unknown") or more than one match: never guess, the normal card path runs.
+- **Final success (2-A):** a verified pending row is set to Success. An unverified card is replaced through the normal rules (known merchant auto-adds; otherwise it stays one card).
+- **Final failed (3-A):** a verified row is set to Failed on the phone AND in the cloud (exception to "failed stays local"). A failed row is pushed only if it already has a remoteId or is queued; a new failed row stays on the phone. Failed SMS are saved as ₹0 rows with a red Failed badge even with auto-save OFF, with no popup and no "Added" notification.
+- **Ignored pending (5-A):** a later success SMS creates a NEW quiet card; the ignored record's status is updated so a second final message does not open another card.
+- **Phase 9 note:** the website (`src/lib/transaction-summary.ts`) still counts failed/pending rows in totals until Phase 9.
+- **SQL:** unchanged; `20261025120000_p3_block_rules_notifications.sql` is still not run (Karthi runs it).
+- **Tests:** 1118 total, 1117 pass, 0 skipped, 1 pre-existing failure (`detected_sms_tabs_test`, Phase 10).
+- **Risks:**
+  1. A bank SMS changes an already saved transaction's status (pending → success/failed).
+  2. A pending SMS with no account and no reference never matches; notifications carry no account, so they rely on the reference.
+  3. History import counts a Failed save as "added"; the Detection Lab labels it "Auto-added".
+  4. A replaced unverified card loses the title/category typed on it.
+  5. A reference matching two booked rows is treated as a duplicate (nothing changes).
+  6. Callers outside the approved files (e.g. `detection_queue.dart`) do not show the new chip/badges.
