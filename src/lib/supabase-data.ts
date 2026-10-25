@@ -777,6 +777,76 @@ export type TransactionDeletedEvent = {
   amount?: number;
 };
 
+const TX_SELECT_EMBED = "*, accounts!account_id(name), transaction_splits(*), transaction_items(*)";
+const TX_SELECT_PLAIN = "*, transaction_splits(*), transaction_items(*)";
+// Rows committed slightly out of order are read again (merge is idempotent).
+const TX_DELTA_OVERLAP_MS = 10_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isEmbedError(error: unknown) {
+  const message = (error instanceof Error ? error.message : "").toLowerCase();
+  return (
+    message.includes("relationship") ||
+    message.includes("embed") ||
+    message.includes("more than one")
+  );
+}
+
+/**
+ * Changed transactions only: rows with updated_at >= since, plus the given
+ * ids. No is_active filter, so soft deletes (tombstones) come back and the
+ * caller drops them.
+ */
+async function fetchTransactionDeltaRaw(
+  userId: string,
+  ids: string[],
+  since: string | null,
+): Promise<Row[]> {
+  const run = async (select: string) => {
+    const out: Row[] = [];
+    const safeIds = ids.filter((id) => UUID_RE.test(id));
+    for (let i = 0; i < safeIds.length; i += 100) {
+      const rows = await throwIfError(
+        client()
+          .from("transactions")
+          .select(select)
+          .eq("user_id", userId)
+          .in("id", safeIds.slice(i, i + 100)),
+      );
+      out.push(...((rows as Row[]) ?? []));
+    }
+    if (since) {
+      const rows = await throwIfError(
+        client()
+          .from("transactions")
+          .select(select)
+          .eq("user_id", userId)
+          .gte("updated_at", since),
+      );
+      out.push(...((rows as Row[]) ?? []));
+    }
+    return out;
+  };
+  try {
+    return await run(TX_SELECT_EMBED);
+  } catch (error) {
+    if (!isEmbedError(error)) throw error;
+    return run(TX_SELECT_PLAIN);
+  }
+}
+
+function nextTxCursor(previous: string | null, rows: Row[]) {
+  let newest = previous ? Date.parse(previous) : Number.NaN;
+  for (const row of rows) {
+    const at = Date.parse(String(row.updated_at ?? ""));
+    if (!Number.isNaN(at) && (Number.isNaN(newest) || at > newest)) newest = at;
+  }
+  if (Number.isNaN(newest)) return previous;
+  const candidate = new Date(newest - TX_DELTA_OVERLAP_MS).toISOString();
+  if (previous && Date.parse(candidate) <= Date.parse(previous)) return previous;
+  return candidate;
+}
+
 export function subscribeToTransactions(
   userId: string | undefined,
   onData: (transactions: Transaction[]) => void,
@@ -788,7 +858,70 @@ export function subscribeToTransactions(
     return () => undefined;
   }
 
-  void fetchTransactions(userId).then(onData).catch(onError);
+  // Local copy of the list: after the first full read, Realtime events only
+  // fetch the changed rows (by id and updated_at) and merge them in.
+  const rows = new Map<string, { date: string; tx: Transaction }>();
+  let cursor: string | null = null;
+  let loaded = false;
+  let disposed = false;
+  const pendingIds = new Set<string>();
+  const removedIds = new Set<string>();
+
+  const publish = () => {
+    const list = Array.from(rows.values());
+    list.sort((a, b) => b.date.localeCompare(a.date));
+    onData(list.map((r) => r.tx));
+  };
+
+  const fullFetch = async () => {
+    const raw = ((await fetchTransactionsRaw(userId)) as Row[]) ?? [];
+    const txs = await enrichTransactionContributors(userId, raw.map(toTransaction));
+    if (disposed) return;
+    rows.clear();
+    raw.forEach((row, i) => {
+      rows.set(String(row.id), { date: String(row.transaction_date ?? ""), tx: txs[i] });
+    });
+    cursor = nextTxCursor(null, raw);
+    loaded = true;
+    pendingIds.clear();
+    removedIds.clear();
+    publish();
+  };
+
+  const deltaFetch = async () => {
+    const ids = Array.from(pendingIds);
+    const removed = Array.from(removedIds);
+    pendingIds.clear();
+    removedIds.clear();
+    const raw = await fetchTransactionDeltaRaw(userId, ids, cursor);
+    const txs = await enrichTransactionContributors(userId, raw.map(toTransaction));
+    if (disposed) return;
+    removed.forEach((id) => rows.delete(id));
+    raw.forEach((row, i) => {
+      const id = String(row.id);
+      if (row.is_active === false || row.deleted_at != null) {
+        rows.delete(id);
+      } else {
+        rows.set(id, { date: String(row.transaction_date ?? ""), tx: txs[i] });
+      }
+    });
+    cursor = nextTxCursor(cursor, raw);
+    publish();
+  };
+
+  const refresh = async () => {
+    try {
+      if (loaded) {
+        await deltaFetch();
+        return;
+      }
+    } catch {
+      // Delta failed: fall back to one full read below.
+    }
+    await fullFetch();
+  };
+
+  void refresh().catch(onError);
   const supabase = client();
   logRealtimeSubscribe("transactions");
   // Unique topic per subscriber: this helper has more than one caller
@@ -797,10 +930,12 @@ export function subscribeToTransactions(
   // channel, and attaching a postgres_changes handler to it throws
   // "cannot add `postgres_changes` callbacks ... after `subscribe()`".
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  const triggerRefresh = () => {
+  const triggerRefresh = (id?: unknown, removed = false) => {
+    const key = id == null ? "" : String(id);
+    if (key) (removed ? removedIds : pendingIds).add(key);
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
-      void fetchTransactions(userId).then(onData).catch(onError);
+      void refresh().catch(onError);
     }, 100);
   };
 
@@ -819,7 +954,7 @@ export function subscribeToTransactions(
             amount: data.amount,
           });
         }
-        triggerRefresh();
+        triggerRefresh(data?.id);
       },
     );
   }
@@ -839,6 +974,8 @@ export function subscribeToTransactions(
               amount: Number(oldRow.total_amount ?? oldRow.amount ?? 0),
             });
           }
+          triggerRefresh(oldRow?.id, true);
+          return;
         } else if (payload.eventType === "UPDATE") {
           const newRow = payload.new as Row | undefined;
           const oldRow = payload.old as Row | undefined;
@@ -855,21 +992,32 @@ export function subscribeToTransactions(
             });
           }
         }
-        triggerRefresh();
+        const row = payload.new as Row | undefined;
+        triggerRefresh(row?.id);
       },
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "transaction_splits", filter: `user_id=eq.${userId}` },
-      () => triggerRefresh(),
+      (payload) => {
+        const row = (payload.new ?? payload.old) as Row | undefined;
+        triggerRefresh(row?.transaction_id ?? (payload.old as Row | undefined)?.transaction_id);
+      },
     )
     .on(
       "postgres_changes",
       { event: "*", schema: "public", table: "transaction_items", filter: `user_id=eq.${userId}` },
-      () => triggerRefresh(),
+      (payload) => {
+        const row = (payload.new ?? payload.old) as Row | undefined;
+        triggerRefresh(row?.transaction_id ?? (payload.old as Row | undefined)?.transaction_id);
+      },
     )
-    .subscribe();
+    .subscribe((status) => {
+      // Reconnected after a drop: catch up on what was missed.
+      if (status === "SUBSCRIBED" && loaded) triggerRefresh();
+    });
   return () => {
+    disposed = true;
     if (refreshTimer) clearTimeout(refreshTimer);
     void supabase.removeChannel(channel);
   };
