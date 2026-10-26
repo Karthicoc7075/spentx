@@ -31,10 +31,18 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { useToast } from "@/providers/toast-provider";
 import { useOutings } from "@/hooks/useOutings";
 import { buildTransactionsListRows } from "@/lib/outings";
-import type { WealthFilter } from "@/types";
+import type { Account, WealthFilter } from "@/types";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuthReady } from "@/hooks/useAuthReady";
+import { deleteAccount, saveAccount } from "@/lib/supabase-data";
+import { queryKeys } from "@/lib/query-keys";
+import { isCreditCard, isDebitCardVirtual } from "@/lib/account-kinds";
 
 export function WealthPage() {
   const { notify } = useToast();
+  const { user } = useAuthReady();
+  const queryClient = useQueryClient();
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const { purposes } = usePurposes();
   const {
     transactions: rawTransactions,
@@ -83,6 +91,59 @@ export function WealthPage() {
     [activeAccounts],
   );
 
+  // Accounts tab: liquid accounts plus credit cards (net worth subtracts card dues).
+  const wealthAccounts = useMemo(
+    () => activeAccounts.filter((account) => isLiquidAccount(account) || isCreditCard(account)),
+    [activeAccounts],
+  );
+
+  async function refreshAccounts() {
+    if (!user?.id) return;
+    await queryClient.invalidateQueries({ queryKey: queryKeys.accounts(user.id) });
+  }
+
+  async function handleSetDefault(account: Account) {
+    if (!user?.id) return;
+    try {
+      await saveAccount(user.id, { ...account, isDefault: true });
+      await refreshAccounts();
+      notify({ title: "Default account set", description: account.name });
+    } catch (err) {
+      notify({
+        title: "Couldn't set default",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
+  async function handleArchive(account: Account) {
+    if (!user?.id) return;
+    try {
+      if (isDebitCardVirtual(account)) {
+        const bank = accounts.find((a) => a.id === account.linkedAccountId);
+        if (!bank) return;
+        if (!window.confirm(`Remove debit card ••${account.last4} from ${bank.name}?`)) return;
+        await saveAccount(user.id, {
+          ...bank,
+          linkedCardLast4: (bank.linkedCardLast4 ?? []).filter((c) => c !== account.last4),
+        });
+      } else {
+        // Never hard-delete: archive keeps the account's transactions intact.
+        if (!window.confirm(`Archive "${account.name}"? Its transactions are kept.`)) return;
+        await deleteAccount(user.id, account.id);
+      }
+      await refreshAccounts();
+      notify({ title: "Account archived", description: account.name });
+    } catch (err) {
+      notify({
+        title: "Couldn't archive account",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    }
+  }
+
   const activeGoalsCount = useMemo(
     () => savingsGoals.filter((g) => g.isActive !== false && !g.deletedAt).length,
     [savingsGoals],
@@ -99,11 +160,11 @@ export function WealthPage() {
   const netWorthBreakdown = useMemo(
     () =>
       computeNetWorthBreakdown(
-        liquidAccounts,
+        wealthAccounts,
         transactions,
         unlinkedOutingExpenses,
       ),
-    [liquidAccounts, transactions, unlinkedOutingExpenses],
+    [wealthAccounts, transactions, unlinkedOutingExpenses],
   );
 
   // Lazily compute purpose breakdown only when user switches to "by-purpose" view
@@ -142,11 +203,15 @@ export function WealthPage() {
   }) {
     try {
       const transferTags = ["transfer", `transfer_to:${toAccount}`];
+      const toCard = accounts.find(
+        (a) => a.name === toAccount && isCreditCard(a),
+      );
       await addTransaction({
         type: "expense",
         amount,
         totalAmount: amount,
-        merchant: `Transfer to ${toAccount}`,
+        // Card bill payment (same title as the app) — counted as a transfer, not spend.
+        merchant: toCard ? `Card bill · ${toAccount}` : `Transfer to ${toAccount}`,
         category: "Settlements",
         account: fromAccount,
         purpose: "personal",
@@ -294,7 +359,7 @@ export function WealthPage() {
                     : "bg-muted text-muted-foreground",
                 )}
               >
-                {liquidAccounts.length}
+                {wealthAccounts.length}
               </span>
             </button>
 
@@ -351,19 +416,22 @@ export function WealthPage() {
           {activeTab === "accounts" ? (
             <div className="space-y-6">
               <WealthSegmentCards
-                accounts={liquidAccounts}
+                accounts={wealthAccounts}
                 activeFilter={filter}
                 breakdown={netWorthBreakdown}
                 onFilter={setFilter}
               />
 
               <WealthAccountsList
-                accounts={liquidAccounts}
+                accounts={wealthAccounts}
                 transactions={transactions}
                 unlinkedOutingExpenses={unlinkedOutingExpenses}
                 activeFilter={filter}
                 onFilterChange={setFilter}
                 onNewAccount={() => setNewAccountOpen(true)}
+                onEdit={(account) => setEditingAccount(account)}
+                onSetDefault={handleSetDefault}
+                onArchive={handleArchive}
                 onTransfer={(accountName) => {
                   setTransferFromAccount(accountName);
                   setTransferModalOpen(true);
@@ -400,6 +468,17 @@ export function WealthPage() {
       <NewAccountModal
         open={newAccountOpen}
         onOpenChange={setNewAccountOpen}
+        accounts={activeAccounts}
+      />
+
+      {/* Edit Account Modal */}
+      <NewAccountModal
+        open={editingAccount !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingAccount(null);
+        }}
+        account={editingAccount}
+        accounts={activeAccounts}
       />
 
       {/* New Savings Goal Modal */}

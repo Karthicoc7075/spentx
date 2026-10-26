@@ -94,6 +94,8 @@ export function isTransferTransaction(transaction: Transaction) {
   if (tags.some((t) => t.startsWith("transfer_to:"))) return true;
   if (cat === "settlements" || cat === "transfer") return true;
   const merchant = (transaction.merchant ?? "").trim().toLowerCase();
+  // Credit card bill payment (app title "Card bill · ICICI x3322").
+  if (merchant.startsWith("card bill")) return true;
   if (merchant.startsWith("transfer to ") || merchant.startsWith("transfer from ")) {
     return true;
   }

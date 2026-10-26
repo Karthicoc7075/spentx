@@ -181,8 +181,30 @@ function toAccount(row: Row): Account {
     deletedBy: row.deleted_by ?? undefined,
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
+    linkedCardLast4: Array.isArray(row.linked_card_last4)
+      ? row.linked_card_last4.map(String).filter(Boolean)
+      : undefined,
+    accountKind: row.account_kind ?? undefined,
+    linkedAccountId: row.linked_account_id ?? undefined,
+    creditLimit: row.credit_limit == null ? undefined : Number(row.credit_limit),
+    billDay: row.bill_day == null ? undefined : Number(row.bill_day),
+    dueDay: row.due_day == null ? undefined : Number(row.due_day),
+    lastStatementAmount:
+      row.last_statement_amount == null ? undefined : Number(row.last_statement_amount),
+    lastStatementDue: row.last_statement_due ?? undefined,
   };
 }
+
+/** Columns from 20261026_account_kinds; stripped when the server lacks them. */
+const ACCOUNT_KIND_COLUMNS = [
+  "account_kind",
+  "linked_account_id",
+  "credit_limit",
+  "bill_day",
+  "due_day",
+  "last_statement_amount",
+  "last_statement_due",
+] as const;
 
 function accountPayload(userId: string | undefined, account: Account): Row {
   const row = compact({
@@ -199,6 +221,12 @@ function accountPayload(userId: string | undefined, account: Account): Row {
     is_active: account.isActive ?? true,
     deleted_at: account.deletedAt,
     deleted_by: isUuid(account.deletedBy) ? account.deletedBy : undefined,
+    linked_card_last4: account.linkedCardLast4,
+    account_kind: account.accountKind,
+    linked_account_id: isUuid(account.linkedAccountId) ? account.linkedAccountId : undefined,
+    credit_limit: account.creditLimit,
+    bill_day: account.billDay,
+    due_day: account.dueDay,
   });
   return row;
 }
@@ -1800,7 +1828,22 @@ export async function saveAccount(userId: string | undefined, account: Account) 
       client().from("accounts").update({ is_default: false }).eq("user_id", userId),
     );
   }
-  const saved = await upsertById("accounts", accountPayload(userId, account), toAccount);
+  const payload = accountPayload(userId, account);
+  let saved: Account;
+  try {
+    saved = await upsertById("accounts", payload, toAccount);
+  } catch (error) {
+    const e = error as { code?: string; message?: string };
+    const missingColumn =
+      e?.code === "42703" ||
+      e?.code === "PGRST204" ||
+      ACCOUNT_KIND_COLUMNS.some((c) => (e?.message ?? "").includes(c));
+    if (!missingColumn) throw error;
+    // Server without the account_kinds migration: save the ordinary row.
+    const stripped = { ...payload };
+    for (const c of ACCOUNT_KIND_COLUMNS) delete stripped[c];
+    saved = await upsertById("accounts", stripped, toAccount);
+  }
   broadcastUserSyncEvent(userId, "account-changed", {
     op: "upsert",
     id: saved.id,

@@ -389,6 +389,7 @@ export function computeNetWorthBreakdown(
     cash,
     investmentValue,
     monthlyChange: thisMonthSavings - lastMonthSavings,
+    cardOutstanding: creditDebt,
   };
 }
 

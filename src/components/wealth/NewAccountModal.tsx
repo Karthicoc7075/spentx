@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,7 @@ import { useTransactions } from "@/hooks/useTransactions";
 import { buildOpeningBalanceTransaction } from "@/lib/wealth";
 import { getTodayCalendarDate } from "@/lib/date-filters";
 import {
+  CreditCard,
   Landmark,
   Wallet,
   PlusCircle,
@@ -29,9 +30,12 @@ import {
 } from "lucide-react";
 import type { Account } from "@/types";
 import { cn } from "@/lib/utils";
+import { accountKindOf, isDebitCardVirtual } from "@/lib/account-kinds";
+
+type FormKind = "bank" | "debit_card" | "credit_card" | "wallet" | "cash";
 
 type AccountTypeOption = {
-  type: Account["type"];
+  type: FormKind;
   label: string;
   icon: typeof Landmark;
   description: string;
@@ -45,8 +49,20 @@ const ACCOUNT_TYPES: AccountTypeOption[] = [
     description: "Savings or checking account",
   },
   {
+    type: "debit_card",
+    label: "Debit Card",
+    icon: CreditCard,
+    description: "Linked to a bank account",
+  },
+  {
+    type: "credit_card",
+    label: "Credit Card",
+    icon: CreditCard,
+    description: "Tracks amount owed and due date",
+  },
+  {
     type: "wallet",
-    label: "Digital Wallet",
+    label: "Wallet",
     icon: Wallet,
     description: "Paytm, PhonePe wallet, etc.",
   },
@@ -57,12 +73,24 @@ type NewAccountModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess?: (account: Account) => void;
+  /** When set, the modal edits this account (or debit card) instead of creating. */
+  account?: Account | null;
+  /** All accounts; needed to link debit cards to a bank. */
+  accounts?: Account[];
 };
+
+function parseDay(value: string) {
+  if (!value.trim()) return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 1 && n <= 31 ? n : NaN;
+}
 
 export function NewAccountModal({
   open,
   onOpenChange,
   onSuccess,
+  account: editing = null,
+  accounts = [],
 }: NewAccountModalProps) {
   const { user } = useAuthReady();
   const queryClient = useQueryClient();
@@ -70,14 +98,35 @@ export function NewAccountModal({
   const { addTransaction } = useTransactions();
 
   const todayStr = getTodayCalendarDate();
+  const isEdit = Boolean(editing);
+  const editingDebit = editing ? isDebitCardVirtual(editing) : false;
+  const banks = accounts.filter(
+    (a) => a.isActive !== false && accountKindOf(a) === "bank",
+  );
 
   const [name, setName] = useState("");
-  const [accountType, setAccountType] = useState<Account["type"]>("bank");
+  const [accountType, setAccountType] = useState<FormKind>("bank");
   const [openingBalance, setOpeningBalance] = useState("0");
   const [openingDate, setOpeningDate] = useState(todayStr);
   const [last4, setLast4] = useState("");
+  const [linkedBankId, setLinkedBankId] = useState("");
+  const [creditLimit, setCreditLimit] = useState("");
+  const [billDay, setBillDay] = useState("");
+  const [dueDay, setDueDay] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !editing) return;
+    setName(editing.name);
+    setAccountType(accountKindOf(editing));
+    setLast4(editing.last4 ?? "");
+    setLinkedBankId(editing.linkedAccountId ?? "");
+    setCreditLimit(editing.creditLimit != null ? String(editing.creditLimit) : "");
+    setBillDay(editing.billDay != null ? String(editing.billDay) : "");
+    setDueDay(editing.dueDay != null ? String(editing.dueDay) : "");
+    setError(null);
+  }, [open, editing]);
 
   function resetForm() {
     setName("");
@@ -85,7 +134,42 @@ export function NewAccountModal({
     setOpeningBalance("0");
     setOpeningDate(getTodayCalendarDate());
     setLast4("");
+    setLinkedBankId("");
+    setCreditLimit("");
+    setBillDay("");
+    setDueDay("");
     setError(null);
+  }
+
+  async function invalidate(userId: string) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.accounts(userId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.transactions(userId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.netWorthHistory(userId) }),
+    ]);
+  }
+
+  async function saveDebitCard(userId: string, digits: string) {
+    const bank = banks.find((b) => b.id === linkedBankId);
+    if (!bank) throw new Error("Choose the bank this debit card is linked to.");
+    const oldBankId = editingDebit ? editing?.linkedAccountId : undefined;
+    const oldLast4 = editingDebit ? editing?.last4 : undefined;
+    if (oldBankId && oldBankId !== bank.id) {
+      const oldBank = accounts.find((a) => a.id === oldBankId);
+      if (oldBank) {
+        await saveAccount(userId, {
+          ...oldBank,
+          linkedCardLast4: (oldBank.linkedCardLast4 ?? []).filter((c) => c !== oldLast4),
+        });
+      }
+    }
+    const current = (bank.linkedCardLast4 ?? []).filter(
+      (c) => !(oldBankId === bank.id && c === oldLast4),
+    );
+    await saveAccount(userId, {
+      ...bank,
+      linkedCardLast4: Array.from(new Set([...current, digits])),
+    });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -95,13 +179,44 @@ export function NewAccountModal({
       return;
     }
 
+    const isDebit = accountType === "debit_card";
+    const isCredit = accountType === "credit_card";
     const trimmedName = name.trim();
-    if (!trimmedName) {
+    if (!isDebit && !trimmedName) {
       setError("Please provide an account name (e.g., 'SBI Bank').");
       return;
     }
 
-    const parsedBalance = parseFloat(openingBalance);
+    const digits = last4.trim();
+    if (accountType !== "wallet" && accountType !== "cash" && !/^\d{4}$/.test(digits)) {
+      setError("Enter the last 4 digits.");
+      return;
+    }
+    if (isDebit && !linkedBankId) {
+      setError("Choose the bank this debit card is linked to.");
+      return;
+    }
+
+    let limit: number | undefined;
+    let bill: number | undefined;
+    let due: number | undefined;
+    if (isCredit) {
+      if (creditLimit.trim()) {
+        limit = Number(creditLimit);
+        if (!Number.isFinite(limit) || limit < 0) {
+          setError("Enter a valid credit limit.");
+          return;
+        }
+      }
+      bill = parseDay(billDay);
+      due = parseDay(dueDay);
+      if (Number.isNaN(bill) || Number.isNaN(due)) {
+        setError("Bill day and due day must be between 1 and 31.");
+        return;
+      }
+    }
+
+    const parsedBalance = isEdit || isDebit || isCredit ? 0 : parseFloat(openingBalance);
     if (isNaN(parsedBalance) || parsedBalance < 0) {
       setError("Please enter a valid non-negative opening balance.");
       return;
@@ -114,11 +229,53 @@ export function NewAccountModal({
     setError(null);
 
     try {
+      if (isDebit) {
+        await saveDebitCard(user.id, digits);
+        await invalidate(user.id);
+        notify({ title: isEdit ? "Card updated" : "Debit card added" });
+        resetForm();
+        onOpenChange(false);
+        return;
+      }
+
+      const type: Account["type"] = isCredit
+        ? "credit"
+        : accountType === "wallet"
+          ? "wallet"
+          : accountType === "cash"
+            ? "cash"
+            : "bank";
+      const kindFields = {
+        accountKind: accountType,
+        creditLimit: isCredit ? limit : undefined,
+        billDay: isCredit ? bill : undefined,
+        dueDay: isCredit ? due : undefined,
+      };
+
+      if (editing && !editingDebit) {
+        const updated: Account = {
+          ...editing,
+          ...kindFields,
+          name: trimmedName,
+          type,
+          last4: digits ? digits.slice(-4) : undefined,
+          updatedAt: nowIso,
+        };
+        await saveAccount(user.id, updated);
+        await invalidate(user.id);
+        notify({ title: "Account updated", description: `"${updated.name}" saved.` });
+        onSuccess?.(updated);
+        resetForm();
+        onOpenChange(false);
+        return;
+      }
+
       const newAccount: Account = {
         id: crypto.randomUUID(),
+        ...kindFields,
         name: trimmedName,
-        type: accountType,
-        last4: last4.trim() ? last4.trim().slice(-4) : undefined,
+        type,
+        last4: digits ? digits.slice(-4) : undefined,
         openingBalance: parsedBalance,
         openingBalanceDate: effectiveDate,
         createdAt: nowIso,
@@ -138,11 +295,7 @@ export function NewAccountModal({
       }
 
       // 3. Invalidate React Query cache to immediately update all wealth cards and daily snapshots
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.accounts(user.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.transactions(user.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.netWorthHistory(user.id) }),
-      ]);
+      await invalidate(user.id);
 
       notify({
         title: "Account Created",
@@ -153,14 +306,19 @@ export function NewAccountModal({
       resetForm();
       onOpenChange(false);
     } catch (err) {
-      console.error("Failed to create account:", err);
+      console.error("Failed to save account:", err);
       setError(
-        err instanceof Error ? err.message : "Failed to create account. Please try again.",
+        err instanceof Error ? err.message : "Failed to save account. Please try again.",
       );
     } finally {
       setIsSubmitting(false);
     }
   }
+
+  const visibleTypes = ACCOUNT_TYPES.filter((item) =>
+    !isEdit ? true : editingDebit ? item.type === "debit_card" : item.type !== "debit_card",
+  );
+  const needsLast4 = accountType !== "wallet" && accountType !== "cash";
 
   return (
     <Dialog
@@ -183,7 +341,7 @@ export function NewAccountModal({
               </div>
               <div className="min-w-0">
                 <DialogTitle className="text-base sm:text-lg font-semibold text-foreground tracking-tight">
-                  Add New Account
+                  {isEdit ? "Edit Account" : "Add New Account"}
                 </DialogTitle>
                 <DialogDescription className="mt-0.5 sm:mt-1 text-xs text-muted-foreground leading-relaxed">
                   Add an account to your portfolio. It will appear in today&apos;s Daily
@@ -221,7 +379,7 @@ export function NewAccountModal({
                 Account Type
               </Label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {ACCOUNT_TYPES.map((item) => {
+                {visibleTypes.map((item) => {
                   const Icon = item.icon;
                   const isSelected = accountType === item.type;
                   return (
@@ -266,6 +424,7 @@ export function NewAccountModal({
             </div>
 
             {/* Account Name */}
+            {accountType !== "debit_card" ? (
             <div className="space-y-2">
               <Label htmlFor="account-name" className="text-xs font-semibold text-foreground">
                 Account Name <span className="text-destructive">*</span>
@@ -281,8 +440,80 @@ export function NewAccountModal({
                 autoFocus
               />
             </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="linked-bank" className="text-xs font-semibold text-foreground">
+                  Linked Bank <span className="text-destructive">*</span>
+                </Label>
+                <select
+                  id="linked-bank"
+                  value={linkedBankId}
+                  onChange={(e) => setLinkedBankId(e.target.value)}
+                  className="h-9.5 w-full rounded-lg border border-input bg-transparent px-3 text-xs"
+                >
+                  <option value="">Select bank account</option>
+                  {banks.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                      {b.last4 ? ` ••${b.last4}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {accountType === "credit_card" ? (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="credit-limit" className="text-xs font-semibold text-foreground">
+                    Limit (₹)
+                  </Label>
+                  <Input
+                    id="credit-limit"
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Optional"
+                    value={creditLimit}
+                    onChange={(e) => setCreditLimit(e.target.value)}
+                    className="h-9.5 text-xs font-mono rounded-lg"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="bill-day" className="text-xs font-semibold text-foreground">
+                    Bill day
+                  </Label>
+                  <Input
+                    id="bill-day"
+                    type="number"
+                    min="1"
+                    max="31"
+                    placeholder="1–31"
+                    value={billDay}
+                    onChange={(e) => setBillDay(e.target.value)}
+                    className="h-9.5 text-xs font-mono rounded-lg"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="due-day" className="text-xs font-semibold text-foreground">
+                    Due day
+                  </Label>
+                  <Input
+                    id="due-day"
+                    type="number"
+                    min="1"
+                    max="31"
+                    placeholder="1–31"
+                    value={dueDay}
+                    onChange={(e) => setDueDay(e.target.value)}
+                    className="h-9.5 text-xs font-mono rounded-lg"
+                  />
+                </div>
+              </div>
+            ) : null}
 
             {/* Opening Balance & Opening Date Grid */}
+            {!isEdit && (accountType === "bank" || accountType === "wallet") ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Opening Balance */}
               <div className="space-y-2">
@@ -328,12 +559,13 @@ export function NewAccountModal({
                 </div>
               </div>
             </div>
+            ) : null}
 
             {/* Last 4 Digits (Optional for banks) */}
-            {accountType === "bank" ? (
+            {needsLast4 ? (
               <div className="space-y-2">
                 <Label htmlFor="last4" className="text-xs font-semibold text-foreground">
-                  Last 4 Digits <span className="text-muted-foreground font-normal">(Optional)</span>
+                  Last 4 Digits <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="last4"
@@ -365,18 +597,18 @@ export function NewAccountModal({
             <Button
               type="submit"
               size="sm"
-              disabled={isSubmitting || !name.trim()}
+              disabled={isSubmitting || (accountType !== "debit_card" && !name.trim())}
               className="text-xs h-9 px-4 rounded-lg font-semibold shadow-xs gap-1.5 w-full sm:w-auto"
             >
               {isSubmitting ? (
                 <>
                   <Loader2 className="size-3.5 animate-spin" />
-                  Creating Account...
+                  Saving...
                 </>
               ) : (
                 <>
                   <PlusCircle className="size-3.5" />
-                  Create Account
+                  {isEdit ? "Save Changes" : "Create Account"}
                 </>
               )}
             </Button>

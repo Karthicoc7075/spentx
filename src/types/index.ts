@@ -159,6 +159,16 @@ export type Account = {
   /** spec §2.0(c) — set together with isActive:false, cleared on reactivate. */
   deletedAt?: string;
   deletedBy?: string;
+  /** Debit cards linked to this bank account (app: linkedCardLast4). */
+  linkedCardLast4?: string[];
+  /** bank | debit_card | credit_card | wallet | cash (null until set). */
+  accountKind?: string;
+  linkedAccountId?: string;
+  creditLimit?: number;
+  billDay?: number;
+  dueDay?: number;
+  lastStatementAmount?: number;
+  lastStatementDue?: string;
 };
 
 export type Category = {
@@ -789,11 +799,13 @@ export type NetWorthBreakdown = {
   cash: number;
   investmentValue: number;
   monthlyChange: number;
+  /** Credit card amount owed (positive), already subtracted from total. */
+  cardOutstanding?: number;
 };
 
 export type WealthFilter =
   | { type: "all" }
-  | { type: "segment"; segment: "bank" | "wallet" | "cash" | "investment" }
+  | { type: "segment"; segment: "bank" | "wallet" | "cash" | "card" | "investment" }
   | { type: "account"; accountName: string };
 
 export type NetWorthHistoryPoint = {

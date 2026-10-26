@@ -83,6 +83,7 @@ import {
   transactionTypeMeta,
 } from "@/lib/transaction-ui";
 import { cn, formatCurrency } from "@/lib/utils";
+import { accountColor, accountKindLabel } from "@/lib/account-kinds";
 import type {
   ContributorSource,
   OutingExpense,
@@ -893,6 +894,9 @@ export function AddTransactionSlideOver({
   const selectedCategoryColor =
     selectedCategoryObj?.color ?? "#8b7ff0";
   const CategoryIcon = getCategoryIcon(selectedCategoryObj?.icon || category);
+  const watchedAccount = watch("account");
+  const selectedAccountObj = selectableAccounts.find((a) => a.name === watchedAccount);
+  const selectedAccountColor = accountColor(selectedAccountObj);
 
   const [duplicateMatch, setDuplicateMatch] = useState<Transaction | null>(
     null,
@@ -1765,19 +1769,34 @@ export function AddTransactionSlideOver({
               icon={Landmark}
               label={isWealthSavings ? "Debit Bank Account" : "Account"}
             >
-              <select className={fieldSelectClassName} {...register("account")}>
+              <select
+                className={cn(fieldSelectClassName, "border-l-4")}
+                style={{ borderLeftColor: selectedAccountColor }}
+                {...register("account")}
+              >
                 <option value="">Select account</option>
                 {selectableAccounts.map((item) => (
-                  <option key={item.id} value={item.name}>
+                  <option key={item.id} value={item.name} style={{ color: accountColor(item) }}>
                     {item.name}
                     {item.type === "cash"
                       ? " (Cash)"
-                      : item.last4
-                        ? ` ···${item.last4}`
-                        : ""}
+                      : item.type === "credit"
+                        ? ` · Credit card${item.last4 ? ` ···${item.last4}` : ""}`
+                        : item.last4
+                          ? ` ···${item.last4}`
+                          : ""}
                   </option>
                 ))}
               </select>
+              {selectedAccountObj ? (
+                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground">
+                  <span
+                    className="size-2 rounded-full"
+                    style={{ backgroundColor: selectedAccountColor }}
+                  />
+                  {selectedAccountObj.name} · {accountKindLabel(selectedAccountObj)}
+                </div>
+              ) : null}
             </Field>
 
             {/* Trip mode — only reachable via lockedOutingId/initialExpense,
@@ -2325,12 +2344,13 @@ export function AddTransactionSlideOver({
             ) : (
               <Field error={errors.category?.message} icon={Tag} label="Category">
                 <select
-                  className={fieldSelectClassName}
+                  className={cn(fieldSelectClassName, "border-l-4")}
+                  style={{ borderLeftColor: category ? selectedCategoryColor : undefined }}
                   {...register("category")}
                 >
                   <option value="">Select category</option>
                   {categories.map((item) => (
-                    <option key={item.id} value={item.name}>
+                    <option key={item.id} value={item.name} style={{ color: item.color }}>
                       {item.name}
                     </option>
                   ))}

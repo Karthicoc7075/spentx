@@ -1,6 +1,8 @@
 "use client";
 
-import { Check, MapPin, ReceiptText, X } from "lucide-react";
+import { ArrowLeftRight, Check, CreditCard, MapPin, ReceiptText, X } from "lucide-react";
+import { useAccounts } from "@/hooks/useAccounts";
+import { isTransferTransaction } from "@/lib/investments";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -111,6 +113,12 @@ export function TransactionsLedgerTable({
   onReject,
 }: TransactionsLedgerTableProps) {
   const { purposes } = usePurposes();
+  const { accounts } = useAccounts();
+  const creditAccountNames = new Set(
+    accounts
+      .filter((a) => a.type === "credit")
+      .map((a) => a.name.trim().toLowerCase()),
+  );
   const { splits: friendSplits } = useFriendSplits();
   const friendSplitTransactionIds = new Set(
     friendSplits.map((split) => split.transactionId),
@@ -163,6 +171,12 @@ export function TransactionsLedgerTable({
             const purposeId = resolvePurposeId(transaction.purpose, purposes);
             const purpose = getPurposeById(purposes, purposeId);
             const isIncome = transaction.type === "income";
+            // Transfers and card bill payments: grey, not spend/income.
+            const isTransfer = isTransferTransaction(transaction);
+            const cardAccount = creditAccountNames.has(
+              (transaction.accountName || transaction.account || "").trim().toLowerCase(),
+            );
+            const isCardSpend = !isIncome && !isTransfer && cardAccount;
             const isOutingRollup = isOutingRollupTransaction(transaction);
             const isCash =
               (transaction.paymentMethod || transaction.paymentType || "")
@@ -307,6 +321,11 @@ export function TransactionsLedgerTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {accountLabel}
+                  {cardAccount ? (
+                    <span className="ml-1 inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase text-rose-600 dark:text-rose-400">
+                      <CreditCard className="size-3" /> Card
+                    </span>
+                  ) : null}
                   {isCash && accountLabel.toLowerCase() !== "cash" ? (
                     <span className="ml-1 text-[10px] font-semibold uppercase text-muted-foreground/80">
                       · Cash
@@ -320,11 +339,16 @@ export function TransactionsLedgerTable({
                         "inline-flex shrink-0 text-sm font-bold tabular-nums",
                         transaction.status === "unverified"
                           ? "text-amber-600 dark:text-amber-400"
-                          : isIncome
-                            ? "text-emerald-600 dark:text-emerald-400"
-                            : "text-foreground",
+                          : isTransfer
+                            ? "items-center gap-1 text-muted-foreground"
+                            : isIncome
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : isCardSpend
+                                ? "text-rose-600 dark:text-rose-400"
+                                : "text-foreground",
                       )}
                     >
+                      {isTransfer ? <ArrowLeftRight className="size-3.5" /> : null}
                       {isIncome ? "+" : "−"}
                       {formatCurrency(amount, privateMode)}
                     </span>

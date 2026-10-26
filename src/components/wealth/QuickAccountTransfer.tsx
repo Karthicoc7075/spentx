@@ -63,6 +63,17 @@ export function QuickAccountTransfer({
     [accounts],
   );
 
+  // To may also be a credit card: paying its bill lowers the outstanding.
+  const destinationAccounts = useMemo(
+    () => [
+      ...transferableAccounts,
+      ...accounts.filter(
+        (account) => account.type === "credit" && account.isActive !== false,
+      ),
+    ],
+    [accounts, transferableAccounts],
+  );
+
   async function handleSubmit() {
     const parsedAmount = Number(amount);
     if (!fromAccount || !toAccount || parsedAmount <= 0 || fromAccount === toAccount) {
@@ -155,11 +166,11 @@ export function QuickAccountTransfer({
                 onChange={(event) => setToAccount(event.target.value)}
               >
                 <option value="">Select destination account</option>
-                {transferableAccounts
+                {destinationAccounts
                   .filter((account) => account.name !== fromAccount)
                   .map((account) => (
                     <option key={account.id} value={account.name}>
-                      {account.name}
+                      {account.type === "credit" ? `Pay card bill · ${account.name}` : account.name}
                     </option>
                   ))}
               </select>

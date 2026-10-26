@@ -31,6 +31,7 @@ import {
   SlidersHorizontal,
   Bell,
   Compass,
+  Lock,
 } from "lucide-react";
 import { ConfirmDeleteDialog } from "@/components/shared/ConfirmDeleteDialog";
 import {
@@ -307,7 +308,9 @@ export function SettingsPage() {
 
     if (cachedAccounts && cachedCategories && cachedPurposes) {
       setAccounts(cachedAccounts.filter((account) => account.isActive !== false));
-      setDefaultCategoryList(cachedCategories.filter((c) => c.isDefault));
+      // Cached list holds only custom rows; keep current defaults if none cached.
+      const cachedDefaults = cachedCategories.filter((c) => c.isDefault);
+      if (cachedDefaults.length > 0) setDefaultCategoryList(cachedDefaults);
       setCustomCategories(
         cachedCategories.filter((c) => !c.isDefault && c.isActive !== false),
       );
@@ -1789,6 +1792,10 @@ export function SettingsPage() {
                               </Badge>
                             </div>
                           </div>
+                          <Lock
+                            className="size-3.5 shrink-0 text-muted-foreground"
+                            aria-label="Default category (read only)"
+                          />
                         </div>
                       );
                     })}

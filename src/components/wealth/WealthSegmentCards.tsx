@@ -1,6 +1,7 @@
 "use client";
 
-import { Banknote, Landmark, Wallet } from "lucide-react";
+import { Banknote, CreditCard, Landmark, Wallet } from "lucide-react";
+import { debitCardsOf, isCreditCard } from "@/lib/account-kinds";
 import { cn, formatCurrency } from "@/lib/utils";
 import type { Account, NetWorthBreakdown, WealthFilter } from "@/types";
 
@@ -38,6 +39,13 @@ const segments = [
     countLabel: (count: number) =>
       count === 1 ? "1 account" : `${count} accounts`,
   },
+  {
+    segment: "card" as const,
+    label: "Cards",
+    key: "cardOutstanding" as const,
+    icon: CreditCard,
+    countLabel: (count: number) => (count === 1 ? "1 card" : `${count} cards`),
+  },
 ];
 
 export function WealthSegmentCards({
@@ -50,11 +58,17 @@ export function WealthSegmentCards({
     bank: accounts.filter((account) => account.type === "bank").length,
     wallet: accounts.filter((account) => account.type === "wallet").length,
     cash: accounts.filter((account) => account.type === "cash").length,
+    card:
+      accounts.filter((account) => isCreditCard(account)).length +
+      debitCardsOf(accounts).length,
   };
 
   // If wallet count is 0, hide the Wallets card completely
   const visibleSegments = segments.filter((card) => {
     if (card.segment === "wallet" && accountCounts.wallet === 0) {
+      return false;
+    }
+    if (card.segment === "card" && accountCounts.card === 0) {
       return false;
     }
     return true;
@@ -74,6 +88,7 @@ export function WealthSegmentCards({
       if (match?.type === "bank") return "bank";
       if (match?.type === "wallet") return "wallet";
       if (match?.type === "cash") return "cash";
+      if (match?.type === "credit") return "card";
       return "bank";
     }
     return "bank"; // Default to bank
@@ -85,7 +100,9 @@ export function WealthSegmentCards({
         "grid gap-3 sm:gap-3.5",
         visibleSegments.length === 2
           ? "grid-cols-2"
-          : "grid-cols-2 sm:grid-cols-3",
+          : visibleSegments.length === 4
+            ? "grid-cols-2 sm:grid-cols-4"
+            : "grid-cols-2 sm:grid-cols-3",
       )}
     >
       {visibleSegments.map((card, index) => {
@@ -124,9 +141,16 @@ export function WealthSegmentCards({
                 <Icon className="size-3.5 sm:size-4" />
               </span>
             </div>
-            <p className="mt-2 sm:mt-3 text-base sm:text-2xl font-bold leading-none tracking-tight tabular-nums text-foreground truncate">
-              {formatCurrency(breakdown[card.key])}
-            </p>
+            {card.segment === "card" ? (
+              <p className="mt-2 sm:mt-3 text-base sm:text-2xl font-bold leading-none tracking-tight tabular-nums text-rose-600 dark:text-rose-400 truncate">
+                {(breakdown.cardOutstanding ?? 0) > 0 ? "−" : ""}
+                {formatCurrency(breakdown.cardOutstanding ?? 0)}
+              </p>
+            ) : (
+              <p className="mt-2 sm:mt-3 text-base sm:text-2xl font-bold leading-none tracking-tight tabular-nums text-foreground truncate">
+                {formatCurrency(breakdown[card.key as "bankAccounts" | "wallets" | "cash"])}
+              </p>
+            )}
             <p className="mt-1 sm:mt-2 text-[10px] sm:text-xs text-muted-foreground truncate">
               {card.countLabel(count)}
             </p>
