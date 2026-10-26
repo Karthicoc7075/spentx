@@ -177,6 +177,7 @@ export function TransactionsLedgerTable({
               (transaction.accountName || transaction.account || "").trim().toLowerCase(),
             );
             const isCardSpend = !isIncome && !isTransfer && cardAccount;
+            const debitTag = (transaction.tags ?? []).find((t) => t.startsWith("debit_card:"));
             const isOutingRollup = isOutingRollupTransaction(transaction);
             const isCash =
               (transaction.paymentMethod || transaction.paymentType || "")
@@ -321,6 +322,11 @@ export function TransactionsLedgerTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   {accountLabel}
+                  {debitTag ? (
+                    <span className="ml-1 inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase text-sky-600 dark:text-sky-400">
+                      <CreditCard className="size-3" /> Debit ··{debitTag.slice("debit_card:".length)}
+                    </span>
+                  ) : null}
                   {cardAccount ? (
                     <span className="ml-1 inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase text-rose-600 dark:text-rose-400">
                       <CreditCard className="size-3" /> Card

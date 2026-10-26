@@ -65,9 +65,6 @@ export function WealthSegmentCards({
 
   // If wallet count is 0, hide the Wallets card completely
   const visibleSegments = segments.filter((card) => {
-    if (card.segment === "wallet" && accountCounts.wallet === 0) {
-      return false;
-    }
     if (card.segment === "card" && accountCounts.card === 0) {
       return false;
     }

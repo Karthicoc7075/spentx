@@ -164,9 +164,10 @@ export type Account = {
   /** bank | debit_card | credit_card | wallet | cash (null until set). */
   accountKind?: string;
   linkedAccountId?: string;
-  creditLimit?: number;
-  billDay?: number;
-  dueDay?: number;
+  /** null clears the value on save. */
+  creditLimit?: number | null;
+  billDay?: number | null;
+  dueDay?: number | null;
   lastStatementAmount?: number;
   lastStatementDue?: string;
 };

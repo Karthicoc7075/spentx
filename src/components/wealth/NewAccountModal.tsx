@@ -245,11 +245,13 @@ export function NewAccountModal({
           : accountType === "cash"
             ? "cash"
             : "bank";
+      // Editing a credit card: an emptied field saves null (clears it).
+      const clear = isEdit && isCredit ? null : undefined;
       const kindFields = {
         accountKind: accountType,
-        creditLimit: isCredit ? limit : undefined,
-        billDay: isCredit ? bill : undefined,
-        dueDay: isCredit ? due : undefined,
+        creditLimit: isCredit ? (limit ?? clear) : undefined,
+        billDay: isCredit ? (bill ?? clear) : undefined,
+        dueDay: isCredit ? (due ?? clear) : undefined,
       };
 
       if (editing && !editingDebit) {

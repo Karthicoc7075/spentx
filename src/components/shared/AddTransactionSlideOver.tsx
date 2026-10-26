@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Calendar,
   Clock,
   FileText,
@@ -83,7 +84,15 @@ import {
   transactionTypeMeta,
 } from "@/lib/transaction-ui";
 import { cn, formatCurrency } from "@/lib/utils";
-import { accountColor, accountKindLabel } from "@/lib/account-kinds";
+import { accountColor, accountKindLabel, debitCardsOf } from "@/lib/account-kinds";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TransferForm } from "@/components/shared/TransferForm";
 import type {
   ContributorSource,
   OutingExpense,
@@ -266,6 +275,17 @@ export function AddTransactionSlideOver({
   );
 
   const [ownerMode, setOwnerMode] = useState<"me" | "trip">("me");
+  // Transfer mode (new entries only) and the debit card the spend used.
+  const [transferMode, setTransferMode] = useState(false);
+  const [debitCardLast4, setDebitCardLast4] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setTransferMode(false);
+      return;
+    }
+    const tag = (initialValues?.tags ?? []).find((t) => t.startsWith("debit_card:"));
+    setDebitCardLast4(tag ? tag.slice("debit_card:".length) : null);
+  }, [open, initialValues]);
   const [selectedOutingId, setSelectedOutingId] = useState("");
   const [paidByMemberId, setPaidByMemberId] = useState("");
   const [tripSplitType, setTripSplitType] = useState<SplitType>("equally");
@@ -897,6 +917,14 @@ export function AddTransactionSlideOver({
   const watchedAccount = watch("account");
   const selectedAccountObj = selectableAccounts.find((a) => a.name === watchedAccount);
   const selectedAccountColor = accountColor(selectedAccountObj);
+  // Debit cards book to their linked bank (app: bank.linkedCardLast4).
+  const debitCardOptions = debitCardsOf(selectableAccounts.filter((a) => a.isActive !== false));
+  const accountPickerValue = debitCardLast4 && selectedAccountObj
+    ? debitCardOptions.find(
+        (d) => d.linkedAccountId === selectedAccountObj.id && d.last4 === debitCardLast4,
+      )?.id ?? watchedAccount
+    : watchedAccount;
+  const canTransfer = !initialValues && !initialExpense && !lockedOutingId && ownerMode !== "trip";
 
   const [duplicateMatch, setDuplicateMatch] = useState<Transaction | null>(
     null,
@@ -1085,6 +1113,7 @@ export function AddTransactionSlideOver({
         ...preservedSystemTags,
         ...wealthTags,
         ...(merchantIdentifier ? [`upi:${merchantIdentifier}`] : []),
+        ...(debitCardLast4 ? [`debit_card:${debitCardLast4}`, "card"] : []),
       ]),
     );
 
@@ -1602,6 +1631,58 @@ export function AddTransactionSlideOver({
     return `${Math.round(hours / 24)} day(s) ago`;
   }
 
+  const typeToggle = (
+    <div
+      className={cn(
+        "grid gap-1 rounded-full bg-muted p-1",
+        canTransfer ? "grid-cols-3" : "grid-cols-2",
+      )}
+    >
+      {(["expense", "income"] as const).map((type) => {
+        const meta = transactionTypeMeta[type];
+        const Icon = meta.icon;
+        const isActive = !transferMode && currentType === type;
+
+        return (
+          <label
+            key={type}
+            onClick={() => setTransferMode(false)}
+            className={cn(
+              "flex cursor-pointer items-center justify-center gap-2 rounded-full py-2 text-sm font-semibold transition-colors",
+              isActive
+                ? cn("bg-card shadow-sm", meta.accent.text)
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <input
+              className="sr-only"
+              type="radio"
+              value={type}
+              {...register("type")}
+            />
+            <Icon className="size-4" />
+            {meta.label}
+          </label>
+        );
+      })}
+      {canTransfer ? (
+        <button
+          type="button"
+          onClick={() => setTransferMode(true)}
+          className={cn(
+            "flex cursor-pointer items-center justify-center gap-2 rounded-full py-2 text-sm font-semibold transition-colors",
+            transferMode
+              ? "bg-card shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <ArrowLeftRight className="size-4" />
+          Transfer
+        </button>
+      ) : null}
+    </div>
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -1618,7 +1699,9 @@ export function AddTransactionSlideOver({
             <SheetTitle className="text-xl font-semibold tracking-tight">
               {initialValues || initialExpense
                 ? "Edit transaction"
-                : currentType === "expense"
+                : transferMode
+                  ? "Transfer"
+                  : currentType === "expense"
                   ? "Add expense"
                   : "Add income"}
             </SheetTitle>
@@ -1632,6 +1715,18 @@ export function AddTransactionSlideOver({
           </SheetHeader>
         </div>
 
+        {transferMode ? (
+          <div className="grid min-w-0 max-w-full gap-5 px-4 py-5 sm:px-6">
+            {typeToggle}
+            <TransferForm
+              accounts={accounts}
+              onDone={() => {
+                setTransferMode(false);
+                onOpenChange(false);
+              }}
+            />
+          </div>
+        ) : (
         <form
           className="grid min-w-0 max-w-full gap-5 px-4 py-5 sm:px-6"
           onSubmit={(event) => {
@@ -1658,35 +1753,7 @@ export function AddTransactionSlideOver({
             }
           }}
         >
-          {/* Expense / Income toggle */}
-          <div className="grid grid-cols-2 gap-1 rounded-full bg-muted p-1">
-            {(["expense", "income"] as const).map((type) => {
-              const meta = transactionTypeMeta[type];
-              const Icon = meta.icon;
-              const isActive = currentType === type;
-
-              return (
-                <label
-                  key={type}
-                  className={cn(
-                    "flex cursor-pointer items-center justify-center gap-2 rounded-full py-2 text-sm font-semibold transition-colors",
-                    isActive
-                      ? cn("bg-card shadow-sm", meta.accent.text)
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <input
-                    className="sr-only"
-                    type="radio"
-                    value={type}
-                    {...register("type")}
-                  />
-                  <Icon className="size-4" />
-                  {meta.label}
-                </label>
-              );
-            })}
-          </div>
+          {typeToggle}
 
           {/* Amount */}
           <div
@@ -1769,32 +1836,74 @@ export function AddTransactionSlideOver({
               icon={Landmark}
               label={isWealthSavings ? "Debit Bank Account" : "Account"}
             >
-              <select
-                className={cn(fieldSelectClassName, "border-l-4")}
-                style={{ borderLeftColor: selectedAccountColor }}
-                {...register("account")}
+<Select
+                value={accountPickerValue || null}
+                onValueChange={(raw) => {
+                  const v = String(raw ?? "");
+                  const debit = debitCardOptions.find((d) => d.id === v);
+                  if (debit) {
+                    const bank = selectableAccounts.find((a) => a.id === debit.linkedAccountId);
+                    setValue("account", bank?.name ?? "", { shouldValidate: true });
+                    setDebitCardLast4(debit.last4 ?? null);
+                  } else {
+                    setValue("account", v, { shouldValidate: true });
+                    setDebitCardLast4(null);
+                  }
+                }}
               >
-                <option value="">Select account</option>
-                {selectableAccounts.map((item) => (
-                  <option key={item.id} value={item.name} style={{ color: accountColor(item) }}>
-                    {item.name}
-                    {item.type === "cash"
-                      ? " (Cash)"
-                      : item.type === "credit"
-                        ? ` · Credit card${item.last4 ? ` ···${item.last4}` : ""}`
-                        : item.last4
-                          ? ` ···${item.last4}`
-                          : ""}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="h-10 w-full">
+                  {selectedAccountObj ? (
+                    <span
+                      className="size-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: debitCardLast4 ? "#0ea5e9" : selectedAccountColor }}
+                    />
+                  ) : null}
+                  <SelectValue placeholder="Select account">
+                    {() =>
+                      selectedAccountObj
+                        ? debitCardLast4
+                          ? `${selectedAccountObj.name} Debit card ···${debitCardLast4}`
+                          : selectedAccountObj.name
+                        : "Select account"
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {selectableAccounts.map((item) => (
+                    <SelectItem key={item.id} value={item.name}>
+                      <span
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: accountColor(item) }}
+                      />
+                      {item.name}
+                      {item.type === "cash"
+                        ? " (Cash)"
+                        : item.type === "credit"
+                          ? ` · Credit card${item.last4 ? ` ···${item.last4}` : ""}`
+                          : item.last4
+                            ? ` ···${item.last4}`
+                            : ""}
+                    </SelectItem>
+                  ))}
+                  {debitCardOptions.map((card) => (
+                    <SelectItem key={card.id} value={card.id}>
+                      <span
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: accountColor(card) }}
+                      />
+                      {card.name} ···{card.last4}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {selectedAccountObj ? (
                 <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground">
                   <span
                     className="size-2 rounded-full"
                     style={{ backgroundColor: selectedAccountColor }}
                   />
-                  {selectedAccountObj.name} · {accountKindLabel(selectedAccountObj)}
+                  {selectedAccountObj.name} ·{" "}
+                  {debitCardLast4 ? `Debit card ···${debitCardLast4}` : accountKindLabel(selectedAccountObj)}
                 </div>
               ) : null}
             </Field>
@@ -2343,18 +2452,33 @@ export function AddTransactionSlideOver({
               </Field>
             ) : (
               <Field error={errors.category?.message} icon={Tag} label="Category">
-                <select
-                  className={cn(fieldSelectClassName, "border-l-4")}
-                  style={{ borderLeftColor: category ? selectedCategoryColor : undefined }}
-                  {...register("category")}
+<Select
+                  value={category || null}
+                  onValueChange={(raw) =>
+                    setValue("category", String(raw ?? ""), { shouldValidate: true })
+                  }
                 >
-                  <option value="">Select category</option>
-                  {categories.map((item) => (
-                    <option key={item.id} value={item.name} style={{ color: item.color }}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-10 w-full">
+                    {category ? (
+                      <span
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: selectedCategoryColor }}
+                      />
+                    ) : null}
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((item) => (
+                      <SelectItem key={item.id} value={item.name}>
+                        <span
+                          className="size-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: item.color || "#8b7ff0" }}
+                        />
+                        {item.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 {category ? (
                   <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground">
                     <span
@@ -2678,6 +2802,7 @@ export function AddTransactionSlideOver({
             </div>
           </SheetFooter>
         </form>
+        )}
       </SheetContent>
     </Sheet>
   );
