@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useTotalsFriendSplits } from "@/hooks/useFriendSplits";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useAllOutingExpenses } from "@/hooks/useAllOutingExpenses";
@@ -39,15 +40,18 @@ export function useDashboardData() {
   const { transactions: rawTransactions, isLoading: transactionsLoading, error } = useTransactions();
   const { expenses: outingExpenses } = useAllOutingExpenses();
   const { outings } = useOutings();
+  const friendSplits = useTotalsFriendSplits();
 
   const transactions = useMemo(() => {
+    void friendSplits; // recompute totals when friend splits load
+
     if (includeOutingExpenses) {
       return buildTransactionsListRows(rawTransactions, outingExpenses, outings);
     }
     return rawTransactions.filter(
       (tx) => !tx.outingId && !tx.tags?.includes("outing-analytics"),
     );
-  }, [rawTransactions, outingExpenses, outings, includeOutingExpenses]);
+  }, [rawTransactions, outingExpenses, outings, includeOutingExpenses, friendSplits]);
 
   const { accounts: allAccounts, isLoading: accountsLoading } = useAccounts();
   // Archived accounts are soft-deleted, not gone — exclude their balances

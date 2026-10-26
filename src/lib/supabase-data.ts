@@ -414,6 +414,8 @@ function toTransaction(row: Row): Transaction {
     createdAt: row.created_at ?? undefined,
     updatedAt: row.updated_at ?? undefined,
     contributorSource: split?.contributor_id ?? undefined,
+    linkKind: row.link_kind ? String(row.link_kind) : undefined,
+    linkedOriginalId: row.linked_original_id ? String(row.linked_original_id) : undefined,
   };
   return mapped as Transaction;
 }

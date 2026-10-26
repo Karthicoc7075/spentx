@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useTotalsFriendSplits } from "@/hooks/useFriendSplits";
 import { useCategories } from "@/hooks/useCategories";
 import { useAnalyticsOutingContext } from "@/hooks/useAnalyticsOutingContext";
 import { useUserSettings } from "@/hooks/useUserSettings";
@@ -44,6 +45,7 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
   const { categories } = useCategories();
   const { purposes } = usePurposes();
   const outingContext = useAnalyticsOutingContext();
+  const friendSplits = useTotalsFriendSplits();
   const filterContext = useMemo(
     () => ({ ...outingContext, purposes }),
     [outingContext, purposes],
@@ -57,14 +59,16 @@ export function useAnalyticsData(filters: AnalyticsFilters) {
 
   // Fold outing spend into Analysis only if includeOutingExpenses is enabled
   const analyticsLedger = useMemo(
-    () =>
-      prepareAnalyticsTransactions(
+    () => {
+      void friendSplits; // recompute totals when friend splits load
+      return prepareAnalyticsTransactions(
         transactions,
         outingContext.outings ?? [],
         outingContext.outingExpenses ?? [],
         settings.includeOutingExpenses ?? true,
-      ),
-    [transactions, outingContext.outings, outingContext.outingExpenses, settings.includeOutingExpenses],
+      );
+    },
+    [transactions, outingContext.outings, outingContext.outingExpenses, settings.includeOutingExpenses, friendSplits],
   );
 
   const filtered = useMemo(

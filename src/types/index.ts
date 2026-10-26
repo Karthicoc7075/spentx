@@ -121,6 +121,10 @@ export type Transaction = {
   outingExpenseTitles?: string[];
   splitWith?: string[];
   status?: TransactionStatus;
+  /** App refund/reversal link (transactions.link_kind), read-only on web. */
+  linkKind?: string;
+  /** The original debit a refund/reversal belongs to. */
+  linkedOriginalId?: string;
   tags?: string[];
   /** Flutter/Android field — mapped to type on read */
   isExpense?: boolean;

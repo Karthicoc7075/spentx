@@ -18,7 +18,100 @@ import {
   sumSpendingExpenses,
 } from "@/lib/investments";
 import { OPENING_BALANCE_CATEGORY } from "@/lib/wealth";
-import type { Category, OutingExpense, Transaction } from "@/types";
+import { ownShareOfSplit } from "@/lib/friend-splits";
+import type { Category, FriendSplit, OutingExpense, Transaction } from "@/types";
+
+/*
+ * Totals rules — identical to the app (lib/core/finance/totals.dart):
+ *  - Income: credits minus transfers (incl. card bill), refunds, friend
+ *    repayments and Opening Balance.
+ *  - Expense: debits minus transfers / card bill payments, minus the
+ *    friends' share of splits you paid (only your own share counts).
+ *  - A refund linked to its debit offsets spending (never income); an
+ *    unlinked refund is neither.
+ *  - A friend repayment reduces what they owe, not income. Only a trip
+ *    return (outingId) nets against that trip's spend, capped per trip.
+ */
+let totalsFriendSplits: FriendSplit[] = [];
+
+/** Friend splits the totals read (set by the screens that show totals). */
+export function setTotalsFriendSplits(splits?: FriendSplit[]) {
+  totalsFriendSplits = splits ?? [];
+}
+
+function isRefundTx(tx: Transaction) {
+  return (tx.linkKind ?? "").toLowerCase() === "refund";
+}
+
+function isReversalTx(tx: Transaction) {
+  return (tx.linkKind ?? "").toLowerCase() === "reversal";
+}
+
+/** Linked refunds in range — they reduce spending. */
+export function sumLinkedRefunds(transactions: Transaction[], range?: PeriodRange) {
+  return transactions.reduce((sum, tx) => {
+    if (!isConfirmedTransaction(tx) || !isRefundTx(tx)) return sum;
+    if (!tx.linkedOriginalId || isTransferTransaction(tx)) return sum;
+    if (!isInPeriodRange(tx.transactionDate ?? tx.date, range)) return sum;
+    return sum + money(tx);
+  }, 0);
+}
+
+/** Friends' part of splits you paid, on debits counted in this period. */
+export function sumFriendShares(
+  transactions: Transaction[],
+  range?: PeriodRange,
+  splits: FriendSplit[] = totalsFriendSplits,
+) {
+  if (!splits.length) return 0;
+  const counted = new Map<string, Transaction>();
+  for (const tx of transactions) {
+    if (!isPeriodExpense(tx)) continue;
+    if (!isInPeriodRange(tx.transactionDate ?? tx.date, range)) continue;
+    counted.set(tx.id, tx);
+  }
+  let total = 0;
+  for (const split of splits) {
+    if (split.isActive === false || split.deletedAt) continue;
+    const tx = counted.get(split.transactionId);
+    if (!tx) continue;
+    const me =
+      split.members.find((member) => member.isCurrentUser) ?? split.members[0];
+    if (me && split.paidByMemberId && split.paidByMemberId !== me.id) continue;
+    const friends = Math.max(0, Number(split.amount || 0) - ownShareOfSplit(split));
+    total += Math.min(friends, money(tx));
+  }
+  return total;
+}
+
+/** Trip returns netted against that trip's spend in range (capped per trip). */
+export function sumAppliedTripReturns(transactions: Transaction[], range?: PeriodRange) {
+  const spend = new Map<string, number>();
+  const returned = new Map<string, number>();
+  for (const tx of transactions) {
+    if (!isConfirmedTransaction(tx) || !tx.outingId) continue;
+    if (!isInPeriodRange(tx.transactionDate ?? tx.date, range)) continue;
+    if (isReimbursementTransaction(tx)) {
+      returned.set(tx.outingId, (returned.get(tx.outingId) ?? 0) + money(tx));
+    } else if (tx.type === "expense" && !isTransferTransaction(tx)) {
+      spend.set(tx.outingId, (spend.get(tx.outingId) ?? 0) + money(tx));
+    }
+  }
+  let applied = 0;
+  returned.forEach((value, outingId) => {
+    applied += Math.min(value, spend.get(outingId) ?? 0);
+  });
+  return applied;
+}
+
+/** Everything netted off gross spend: friend shares, trip returns, refunds. */
+export function sumSpendOffsets(transactions: Transaction[], range?: PeriodRange) {
+  return (
+    sumFriendShares(transactions, range) +
+    sumAppliedTripReturns(transactions, range) +
+    sumLinkedRefunds(transactions, range)
+  );
+}
 
 export type PeriodRange = {
   dateFrom?: string;
@@ -50,6 +143,7 @@ export { isConfirmedTransaction } from "@/lib/transaction-status";
 export function isPeriodIncome(transaction: Transaction) {
   if (!isConfirmedTransaction(transaction)) return false;
   if (transaction.type !== "income") return false;
+  if (isRefundTx(transaction) || isReversalTx(transaction)) return false;
   if (isReimbursementTransaction(transaction)) return false;
   const cat = (transaction.category ?? "").trim().toLowerCase();
   if (cat === OPENING_BALANCE_CATEGORY.toLowerCase()) return false;
@@ -74,6 +168,7 @@ export function isPeriodExpense(
   if (!isConfirmedTransaction(transaction)) return false;
   // Includes Investment category (normal cash outflow).
   if (transaction.type !== "expense") return false;
+  if (isReversalTx(transaction)) return false;
   if (isTransferTransaction(transaction)) return false;
   if (isOutingRollupLike(transaction)) return false;
 
@@ -197,7 +292,7 @@ export function sumPeriodGrossExpense(
   const ledgerSpend = scoped.reduce((sum, tx) => {
     if (!isConfirmedTransaction(tx)) return sum;
     if (tx.type !== "expense") return sum;
-    if (isTransferTransaction(tx)) return sum;
+    if (isTransferTransaction(tx) || isReversalTx(tx)) return sum;
 
     if (isOutingRollupLike(tx)) {
       if (!includeOutingExpenses) return sum;
@@ -238,7 +333,7 @@ export function sumPeriodExpense(
   } = {},
 ) {
   const grossExpense = sumPeriodGrossExpense(transactions, options);
-  const reimbursements = sumPeriodReturns(transactions, options.range);
+  const reimbursements = sumSpendOffsets(transactions, options.range);
   // A repayment can be recorded in a period with no new spending. Expense is
   // never shown as negative; the reimbursement card still exposes the full
   // cash movement and the ledger keeps the original transaction visible.
@@ -256,7 +351,7 @@ export function computePeriodTotals(
 ) {
   const income = sumPeriodIncome(transactions, options.range);
   const grossExpense = sumPeriodGrossExpense(transactions, options);
-  const reimbursements = sumPeriodReturns(transactions, options.range);
+  const reimbursements = sumSpendOffsets(transactions, options.range);
   const expense = Math.max(0, grossExpense - reimbursements);
   return {
     income,

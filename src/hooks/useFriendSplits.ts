@@ -12,7 +12,23 @@ import {
 import { queryKeys } from "@/lib/query-keys";
 import { invalidateFinancialData } from "@/lib/invalidate-financial-data";
 import { useAuthReady } from "@/hooks/useAuthReady";
+import { setTotalsFriendSplits } from "@/lib/period-totals";
 import type { FriendSettlement, FriendSplit } from "@/types";
+
+/**
+ * Friend splits for Income/Expense totals (own share only). Registers them
+ * with period-totals and returns a stable reference to use as a memo dep.
+ */
+export function useTotalsFriendSplits() {
+  const { user, isConfigured, isReady } = useAuthReady();
+  const { data } = useQuery({
+    queryKey: queryKeys.allFriendSplits(user?.id),
+    queryFn: () => fetchFriendSplits(user?.id),
+    enabled: isReady || !isConfigured,
+  });
+  setTotalsFriendSplits(data);
+  return data;
+}
 
 /**
  * Friend splits are standalone shared expenses — no outing is involved, so

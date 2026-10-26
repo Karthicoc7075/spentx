@@ -32,6 +32,7 @@ import {
 import { getCurrentPlanMonth } from "@/lib/plan";
 import { getPurposeDisplayName } from "@/lib/purposes";
 import { sumPeriodExpense, sumPeriodIncome } from "@/lib/period-totals";
+import { useTotalsFriendSplits } from "@/hooks/useFriendSplits";
 import {
   withOutingUnlinkedTag,
   withoutOutingUnlinkedTag,
@@ -118,9 +119,13 @@ export function TransactionsPage() {
   // shrinks to a single row by hiding everything else. Passing `outings` also
   // narrows that line to what the current user paid and labels the account
   // "Mixed" when they paid from more than one.
+  const totalsFriendSplits = useTotalsFriendSplits();
   const allTransactions = useMemo(
-    () => buildTransactionsListRows(ledgerTransactions, allOutingExpenses, outings),
-    [ledgerTransactions, allOutingExpenses, outings],
+    () => {
+      void totalsFriendSplits; // recompute totals when friend splits load
+      return buildTransactionsListRows(ledgerTransactions, allOutingExpenses, outings);
+    },
+    [ledgerTransactions, allOutingExpenses, outings, totalsFriendSplits],
   );
 
   const [currentPage, setCurrentPage] = useState(1);
