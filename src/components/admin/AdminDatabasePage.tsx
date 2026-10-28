@@ -33,6 +33,7 @@ import {
 } from "@/lib/admin-api";
 import { formatIST } from "@/lib/admin-format";
 import { cn } from "@/lib/utils";
+import { queryKeys } from "@/lib/query-keys";
 import { useToast } from "@/providers/toast-provider";
 
 const PAGE_SIZE = 50;
@@ -144,11 +145,35 @@ export function AdminDatabasePage() {
     setEditValues(null);
   };
 
-  const refreshRows = () =>
-    Promise.all([
+  const refreshRows = async () => {
+    await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["admin-table-rows", table] }),
       queryClient.invalidateQueries({ queryKey: ["admin-table-count", table] }),
     ]);
+    if (table === "category_catalog") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-category-catalog-defaults"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-category-catalog-entries"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.categoryCatalog() }),
+      ]);
+    } else if (table === "merchant_brands" || table === "merchant_keyword_rules") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-merchant-brands"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-keyword-rules"] }),
+      ]);
+    } else if (table === "sms_template_rules" || table === "sms_block_rules" || table === "sms_detection_rules") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-template-requests"] }),
+      ]);
+    } else if (table === "global_settings") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-global-settings-raw"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["app-config"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.globalSettings() }),
+      ]);
+    }
+  };
 
   const applyUserFilter = async () => {
     const value = userInput.trim();
@@ -189,13 +214,27 @@ export function AdminDatabasePage() {
   const buildDiff = (): Record<string, unknown> => {
     if (!viewRow || !editValues) return {};
     const diff: Record<string, unknown> = {};
+    const colMap = new Map(meta?.columns?.map((c) => [c.name, c]));
+
     for (const [key, edited] of Object.entries(editValues)) {
       const original = viewRow[key];
+      const col = colMap.get(key);
+      const isNumber =
+        typeof original === "number" ||
+        Boolean(col && ["int2", "int4", "int8", "numeric", "float4", "float8"].includes(col.udt));
+      const isJson =
+        (original !== null && typeof original === "object") ||
+        Boolean(col && (col.udt === "jsonb" || col.udt === "json" || col.type === "ARRAY"));
+
       if (typeof edited === "boolean") {
         if (edited !== Boolean(original)) diff[key] = edited;
         continue;
       }
-      if (original !== null && typeof original === "object") {
+      if (isJson) {
+        if (edited === "") {
+          if (original !== null && original !== undefined) diff[key] = null;
+          continue;
+        }
         let parsed: unknown;
         try {
           parsed = JSON.parse(edited);
@@ -205,8 +244,24 @@ export function AdminDatabasePage() {
         if (JSON.stringify(parsed) !== JSON.stringify(original)) diff[key] = parsed;
         continue;
       }
+      if (isNumber) {
+        if (edited === "") {
+          if (original !== null && original !== undefined) diff[key] = null;
+          continue;
+        }
+        const numVal = Number(edited);
+        if (Number.isNaN(numVal)) {
+          throw new Error(`"${key}" must be a valid number.`);
+        }
+        if (original == null || numVal !== Number(original)) {
+          diff[key] = numVal;
+        }
+        continue;
+      }
       const originalText = original == null ? "" : String(original);
-      if (edited !== originalText) diff[key] = edited === "" ? null : typeof original === "number" ? Number(edited) : edited;
+      if (edited !== originalText) {
+        diff[key] = edited === "" ? null : edited;
+      }
     }
     return diff;
   };

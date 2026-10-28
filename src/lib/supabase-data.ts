@@ -1870,22 +1870,74 @@ export async function deleteAccount(userId: string | undefined, accountId: strin
   });
 }
 
+async function fetchFallbackDefaultCategories(): Promise<DefaultCategory[]> {
+  try {
+    const { data } = await client()
+      .from("global_settings")
+      .select("default_categories")
+      .eq("id", "app")
+      .maybeSingle();
+
+    if (data && Array.isArray(data.default_categories) && data.default_categories.length > 0) {
+      return (data.default_categories as Array<{
+        id?: string;
+        name?: string;
+        type?: string;
+        color?: string;
+        icon?: string;
+        order?: number;
+        isInvestment?: boolean;
+      }>).map((c, i) => ({
+        id: c.id || (c.name ? c.name.toLowerCase().replace(/[^a-z0-9_]+/g, "_") : `cat-${i}`),
+        name: c.name || "Unnamed",
+        type: (c.type === "income" ? "income" : "expense") as "income" | "expense",
+        color: c.color || "#64748b",
+        icon: c.icon || "",
+        order: typeof c.order === "number" ? c.order : i,
+        isInvestment: Boolean(c.isInvestment),
+      }));
+    }
+  } catch (err) {
+    console.warn("fetchFallbackDefaultCategories failed:", err);
+  }
+  return [];
+}
+
 /** Active category_catalog rows as default categories (admin view uses the
- * slug ids directly). Empty when the catalog can't be read. */
+ * slug ids directly). Falls back to global_settings.default_categories when catalog is empty. */
 export async function fetchCatalogDefaults(): Promise<DefaultCategory[]> {
   const { data, error } = await client()
     .from("category_catalog")
     .select(CATALOG_COLUMNS)
     .eq("is_active", true)
     .order("sort_order", { ascending: true });
-  if (error || !Array.isArray(data)) return [];
-  return catalogDefaults(data as CatalogRow[], isKnownCategoryIcon);
+
+  if (error) {
+    console.warn("fetchCatalogDefaults: category_catalog error:", error.message);
+    const fallback = await fetchFallbackDefaultCategories();
+    if (fallback.length > 0) return fallback;
+    throw new Error(error.message || "Failed to fetch category catalog");
+  }
+
+  if (Array.isArray(data) && data.length > 0) {
+    const list = catalogDefaults(data as CatalogRow[], isKnownCategoryIcon);
+    if (list.length > 0) return list;
+  }
+
+  const fallback = await fetchFallbackDefaultCategories();
+  if (fallback.length > 0) return fallback;
+
+  return [];
 }
 
 /** Default categories = category_catalog only; tiny fallback when unreadable. */
 export async function fetchDefaultCategories(): Promise<Category[]> {
-  const list = await fetchCatalogDefaults();
-  return list.length > 0 ? list.map(defaultToCategory) : MINIMAL_FALLBACK_CATEGORIES;
+  try {
+    const list = await fetchCatalogDefaults();
+    return list.length > 0 ? list.map(defaultToCategory) : MINIMAL_FALLBACK_CATEGORIES;
+  } catch {
+    return MINIMAL_FALLBACK_CATEGORIES;
+  }
 }
 
 export async function fetchCustomCategories(userId?: string) {

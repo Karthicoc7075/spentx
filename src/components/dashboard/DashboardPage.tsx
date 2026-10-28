@@ -20,7 +20,6 @@ import { CategoryChart } from "@/components/dashboard/CategoryChart";
 import { DashboardDateFilter } from "@/components/dashboard/DashboardDateFilter";
 import { DashboardKpiRow } from "@/components/dashboard/DashboardKpiRow";
 import { DashboardRecentTransactions } from "@/components/dashboard/DashboardRecentTransactions";
-import { FirstRunOnboardingModal } from "@/components/onboarding/FirstRunOnboardingModal";
 import { QuickActionsMenu } from "@/components/dashboard/QuickActionsMenu";
 import { TrendChart } from "@/components/dashboard/TrendChart";
 import { AddTransactionSlideOver } from "@/components/shared/AddTransactionSlideOver";
@@ -529,16 +528,15 @@ export function DashboardPage() {
         </div>
       ) : null}
 
-      {!isReadOnlyViewer ? (
-        <FirstRunOnboardingModal
-          // The "is this a fresh workspace?" decision lives server-side in
-          // fetchOnboardingState so it travels with the account across
-          // browsers/devices. Client-side account shape checks used to be
-          // layered on top here, but they were written against a one-account
-          // seed and silently blocked the modal once handle_new_user started
-          // seeding both Cash and Account 1.
-          open={!onboardingQuery.isLoading && (onboardingQuery.data?.needsOnboarding ?? false)}
-        />
+      {!isReadOnlyViewer && !onboardingQuery.isLoading && onboardingQuery.data?.needsOnboarding ? (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-foreground">
+          <div className="flex items-center gap-2 font-semibold text-emerald-600 dark:text-emerald-400">
+            <span>📱 Mobile Vault Setup Incomplete</span>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Your financial vault is being configured. Please open the SpentX mobile app on your phone to complete bank setup and activate automatic SMS detection.
+          </p>
+        </div>
       ) : null}
 
       <div>

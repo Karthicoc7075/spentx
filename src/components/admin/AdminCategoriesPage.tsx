@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Layers, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -29,13 +29,16 @@ type FormState = {
   name: string;
   color: string;
   icon: string;
+  customSlug?: boolean;
 };
 
 /** category_catalog slug: ^[a-z0-9_]+$ */
 function slugify(name: string) {
   return name
     .toLowerCase()
+    .trim()
     .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
     .replace(/^_+|_+$/g, "");
 }
 
@@ -51,9 +54,10 @@ export function AdminCategoriesPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<DefaultCategory | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [search, setSearch] = useState("");
 
   const { data: categories = [], isLoading, error, refetch } = useQuery({
-    queryKey: ["admin-category-catalog"],
+    queryKey: ["admin-category-catalog-defaults"],
     queryFn: fetchCatalogDefaults,
   });
 
@@ -64,8 +68,21 @@ export function AdminCategoriesPage() {
     .filter((category) => category.type === "expense")
     .sort((a, b) => a.order - b.order);
 
+  const filteredIncome = income.filter(
+    (c) =>
+      !search ||
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.id.toLowerCase().includes(search.toLowerCase()),
+  );
+  const filteredExpense = expense.filter(
+    (c) =>
+      !search ||
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.id.toLowerCase().includes(search.toLowerCase()),
+  );
+
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["admin-category-catalog"] });
+    queryClient.invalidateQueries({ queryKey: ["admin-category-catalog-defaults"] });
     // Same cache key every user session reads for pickers.
     queryClient.invalidateQueries({ queryKey: queryKeys.categoryCatalog() });
   };
@@ -234,14 +251,52 @@ export function AdminCategoriesPage() {
   }
 
   return (
-    <div className="grid gap-4">
+    <div className="grid gap-5">
       <AdminPageHeader
         title="Default categories"
         description="Shared defaults every user sees in their pickers. Removing one keeps the label on existing transactions."
       />
+
+      {/* Overview Stat Badges & Search */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/80 bg-card/60 p-4 shadow-xs">
+        <div className="flex flex-wrap items-center gap-4 text-xs">
+          <div className="flex items-center gap-2 font-semibold text-foreground">
+            <span className="flex size-2 rounded-full bg-emerald-500" />
+            <span>Total Defaults: <strong className="font-bold text-foreground">{categories.length}</strong></span>
+          </div>
+          <span className="text-muted-foreground">·</span>
+          <div className="text-muted-foreground">
+            Expense: <span className="font-semibold text-foreground">{expense.length}</span>
+          </div>
+          <span className="text-muted-foreground">·</span>
+          <div className="text-muted-foreground">
+            Income: <span className="font-semibold text-foreground">{income.length}</span>
+          </div>
+        </div>
+
+        {/* Search Input */}
+        <div className="relative w-full sm:w-64">
+          <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="h-8 pl-8 text-xs rounded-xl bg-background"
+            placeholder="Search categories..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
-        {renderSection("Expense categories", "expense", expense)}
-        {renderSection("Income categories", "income", income)}
+        {renderSection(
+          `Expense categories (${filteredExpense.length}${search ? ` of ${expense.length}` : ""})`,
+          "expense",
+          filteredExpense,
+        )}
+        {renderSection(
+          `Income categories (${filteredIncome.length}${search ? ` of ${income.length}` : ""})`,
+          "income",
+          filteredIncome,
+        )}
       </div>
 
       {/* Add / edit form — shared Dialog (Esc, focus trap, a11y) */}
@@ -270,30 +325,60 @@ export function AdminCategoriesPage() {
                 })()}
               </div>
 
-              <div className="flex-1 space-y-1">
-                <Input
-                  autoFocus
-                  className="h-10 text-sm font-semibold rounded-xl bg-muted/20 border-border/70"
-                  placeholder="Category name"
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            name: event.target.value,
-                            id:
-                              current.mode === "add"
-                                ? slugify(event.target.value)
-                                : current.id,
-                          }
-                        : current,
-                    )
-                  }
-                />
-                {form.mode === "add" && form.id ? (
-                  <p className="text-[10px] text-muted-foreground font-mono">id: {form.id}</p>
-                ) : null}
+              <div className="flex-1 space-y-2">
+                <div>
+                  <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1">
+                    Category Name
+                  </label>
+                  <Input
+                    autoFocus
+                    className="h-10 text-sm font-semibold rounded-xl bg-muted/20 border-border/70"
+                    placeholder="e.g. Dining Out, Utilities..."
+                    value={form.name}
+                    onChange={(event) =>
+                      setForm((current) => {
+                        if (!current) return current;
+                        const newName = event.target.value;
+                        const newId =
+                          current.mode === "add" && !current.customSlug
+                            ? slugify(newName)
+                            : current.id;
+                        return {
+                          ...current,
+                          name: newName,
+                          id: newId,
+                        };
+                      })
+                    }
+                  />
+                </div>
+                {form.mode === "add" ? (
+                  <div>
+                    <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block mb-1">
+                      Unique ID / Slug
+                    </label>
+                    <Input
+                      className="h-9 text-xs font-mono rounded-xl bg-muted/20 border-border/70"
+                      placeholder="e.g. dining_out"
+                      value={form.id}
+                      onChange={(event) => {
+                        const cleanSlug = slugify(event.target.value);
+                        setForm((current) =>
+                          current
+                            ? { ...current, id: cleanSlug, customSlug: true }
+                            : current,
+                        );
+                      }}
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                      Must use lowercase letters, numbers, and underscores.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground font-mono">
+                    ID: <span className="font-semibold text-foreground">{form.id}</span>
+                  </p>
+                )}
               </div>
             </div>
 

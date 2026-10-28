@@ -354,6 +354,7 @@ export type SmsTemplateRule = {
   mode: SmsRuleMode;
   templatePattern: string;
   extractionMap?: Record<string, string>;
+  exactTaggedValues?: Record<string, string>;
   keywords: string[];
   /** Training SMS — same idea as mobile template training. */
   sampleMessage?: string;

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Loader2, RotateCcw, Save } from "lucide-react";
+import { ArrowRight, Layers, Loader2, RotateCcw, Save } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -195,6 +195,29 @@ export function AdminSettingsPage() {
             <p className="text-xs text-muted-foreground">Signed-in non-admin website users see a maintenance notice. (Not read by the mobile app yet.)</p>
           </div>
           <Switch checked={form.maintenance_mode} onCheckedChange={(checked) => set("maintenance_mode", checked)} />
+        </div>
+      </AdminCard>
+
+      <AdminCard>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Layers className="size-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Default Categories</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Shared default expense and income categories shown to all users in web and mobile app pickers.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/admin/categories"
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-xs transition hover:bg-primary/90"
+          >
+            Manage Categories
+            <ArrowRight className="size-3.5" />
+          </Link>
         </div>
       </AdminCard>
 

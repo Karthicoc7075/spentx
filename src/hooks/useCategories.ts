@@ -27,8 +27,8 @@ export function useCategories() {
     queryKey: queryKeys.categoryCatalog(),
     queryFn: fetchDefaultCategories,
     enabled: isReady || !isConfigured,
-    staleTime: 60_000,
-    refetchOnWindowFocus: true,
+    staleTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const customQuery = useQuery<Category[]>({

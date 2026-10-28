@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, Plus, Search } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  AdminConfirmDialog,
   AdminEmptyState,
   AdminErrorState,
   AdminPageHeader,
@@ -26,6 +27,8 @@ import {
   useDebouncedValue,
 } from "@/components/admin/admin-ui";
 import {
+  adminDeleteKeywordRule,
+  adminDeleteMerchantBrand,
   adminUpsertKeywordRule,
   adminUpsertMerchantBrand,
   isMissingMigrationError,
@@ -55,7 +58,7 @@ const splitList = (text: string) =>
  */
 export function AdminMerchantRulesPage() {
   const [tab, setTab] = useState<"brands" | "keywords">("brands");
-  const catalog = useQuery({ queryKey: ["admin-category-catalog"], queryFn: listCategoryCatalog, staleTime: 5 * 60_000 });
+  const catalog = useQuery({ queryKey: ["admin-category-catalog-entries"], queryFn: listCategoryCatalog, staleTime: 5 * 60_000 });
 
   if (catalog.error && isMissingMigrationError(catalog.error)) {
     return (
@@ -114,9 +117,11 @@ function CategorySelect({ value, onChange, categories }: { value: string; onChan
 
 function BrandsTab({ categories }: { categories: Categories }) {
   const queryClient = useQueryClient();
+  const { notify } = useToast();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<Partial<MerchantBrand> | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<MerchantBrand | null>(null);
   const debounced = useDebouncedValue(search.trim());
   const query = useQuery({
     queryKey: ["admin-merchant-brands", debounced, page],
@@ -124,6 +129,14 @@ function BrandsTab({ categories }: { categories: Categories }) {
     placeholderData: keepPreviousData,
   });
   const rows = query.data?.rows ?? [];
+
+  const handleDelete = async () => {
+    if (!pendingDelete?.id) return;
+    await adminDeleteMerchantBrand(pendingDelete.id);
+    notify({ title: "Brand deleted", description: pendingDelete.canonical_name });
+    setPendingDelete(null);
+    queryClient.invalidateQueries({ queryKey: ["admin-merchant-brands"] });
+  };
 
   return (
     <div className="grid gap-3">
@@ -169,9 +182,20 @@ function BrandsTab({ categories }: { categories: Categories }) {
                     <StatusPill tone={brand.is_active ? "success" : "muted"}>{brand.is_active ? "active" : "off"}</StatusPill>
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => setEditing(brand)}>
-                      <Pencil className="size-3.5" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => setEditing(brand)}>
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="text-rose-500 hover:text-rose-600 rounded-lg"
+                        aria-label="Delete"
+                        onClick={() => setPendingDelete(brand)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -185,6 +209,15 @@ function BrandsTab({ categories }: { categories: Categories }) {
         categories={categories}
         onClose={() => setEditing(null)}
         onSaved={() => queryClient.invalidateQueries({ queryKey: ["admin-merchant-brands"] })}
+      />
+      <AdminConfirmDialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title={pendingDelete ? `Delete "${pendingDelete.canonical_name}"?` : ""}
+        description="This removes the brand from merchant rules. SMS matching this merchant will no longer be auto-assigned."
+        confirmLabel="Delete brand"
+        destructive
+        onConfirm={handleDelete}
       />
     </div>
   );
@@ -277,6 +310,7 @@ function KeywordsTab({ categories }: { categories: Categories }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<Partial<KeywordRule> | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<KeywordRule | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounced = useDebouncedValue(search.trim());
@@ -290,6 +324,14 @@ function KeywordsTab({ categories }: { categories: Categories }) {
   const open = (rule: Partial<KeywordRule>) => {
     setError(null);
     setEditing(rule);
+  };
+
+  const handleDelete = async () => {
+    if (!pendingDelete?.id) return;
+    await adminDeleteKeywordRule(pendingDelete.id);
+    notify({ title: "Rule deleted", description: pendingDelete.keyword });
+    setPendingDelete(null);
+    queryClient.invalidateQueries({ queryKey: ["admin-keyword-rules"] });
   };
 
   const save = async () => {
@@ -348,9 +390,20 @@ function KeywordsTab({ categories }: { categories: Categories }) {
                   <td className="px-3 py-2 text-right font-mono">{rule.priority}</td>
                   <td className="px-3 py-2"><StatusPill tone={rule.is_active ? "success" : "muted"}>{rule.is_active ? "active" : "off"}</StatusPill></td>
                   <td className="px-3 py-2 text-right">
-                    <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => open(rule)}>
-                      <Pencil className="size-3.5" />
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      <Button size="icon-sm" variant="ghost" aria-label="Edit" onClick={() => open(rule)}>
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="text-rose-500 hover:text-rose-600 rounded-lg"
+                        aria-label="Delete"
+                        onClick={() => setPendingDelete(rule)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -359,6 +412,16 @@ function KeywordsTab({ categories }: { categories: Categories }) {
         </div>
       )}
       <AdminPagination page={page} pageSize={PAGE_SIZE} total={query.data?.total} onPageChange={setPage} loading={query.isFetching} />
+
+      <AdminConfirmDialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title={pendingDelete ? `Delete keyword rule "${pendingDelete.keyword}"?` : ""}
+        description="This keyword will no longer map SMS transactions to categories."
+        confirmLabel="Delete rule"
+        destructive
+        onConfirm={handleDelete}
+      />
 
       <Dialog open={Boolean(editing)} onOpenChange={(value) => !value && !busy && setEditing(null)}>
         <DialogContent className="sm:max-w-md">

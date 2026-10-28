@@ -446,6 +446,13 @@ export function buildTemplateFromTags(input: {
   const bankFromTag =
     Object.entries(extractionMap).find(([, f]) => f === "bankName")?.[0] ?? "";
 
+  const exactTaggedValues: Record<string, string> = {};
+  for (const [orig, field] of Object.entries(extractionMap)) {
+    if (field && !field.startsWith("_")) {
+      exactTaggedValues[field] = orig;
+    }
+  }
+
   return {
     id: id ?? crypto.randomUUID(),
     bankName: bankName.trim() || bankFromTag || "Unknown",
@@ -453,6 +460,7 @@ export function buildTemplateFromTags(input: {
     mode,
     templatePattern: template,
     extractionMap,
+    exactTaggedValues,
     keywords: keywords.slice(0, 20),
     sampleMessage,
     similarityThreshold: 0.65,

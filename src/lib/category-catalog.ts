@@ -30,8 +30,9 @@ export function catalogDefaults(
   const kept = rows.filter((row) => {
     if (!row || typeof row.slug !== "string" || row.is_active === false) return false;
     if (row.txn_type !== "expense" && row.txn_type !== "income") return false;
-    if (!row.app_category?.trim()) return false;
-    return !row.parent_slug || row.parent_slug === "income";
+    const name = (row.app_category?.trim() || row.display_name?.trim() || row.slug);
+    if (!name) return false;
+    return !row.parent_slug || row.parent_slug === "income" || row.parent_slug === row.txn_type;
   });
   kept.sort(
     (a, b) =>
@@ -40,7 +41,7 @@ export function catalogDefaults(
   const seen = new Set<string>();
   const out: DefaultCategory[] = [];
   for (const row of kept) {
-    const name = row.app_category!.trim();
+    const name = (row.app_category?.trim() || row.display_name?.trim() || row.slug);
     const type = row.txn_type as "expense" | "income";
     const key = categoryKey(type, name);
     if (seen.has(key)) continue;

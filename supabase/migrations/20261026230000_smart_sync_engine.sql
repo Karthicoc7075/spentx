@@ -36,14 +36,25 @@ begin
       continue;
     end if;
 
-    if exists (
+    -- Ensure updated_at exists on all synced tables
+    if not exists (
       select 1 from information_schema.columns
        where table_schema = 'public' and table_name = t and column_name = 'updated_at'
     ) then
-      execute format(
-        'create index if not exists %I on public.%I (%I, updated_at desc)',
-        t || '_smart_sync_idx', t, owner_col);
+      execute format('alter table public.%I add column if not exists updated_at timestamptz not null default now()', t);
     end if;
+
+    -- Ensure created_at exists on all synced tables
+    if not exists (
+      select 1 from information_schema.columns
+       where table_schema = 'public' and table_name = t and column_name = 'created_at'
+    ) then
+      execute format('alter table public.%I add column if not exists created_at timestamptz not null default now()', t);
+    end if;
+
+    execute format(
+      'create index if not exists %I on public.%I (%I, updated_at desc)',
+      t || '_smart_sync_idx', t, owner_col);
   end loop;
 end $$;
 
@@ -79,88 +90,88 @@ begin
     'accounts', coalesce((
       select jsonb_agg(r) from accounts r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'purposes', coalesce((
       select jsonb_agg(r) from purposes r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'categories', coalesce((
       select jsonb_agg(r) from categories r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'contributors', coalesce((
       select jsonb_agg(r) from contributors r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'user_merchants', coalesce((
       select jsonb_agg(r) from user_merchants r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'monthly_plans', coalesce((
       select jsonb_agg(r) from monthly_plans r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'friends', coalesce((
       select jsonb_agg(r) from friends r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'friend_splits', coalesce((
       select jsonb_agg(r) from friend_splits r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'friend_settlements', coalesce((
       select jsonb_agg(r) from friend_settlements r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'outings', coalesce((
       select jsonb_agg(r) from outings r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'outing_categories', coalesce((
       select jsonb_agg(r) from outing_categories r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'outing_expenses', coalesce((
       select jsonb_agg(r) from outing_expenses r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'settlements', coalesce((
       select jsonb_agg(r) from settlements r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'savings_goals', coalesce((
       select jsonb_agg(r) from savings_goals r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'investments', coalesce((
       select jsonb_agg(r) from investments r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'projector_settings', coalesce((
       select jsonb_agg(r) from projector_settings r
        where r.user_id = v_uid
-         and (p_since is null or r.updated_at > v_cutoff or r.created_at > v_cutoff)
+         and (p_since is null or r.updated_at > v_cutoff)
     ), '[]'::jsonb),
     'transactions', coalesce((
       select jsonb_agg(t) from (
         select * from transactions
          where user_id = v_uid
-           and (p_since is null or updated_at > v_cutoff or created_at > v_cutoff)
+           and (p_since is null or updated_at > v_cutoff)
          order by updated_at desc
          limit p_tx_limit
       ) t
@@ -169,7 +180,7 @@ begin
       select jsonb_agg(s) from (
         select * from transaction_splits
          where user_id = v_uid
-           and (p_since is null or updated_at > v_cutoff or created_at > v_cutoff)
+           and (p_since is null or updated_at > v_cutoff)
          order by updated_at desc
          limit (p_tx_limit * 2)
       ) s
@@ -178,7 +189,7 @@ begin
       select jsonb_agg(it) from (
         select * from transaction_items
          where user_id = v_uid
-           and (p_since is null or updated_at > v_cutoff or created_at > v_cutoff)
+           and (p_since is null or updated_at > v_cutoff)
          order by updated_at desc
          limit (p_tx_limit * 2)
       ) it

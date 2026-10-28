@@ -338,11 +338,18 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
                   if (!window.confirm(`Delete template for “${rule.bankName}”?`)) {
                     return;
                   }
-                  await deleteSmsTemplateRule(rule.id);
-                  setTemplateRules((current) =>
-                    current.filter((item) => item.id !== rule.id),
-                  );
-                  onNotify({ title: "Template deleted" });
+                  try {
+                    await deleteSmsTemplateRule(rule.id);
+                    setTemplateRules((current) =>
+                      current.filter((item) => item.id !== rule.id),
+                    );
+                    onNotify({ title: "Template deleted" });
+                  } catch (err) {
+                    onNotify({
+                      title: "Failed to delete template",
+                      description: err instanceof Error ? err.message : "Database error.",
+                    });
+                  }
                 },
               }))}
             />
@@ -384,11 +391,18 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
                 },
                 onDelete: async () => {
                   if (!window.confirm(`Delete block rule “${rule.name}”?`)) return;
-                  await deleteSmsBlockRule(rule.id);
-                  setBlockRules((current) =>
-                    current.filter((item) => item.id !== rule.id),
-                  );
-                  onNotify({ title: "Block rule deleted" });
+                  try {
+                    await deleteSmsBlockRule(rule.id);
+                    setBlockRules((current) =>
+                      current.filter((item) => item.id !== rule.id),
+                    );
+                    onNotify({ title: "Block rule deleted" });
+                  } catch (err) {
+                    onNotify({
+                      title: "Failed to delete block rule",
+                      description: err instanceof Error ? err.message : "Database error.",
+                    });
+                  }
                 },
               }))}
             />

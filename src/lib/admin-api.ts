@@ -724,3 +724,11 @@ export async function adminUpsertKeywordRule(rule: Partial<KeywordRule>): Promis
   return rpc<KeywordRule>("admin_upsert_keyword_rule", { p_rule: rule });
 }
 
+export async function adminDeleteMerchantBrand(id: string): Promise<void> {
+  await postJson(`/api/admin/merchant-rules?type=brand&id=${encodeURIComponent(id)}`, undefined, "DELETE");
+}
+
+export async function adminDeleteKeywordRule(id: string | number): Promise<void> {
+  await postJson(`/api/admin/merchant-rules?type=keyword&id=${encodeURIComponent(String(id))}`, undefined, "DELETE");
+}
+

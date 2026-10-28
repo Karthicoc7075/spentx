@@ -104,12 +104,12 @@ export function SignInForm() {
       subtitle="Track your money. Know your numbers."
       title="Sign in to SpentX"
       footer={
-        <p className="text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{" "}
-          <Link className="font-medium text-primary hover:underline" href="/auth/sign-up">
-            Sign up
-          </Link>
-        </p>
+        <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-center text-xs text-muted-foreground">
+          <p className="font-semibold text-foreground">Mobile-First Financial Companion</p>
+          <p className="mt-1">
+            New to SpentX? Account creation and automatic bank SMS tracking are set up exclusively on the mobile app.
+          </p>
+        </div>
       }
     >
       <form className="grid gap-4" noValidate onSubmit={handleSubmit}>

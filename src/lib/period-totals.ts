@@ -104,13 +104,25 @@ export function sumAppliedTripReturns(transactions: Transaction[], range?: Perio
   return applied;
 }
 
-/** Everything netted off gross spend: friend shares, trip returns, refunds. */
+/** Everything netted off gross spend: friend shares, trip returns, refunds, standalone returns. */
 export function sumSpendOffsets(transactions: Transaction[], range?: PeriodRange) {
-  return (
-    sumFriendShares(transactions, range) +
-    sumAppliedTripReturns(transactions, range) +
-    sumLinkedRefunds(transactions, range)
-  );
+  const friendShares = sumFriendShares(transactions, range);
+  const tripReturns = sumAppliedTripReturns(transactions, range);
+  const linkedRefunds = sumLinkedRefunds(transactions, range);
+
+  // Standalone non-trip reimbursements (e.g. friend returns / expense repayments)
+  // offset spend when not already accounted for by friend split shares.
+  const standaloneReturns = friendShares > 0
+    ? 0
+    : transactions.reduce((sum, tx) => {
+        if (!isConfirmedTransaction(tx) || !isReimbursementTransaction(tx)) return sum;
+        if (tx.outingId) return sum; // Trip returns handled by sumAppliedTripReturns
+        const date = tx.transactionDate ?? tx.date;
+        if (!isInPeriodRange(date, range)) return sum;
+        return sum + money(tx);
+      }, 0);
+
+  return friendShares + tripReturns + linkedRefunds + standaloneReturns;
 }
 
 export type PeriodRange = {

@@ -574,6 +574,7 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
         onConfirm={async ({ reason }) => {
           await adminSetSuspended(userId, true, reason);
           await refresh();
+          await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
           notify({ title: "User suspended" });
         }}
       />
@@ -587,6 +588,7 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
         onConfirm={async ({ reason }) => {
           await adminSetSuspended(userId, false, reason);
           await refresh();
+          await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
           notify({ title: "User unsuspended" });
         }}
       />
@@ -609,6 +611,10 @@ export function AdminUserDetailPage({ userId }: { userId: string }) {
           await adminResetUserData(userId);
           notify({ title: "User data reset", description: `Reset ${profile.email} to onboarding.` });
           await refresh();
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+            queryClient.invalidateQueries({ queryKey: ["admin-overview"] }),
+          ]);
         }}
       />
       <AdminConfirmDialog
