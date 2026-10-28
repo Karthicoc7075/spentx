@@ -643,6 +643,7 @@ export type MerchantBrand = {
   sms_patterns: string[];
   is_active: boolean;
   source: string | null;
+  created_at?: string;
   updated_at: string;
   keys_count?: number;
 };
@@ -697,6 +698,7 @@ export type KeywordRule = {
   direction: "any" | "debit" | "credit";
   note: string | null;
   is_active: boolean;
+  created_at?: string;
   updated_at: string;
 };
 
