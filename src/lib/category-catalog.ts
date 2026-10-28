@@ -17,10 +17,12 @@ export type CatalogRow = {
   color_hex?: string | null;
   sort_order?: number | null;
   is_active?: boolean | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export const CATALOG_COLUMNS =
-  "slug, display_name, parent_slug, app_category, txn_type, icon, color_hex, sort_order, is_active";
+  "slug, display_name, parent_slug, app_category, txn_type, icon, color_hex, sort_order, is_active, created_at, updated_at";
 
 const DEFAULT_COLOR = "#64748b";
 
@@ -59,6 +61,8 @@ export function catalogDefaults(
       icon: chosenIcon,
       order: out.length,
       isInvestment: row.slug === "investment",
+      createdAt: row.created_at || undefined,
+      updatedAt: row.updated_at || undefined,
     });
   }
   return out;
@@ -81,6 +85,8 @@ export function defaultToCategory(item: DefaultCategory): Category {
     isActive: true,
     source: "global",
     isInvestment: item.isInvestment ?? false,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
   };
 }
 

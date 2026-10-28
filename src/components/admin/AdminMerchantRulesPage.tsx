@@ -2,6 +2,7 @@
 
 import {
   AlertCircle,
+  Calendar,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
+import { format } from "date-fns";
 import { useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -70,6 +72,17 @@ const splitList = (text: string) =>
     .split(/[\n,]/)
     .map((item) => item.trim())
     .filter(Boolean);
+
+function formatDateTimeSafe(iso?: string) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return format(d, "dd MMM yyyy, h:mm a");
+  } catch {
+    return "—";
+  }
+}
 
 type Categories = Array<{ slug: string; display_name: string }>;
 
@@ -414,6 +427,7 @@ function BrandsTab({ categories }: { categories: Categories }) {
                 <th className="px-3 py-2.5 font-semibold">Category</th>
                 <th className="px-3 py-2.5 font-semibold">Linked Keys</th>
                 <th className="px-3 py-2.5 font-semibold">Sample Aliases / UPI</th>
+                <th className="px-3 py-2.5 font-semibold">Created Date</th>
                 <th className="px-3 py-2.5 font-semibold">Status</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Actions</th>
               </tr>
@@ -448,6 +462,9 @@ function BrandsTab({ categories }: { categories: Categories }) {
                   </td>
                   <td className="max-w-[240px] truncate px-3 py-2 text-muted-foreground font-mono text-[11px]">
                     {[...(brand.aliases ?? []), ...(brand.upi_handles ?? [])].join(", ") || "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-muted-foreground">
+                    {formatDateTimeSafe(brand.created_at)}
                   </td>
                   <td className="px-3 py-2">
                     <StatusPill tone={brand.is_active ? "success" : "muted"}>
@@ -903,6 +920,7 @@ function KeywordsTab({ categories }: { categories: Categories }) {
                 <th className="px-3 py-2.5 font-semibold">Match Logic</th>
                 <th className="px-3 py-2.5 font-semibold">Category</th>
                 <th className="px-3 py-2.5 text-right font-semibold">Priority</th>
+                <th className="px-3 py-2.5 font-semibold">Created Date</th>
                 <th className="px-3 py-2.5 font-semibold">Status</th>
                 <th className="px-3 py-2.5 text-right" />
               </tr>
@@ -916,6 +934,9 @@ function KeywordsTab({ categories }: { categories: Categories }) {
                   </td>
                   <td className="px-3 py-2 font-mono">{rule.category_slug}</td>
                   <td className="px-3 py-2 text-right font-mono font-semibold">{rule.priority}</td>
+                  <td className="whitespace-nowrap px-3 py-2 font-mono text-[11px] text-muted-foreground">
+                    {formatDateTimeSafe(rule.created_at)}
+                  </td>
                   <td className="px-3 py-2">
                     <StatusPill tone={rule.is_active ? "success" : "muted"}>
                       {rule.is_active ? "active" : "off"}
@@ -966,7 +987,14 @@ function KeywordsTab({ categories }: { categories: Categories }) {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editing?.id ? "Edit keyword rule" : "Add keyword rule"}</DialogTitle>
-            <DialogDescription>Higher priority wins when several rules match.</DialogDescription>
+            <DialogDescription>
+              {editing?.created_at ? (
+                <span className="block font-mono text-[11px] text-muted-foreground/90 mb-0.5">
+                  Created: {formatDateTimeSafe(editing.created_at)}
+                </span>
+              ) : null}
+              Higher priority wins when several rules match.
+            </DialogDescription>
           </DialogHeader>
           {editing ? (
             <div className="grid gap-3 text-xs">
@@ -1320,6 +1348,11 @@ function BrandDialog({
         <DialogHeader>
           <DialogTitle>{brand?.id ? "Edit brand" : "Add brand"}</DialogTitle>
           <DialogDescription>
+            {brand?.created_at ? (
+              <span className="block font-mono text-[11px] text-muted-foreground/90 mb-0.5">
+                Created: {formatDateTimeSafe(brand.created_at)}
+              </span>
+            ) : null}
             Aliases and UPI handles will be synchronized to brand keys. SMS patterns: one regex per line.
           </DialogDescription>
         </DialogHeader>

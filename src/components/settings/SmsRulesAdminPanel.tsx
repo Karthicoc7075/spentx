@@ -8,8 +8,9 @@
  * Detection/regex training stays on the mobile app for user-specific rules.
  */
 
-import { Ban, Plus, Save, Search, Smartphone, Trash2 } from "lucide-react";
+import { Ban, Calendar, Filter, Plus, RotateCcw, Save, Search, Smartphone, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,6 +86,20 @@ function extractKeywordsFromSample(sample: string): string[] {
   return candidates.filter((k) => lower.includes(k));
 }
 
+function formatDateSafe(iso?: string) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return format(d, "dd MMM yyyy, h:mm a");
+  } catch {
+    return "—";
+  }
+}
+
+const selectFilterClass =
+  "h-9 rounded-xl border border-border bg-background px-3 text-xs text-foreground font-medium shadow-xs focus:outline-none focus:ring-1 focus:ring-primary";
+
 const tabLabels: Record<RuleTab, string> = {
   template: "Templates",
   block: "Block SMS",
@@ -101,6 +116,10 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
   const [activeTab, setActiveTab] = useState<RuleTab>("template");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [bankFilter, setBankFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [blockStatusFilter, setBlockStatusFilter] = useState("all");
   const [templateRules, setTemplateRules] = useState<SmsTemplateRule[]>([]);
   const [blockRules, setBlockRules] = useState<SmsBlockRule[]>([]);
   /** null = closed; {} = new paste-and-tag; rule = re-tag existing */
@@ -133,28 +152,59 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
     void loadRules();
   }, [loadRules]);
 
+  const uniqueBanks = useMemo(() => {
+    const set = new Set<string>();
+    for (const rule of templateRules) {
+      if (rule.bankName?.trim()) set.add(rule.bankName.trim());
+    }
+    return Array.from(set).sort();
+  }, [templateRules]);
+
   const q = search.trim().toLowerCase();
+
   const filteredBlock = useMemo(
     () =>
-      blockRules.filter((r) =>
-        !q
-          ? true
-          : [r.name, r.pattern, ...(r.keywords ?? [])].join(" ").toLowerCase().includes(q),
-      ),
-    [blockRules, q],
+      blockRules.filter((r) => {
+        if (blockStatusFilter === "active" && !r.isActive) return false;
+        if (blockStatusFilter === "inactive" && r.isActive) return false;
+        if (!q) return true;
+        return [r.name, r.pattern, ...(r.keywords ?? [])].join(" ").toLowerCase().includes(q);
+      }),
+    [blockRules, blockStatusFilter, q],
   );
+
   const filteredTemplate = useMemo(
     () =>
-      templateRules.filter((r) =>
-        !q
-          ? true
-          : [r.bankName, r.type, r.mode, r.templatePattern, ...(r.keywords ?? [])]
-              .join(" ")
-              .toLowerCase()
-              .includes(q),
-      ),
-    [templateRules, q],
+      templateRules.filter((r) => {
+        if (bankFilter !== "all" && r.bankName !== bankFilter) return false;
+        if (typeFilter !== "all" && r.type !== typeFilter) return false;
+        if (statusFilter === "active" && !r.isActive) return false;
+        if (statusFilter === "inactive" && r.isActive) return false;
+        if (!q) return true;
+        return [r.bankName, r.type, r.mode, r.templatePattern, ...(r.keywords ?? [])]
+          .join(" ")
+          .toLowerCase()
+          .includes(q);
+      }),
+    [templateRules, bankFilter, typeFilter, statusFilter, q],
   );
+
+  const hasTemplateFilters =
+    Boolean(search) || bankFilter !== "all" || typeFilter !== "all" || statusFilter !== "all";
+
+  const resetTemplateFilters = () => {
+    setSearch("");
+    setBankFilter("all");
+    setTypeFilter("all");
+    setStatusFilter("all");
+  };
+
+  const hasBlockFilters = Boolean(search) || blockStatusFilter !== "all";
+
+  const resetBlockFilters = () => {
+    setSearch("");
+    setBlockStatusFilter("all");
+  };
 
   async function handleSaveTaggedTemplate(
     rule: Omit<SmsTemplateRule, "createdBy" | "createdAt" | "updatedAt">,
@@ -283,15 +333,131 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
       </CardHeader>
 
       <CardContent className="space-y-5 p-6">
-        <div className="relative max-w-md">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="h-9 pl-9 text-sm"
-            placeholder="Search bank, keywords, name…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
+        {/* ── TEMPLATES FILTER & ACTION BAR ── */}
+        {activeTab === "template" && (
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-1 flex-wrap items-center gap-2">
+              <div className="relative min-w-[200px] flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 pl-9 text-xs"
+                  placeholder="Search bank, keywords, pattern…"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+
+              <select
+                aria-label="Filter by bank"
+                className={selectFilterClass}
+                value={bankFilter}
+                onChange={(e) => setBankFilter(e.target.value)}
+              >
+                <option value="all">All Banks ({uniqueBanks.length})</option>
+                {uniqueBanks.map((bank) => (
+                  <option key={bank} value={bank}>
+                    {bank}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Filter by transaction type"
+                className={selectFilterClass}
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+              >
+                <option value="all">All Types</option>
+                <option value="debit">Debit</option>
+                <option value="credit">Credit</option>
+                <option value="transfer">Transfer</option>
+              </select>
+
+              <select
+                aria-label="Filter by status"
+                className={selectFilterClass}
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">All Status</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">Inactive Only</option>
+              </select>
+
+              {hasTemplateFilters && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={resetTemplateFilters}
+                >
+                  <RotateCcw className="mr-1.5 size-3" />
+                  Reset
+                </Button>
+              )}
+            </div>
+
+            <Button
+              className="h-9 text-xs font-semibold shrink-0"
+              type="button"
+              onClick={startNewTemplate}
+            >
+              <Plus className="mr-1.5 size-3.5" />
+              Add template
+            </Button>
+          </div>
+        )}
+
+        {/* ── BLOCK SMS FILTER & ACTION BAR ── */}
+        {activeTab === "block" && (
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-1 flex-wrap items-center gap-2">
+              <div className="relative min-w-[200px] flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 pl-9 text-xs"
+                  placeholder="Search block rule or keywords…"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+
+              <select
+                aria-label="Filter by block status"
+                className={selectFilterClass}
+                value={blockStatusFilter}
+                onChange={(e) => setBlockStatusFilter(e.target.value)}
+              >
+                <option value="all">All Status</option>
+                <option value="active">Active Only</option>
+                <option value="inactive">Inactive Only</option>
+              </select>
+
+              {hasBlockFilters && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={resetBlockFilters}
+                >
+                  <RotateCcw className="mr-1.5 size-3" />
+                  Reset
+                </Button>
+              )}
+            </div>
+
+            <Button
+              className="h-9 text-xs font-semibold shrink-0"
+              type="button"
+              onClick={startNewBlock}
+            >
+              <Plus className="mr-1.5 size-3.5" />
+              Add block rule
+            </Button>
+          </div>
+        )}
 
         {loading ? (
           <div className="space-y-3">
@@ -303,31 +469,35 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
         {/* ── TEMPLATES ── */}
         {!loading && activeTab === "template" ? (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                Add / Edit opens a popup — paste SMS, tag words, then Save.
-              </p>
-              <Button
-                className="h-9 text-xs font-semibold"
-                type="button"
-                variant="outline"
-                onClick={startNewTemplate}
-              >
-                <Plus className="mr-1.5 size-3.5" />
-                Add template
-              </Button>
-            </div>
-
             <RulesTable
-              emptyLabel="No templates yet. Seed bank catalog or add one."
-              headers={["Bank", "Type", "Mode", "Keywords", "Status", ""]}
+              emptyLabel={
+                hasTemplateFilters
+                  ? "No SMS templates match your filter criteria."
+                  : "No templates yet. Seed bank catalog or add one."
+              }
+              headers={["Bank", "Type", "Mode", "Keywords", "Created Date", "Status", ""]}
               rows={filteredTemplate.map((rule) => ({
                 id: rule.id,
                 cells: [
-                  rule.bankName,
-                  rule.type,
+                  <span key="bank" className="font-semibold text-foreground">{rule.bankName}</span>,
+                  <span
+                    key="type"
+                    className={cn(
+                      "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-bold uppercase",
+                      rule.type === "debit"
+                        ? "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        : rule.type === "credit"
+                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                        : "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+                    )}
+                  >
+                    {rule.type}
+                  </span>,
                   rule.mode,
                   rule.keywords.join(", ") || "—",
+                  <span key="created" className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                    {formatDateSafe(rule.createdAt)}
+                  </span>,
                   <StatusBadge key={`${rule.id}-status`} active={rule.isActive} />,
                 ],
                 onEdit: () => {
@@ -359,30 +529,22 @@ export function SmsRulesAdminPanel({ adminId, onNotify }: SmsRulesAdminPanelProp
         {/* ── BLOCK SMS ── */}
         {!loading && activeTab === "block" ? (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                Add / Edit opens a popup card — no scroll away from the list.
-              </p>
-              <Button
-                className="h-9 text-xs font-semibold"
-                type="button"
-                variant="outline"
-                onClick={startNewBlock}
-              >
-                <Plus className="mr-1.5 size-3.5" />
-                Add block rule
-              </Button>
-            </div>
-
             <RulesTable
-              emptyLabel="No block rules yet. Seed defaults or add OTP/promo blockers."
-              headers={["Name", "Keywords", "Threshold", "Status", ""]}
+              emptyLabel={
+                hasBlockFilters
+                  ? "No block rules match your filter criteria."
+                  : "No block rules yet. Seed defaults or add OTP/promo blockers."
+              }
+              headers={["Name", "Keywords", "Threshold", "Created Date", "Status", ""]}
               rows={filteredBlock.map((rule) => ({
                 id: rule.id,
                 cells: [
-                  rule.name,
+                  <span key="name" className="font-semibold text-foreground">{rule.name}</span>,
                   rule.keywords.join(", ") || "—",
                   String(rule.similarityThreshold),
+                  <span key="created" className="whitespace-nowrap font-mono text-[11px] text-muted-foreground">
+                    {formatDateSafe(rule.createdAt)}
+                  </span>,
                   <StatusBadge key={`${rule.id}-status`} active={rule.isActive} />,
                 ],
                 onEdit: () => {

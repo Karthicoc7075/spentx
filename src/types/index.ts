@@ -194,6 +194,8 @@ export type Category = {
   source?: "global" | "custom";
   /** Expense transactions in this category count toward Wealth's Total Investment. */
   isInvestment?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type Purpose = {
@@ -1203,6 +1205,8 @@ export type DefaultCategory = {
   icon: string;
   order: number;
   isInvestment?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /** globalSettings/app — spec §2.19. Single shared doc. */
