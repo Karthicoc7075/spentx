@@ -91,8 +91,8 @@ export function computeMemberBalances(
   }));
 }
 
-export function getCurrentUserMember(members: TripMember[]) {
-  return members.find((member) => member.isCurrentUser) ?? members[0];
+export function getCurrentUserMember(members: TripMember[]): TripMember | undefined {
+  return members.find((member) => member.isCurrentUser);
 }
 
 /** Calculation-only expense list; review rows remain in the original list. */

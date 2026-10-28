@@ -166,6 +166,23 @@ export function AdminCategoriesPage() {
     if (!pendingDelete) return;
     setIsSaving(true);
     try {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: linkedBrands } = await supabase
+        .from("merchant_brands")
+        .select("id, canonical_name")
+        .eq("category_slug", pendingDelete.id);
+
+      if (linkedBrands && linkedBrands.length > 0) {
+        const brandNames = linkedBrands.slice(0, 3).map((b: { canonical_name: string }) => b.canonical_name).join(", ");
+        notify({
+          title: "Cannot deactivate category",
+          description: `"${pendingDelete.name}" is linked to ${linkedBrands.length} active brand(s) (${brandNames}${linkedBrands.length > 3 ? ", ..." : ""}). Please reassign the brands in Merchant Rules first.`,
+        });
+        setPendingDelete(null);
+        return;
+      }
+
       await adminSetCatalogCategoryActive(pendingDelete.id, false);
       notify({
         title: "Category removed",

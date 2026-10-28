@@ -147,6 +147,15 @@ async function handlePost(request: Request) {
       }
 
       const cleanKey = key.trim();
+      if (match_mode === "contains" && cleanKey.length < 5 && !cleanKey.includes(" ")) {
+        return NextResponse.json(
+          {
+            error:
+              "Brand keys shorter than 5 characters without spaces must use 'exact' match mode to avoid substring collisions in the mobile detection engine.",
+          },
+          { status: 400 },
+        );
+      }
 
       // If modifying an existing key and the key name or key type changed, delete old key row first
       if (old_key && (old_key !== cleanKey || (old_key_type && old_key_type !== key_type))) {
@@ -240,6 +249,10 @@ async function handlePost(request: Request) {
             break;
           }
         } else {
+          // Mobile MerchantCategoryEngine requires non-space contains keys to be >= 5 chars
+          if (!keyUpper.includes(" ") && keyUpper.length < 5) {
+            continue;
+          }
           if (upperText.includes(keyUpper)) {
             matchedBrandKey = k;
             break;

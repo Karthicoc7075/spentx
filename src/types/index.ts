@@ -1,4 +1,4 @@
-export type TransactionType = "income" | "expense";
+export type TransactionType = "income" | "expense" | "transfer";
 
 /**
  * Free-form now — user-managed via Settings > Contributors (Friend's/Father's
@@ -58,6 +58,9 @@ export type Transaction = {
   isActive?: boolean;
   deletedAt?: string;
   type: TransactionType;
+  toAccountId?: string;
+  transferType?: string;
+  transferTo?: string;
   merchant: string;
   /**
    * FIRESTORE_REBUILD_SPEC §2.6/§2.7 canonical fields. The parent
@@ -502,7 +505,7 @@ export type GlobalFilters = {
   search: string;
   minAmount: string;
   maxAmount: string;
-  transactionType: "" | "income" | "expense";
+  transactionType: "" | TransactionType;
   dashboardMonth: string;
   dashboardDatePreset: DashboardDatePreset;
   purposeId: string;

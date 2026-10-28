@@ -66,8 +66,10 @@ export function RecordSettlementDialog({
   const { addSettlement } = useOutingSettlements(outing.id);
 
   const currentMember = getCurrentUserMember(outing.members);
-  const isCurrentUserPaying = currentMember?.id === fromMemberId;
-  const isCurrentUserReceiving = currentMember?.id === toMemberId || youAreOwed;
+  const isCurrentUserPaying = Boolean(currentMember && currentMember.id === fromMemberId);
+  const isCurrentUserReceiving = Boolean(
+    currentMember && (currentMember.id === toMemberId || (youAreOwed && fromMemberId !== currentMember.id)),
+  );
   const isUserInvolved = isCurrentUserPaying || isCurrentUserReceiving;
 
   const [amountInput, setAmountInput] = useState(

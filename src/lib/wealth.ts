@@ -173,8 +173,28 @@ export function computeAccountBalancesMap(
       }
     }
 
-    if (targetAcc) {
-      const amount = transactionAmount(tx);
+    const amount = transactionAmount(tx);
+
+    if (tx.type === "transfer") {
+      if (targetAcc) {
+        const current = balanceMap.get(targetAcc.id) ?? 0;
+        balanceMap.set(targetAcc.id, current - amount);
+      }
+      let destAcc: Account | undefined;
+      const txToAccountId = tx.toAccountId?.trim().toLowerCase();
+      if (txToAccountId && accountById.has(txToAccountId)) {
+        destAcc = accountById.get(txToAccountId);
+      } else if (tx.transferTo) {
+        const destName = tx.transferTo.trim().toLowerCase();
+        if (accountByName.has(destName)) {
+          destAcc = accountByName.get(destName);
+        }
+      }
+      if (destAcc) {
+        const destCurrent = balanceMap.get(destAcc.id) ?? 0;
+        balanceMap.set(destAcc.id, destCurrent + amount);
+      }
+    } else if (targetAcc) {
       const current = balanceMap.get(targetAcc.id) ?? 0;
       balanceMap.set(
         targetAcc.id,
@@ -239,8 +259,22 @@ export function getAccountBalance(
       !isIdMatch &&
       (tx.accountName ?? tx.account ?? "").trim().toLowerCase() === accountNameLower;
 
-    if (isIdMatch || isNameMatch) {
-      const amount = transactionAmount(tx);
+    const txToAccountId = (tx.toAccountId ?? "").trim().toLowerCase();
+    const isDestIdMatch = account.id && txToAccountId && txToAccountId === accountIdLower;
+    const isDestNameMatch =
+      !isDestIdMatch &&
+      (tx.transferTo ?? "").trim().toLowerCase() === accountNameLower;
+
+    const amount = transactionAmount(tx);
+
+    if (tx.type === "transfer") {
+      if (isIdMatch || isNameMatch) {
+        balance -= amount;
+      }
+      if (isDestIdMatch || isDestNameMatch) {
+        balance += amount;
+      }
+    } else if (isIdMatch || isNameMatch) {
       if (tx.type === "income") balance += amount;
       else balance -= amount;
     }
