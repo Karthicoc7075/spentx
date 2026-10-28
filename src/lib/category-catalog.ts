@@ -1,4 +1,5 @@
 import type { Category, DefaultCategory } from "@/types";
+import { registerCategoryIcon } from "@/lib/transaction-ui";
 
 /**
  * Default categories come only from `public.category_catalog` (admin-owned,
@@ -46,12 +47,16 @@ export function catalogDefaults(
     const key = categoryKey(type, name);
     if (seen.has(key)) continue;
     seen.add(key);
+    const chosenIcon = row.icon && isKnownIcon(row.icon) ? row.icon : "";
+    if (chosenIcon) {
+      registerCategoryIcon(name, chosenIcon);
+    }
     out.push({
       id: row.slug,
       name,
       type,
       color: row.color_hex || DEFAULT_COLOR,
-      icon: row.icon && isKnownIcon(row.icon) ? row.icon : "",
+      icon: chosenIcon,
       order: out.length,
       isInvestment: row.slug === "investment",
     });
