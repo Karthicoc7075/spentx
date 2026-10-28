@@ -636,12 +636,54 @@ export type MerchantBrand = {
   canonical_name: string;
   normalized_name: string;
   category_slug: string;
+  subcategory?: string | null;
+  confidence?: number;
   aliases: string[];
   upi_handles: string[];
   sms_patterns: string[];
   is_active: boolean;
   source: string | null;
   updated_at: string;
+  keys_count?: number;
+};
+
+export type MerchantBrandKey = {
+  key: string;
+  key_type: "name" | "alias" | "upi";
+  match_mode: "contains" | "prefix" | "exact";
+  brand_id: string;
+  merchant_brands?: {
+    id: string;
+    canonical_name: string;
+    category_slug: string;
+    confidence?: number;
+  } | null;
+};
+
+export type MatchResult = {
+  matched: boolean;
+  stage: "upi_handle" | "brand_key" | "keyword_rule" | "none";
+  brand?: {
+    id: string;
+    canonical_name: string;
+    category_slug: string;
+    confidence?: number;
+  } | null;
+  key?: {
+    key: string;
+    key_type: string;
+    match_mode: string;
+  } | null;
+  keyword_rule?: {
+    id: number;
+    keyword: string;
+    match_type: string;
+    category_slug: string;
+    priority: number;
+  } | null;
+  category: string;
+  confidence: number;
+  explanation: string;
 };
 
 export type KeywordRule = {
@@ -649,6 +691,7 @@ export type KeywordRule = {
   keyword: string;
   match_type: "word" | "prefix" | "contains" | "regex";
   category_slug: string;
+  subcategory?: string | null;
   priority: number;
   applies_to: "merchant" | "sms" | "vpa";
   direction: "any" | "debit" | "credit";
@@ -680,22 +723,84 @@ export async function listMerchantBrands(params: {
 }): Promise<{ rows: MerchantBrand[]; total: number }> {
   let query = client()
     .from("merchant_brands")
-    .select("*", { count: "exact" })
+    .select("*, merchant_brand_keys(count)", { count: "exact" })
     .order("canonical_name", { ascending: true })
     .range(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 50) - 1);
+
   const term = params.search?.trim();
   if (term) {
     const safe = term.replace(/[%,()]/g, " ");
-    query = query.or(`canonical_name.ilike.%${safe}%,normalized_name.ilike.%${safe}%,category_slug.ilike.%${safe}%`);
+    // Also find brands whose keys match the search
+    const { data: keyMatches } = await client()
+      .from("merchant_brand_keys")
+      .select("brand_id")
+      .ilike("key", `%${safe}%`)
+      .limit(100);
+
+    const matchedBrandIds = Array.from(new Set((keyMatches ?? []).map((k: any) => k.brand_id).filter(Boolean)));
+    if (matchedBrandIds.length > 0) {
+      query = query.or(
+        `canonical_name.ilike.%${safe}%,normalized_name.ilike.%${safe}%,category_slug.ilike.%${safe}%,id.in.(${matchedBrandIds.slice(0, 50).join(",")})`,
+      );
+    } else {
+      query = query.or(
+        `canonical_name.ilike.%${safe}%,normalized_name.ilike.%${safe}%,category_slug.ilike.%${safe}%`,
+      );
+    }
   }
+
   const { data, error, count } = await query;
   const err = tableError(error);
   if (err) throw err;
-  return { rows: (data ?? []) as MerchantBrand[], total: count ?? 0 };
+
+  const rows = (data ?? []).map((row: any) => ({
+    ...row,
+    keys_count: row.merchant_brand_keys?.[0]?.count ?? 0,
+  })) as MerchantBrand[];
+
+  return { rows, total: count ?? 0 };
+}
+
+export async function listMerchantBrandKeys(params: {
+  search?: string;
+  key_type?: string;
+  match_mode?: string;
+  brand_id?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ rows: MerchantBrandKey[]; total: number }> {
+  let query = client()
+    .from("merchant_brand_keys")
+    .select("key, key_type, match_mode, brand_id, merchant_brands(id, canonical_name, category_slug, confidence)", { count: "exact" })
+    .order("key", { ascending: true })
+    .range(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 50) - 1);
+
+  if (params.brand_id) {
+    query = query.eq("brand_id", params.brand_id);
+  }
+  if (params.key_type && params.key_type !== "all") {
+    query = query.eq("key_type", params.key_type);
+  }
+  if (params.match_mode && params.match_mode !== "all") {
+    query = query.eq("match_mode", params.match_mode);
+  }
+  const term = params.search?.trim();
+  if (term) {
+    const safe = term.replace(/[%,()]/g, " ");
+    query = query.ilike("key", `%${safe}%`);
+  }
+
+  const { data, error, count } = await query;
+  const err = tableError(error);
+  if (err) throw err;
+  return { rows: (data ?? []) as MerchantBrandKey[], total: count ?? 0 };
 }
 
 export async function listKeywordRules(params: {
   search?: string;
+  category_slug?: string;
+  match_type?: string;
+  direction?: string;
   limit?: number;
   offset?: number;
 }): Promise<{ rows: KeywordRule[]; total: number }> {
@@ -705,6 +810,17 @@ export async function listKeywordRules(params: {
     .order("priority", { ascending: false })
     .order("keyword", { ascending: true })
     .range(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 50) - 1);
+
+  if (params.category_slug && params.category_slug !== "all") {
+    query = query.eq("category_slug", params.category_slug);
+  }
+  if (params.match_type && params.match_type !== "all") {
+    query = query.eq("match_type", params.match_type);
+  }
+  if (params.direction && params.direction !== "all") {
+    query = query.eq("direction", params.direction);
+  }
+
   const term = params.search?.trim();
   if (term) {
     const safe = term.replace(/[%,()]/g, " ");
@@ -730,5 +846,32 @@ export async function adminDeleteMerchantBrand(id: string): Promise<void> {
 
 export async function adminDeleteKeywordRule(id: string | number): Promise<void> {
   await postJson(`/api/admin/merchant-rules?type=keyword&id=${encodeURIComponent(String(id))}`, undefined, "DELETE");
+}
+
+export async function adminUpsertMerchantBrandKey(payload: {
+  brand_id: string;
+  key: string;
+  key_type: "name" | "alias" | "upi";
+  match_mode: "contains" | "prefix" | "exact";
+  old_key?: string;
+  old_key_type?: string;
+}): Promise<void> {
+  await postJson("/api/admin/merchant-rules", { action: "upsert_key", ...payload }, "POST");
+}
+
+export async function adminDeleteMerchantBrandKey(params: {
+  brand_id: string;
+  key: string;
+  key_type: string;
+}): Promise<void> {
+  await postJson(
+    `/api/admin/merchant-rules?type=key&brand_id=${encodeURIComponent(params.brand_id)}&key=${encodeURIComponent(params.key)}&key_type=${encodeURIComponent(params.key_type)}`,
+    undefined,
+    "DELETE",
+  );
+}
+
+export async function adminTestMerchantMatch(text: string): Promise<MatchResult> {
+  return postJson<MatchResult>("/api/admin/merchant-rules", { action: "test_match", text }, "POST");
 }
 
