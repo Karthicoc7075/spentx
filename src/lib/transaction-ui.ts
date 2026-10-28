@@ -123,27 +123,85 @@ const categoryIconMap: Record<string, LucideIcon> = {
 
 import { ICON_MAP } from "@/components/shared/IconPicker";
 
-/** True when [icon] is a lucide name the pickers can draw (catalog rows may
- * carry mobile Material names, which the web must not show as a receipt). */
+/** Material icon names commonly stored in category_catalog mapped to Lucide icons. */
+const materialCategoryIconMap: Record<string, LucideIcon> = {
+  restaurant: UtensilsCrossed,
+  dining: UtensilsCrossed,
+  shopping_basket: ShoppingBag,
+  shopping_bag: Store,
+  directions_car: Car,
+  home: Home,
+  bolt: Zap,
+  local_hospital: Heart,
+  movie: Play,
+  school: Book,
+  flight: Plane,
+  receipt_long: FileText,
+  spa: Sparkles,
+  card_giftcard: Gift,
+  trending_up: TrendingUp,
+  category: MoreHorizontal,
+  work: Briefcase,
+  attach_money: CreditCard,
+};
+
+/** Dynamic mapping of category name (lowercase) -> icon name or Lucide icon. */
+const dynamicCategoryIconMap = new Map<string, string>();
+
+export function registerCategoryIcon(categoryName: string, iconName?: string | null): void {
+  if (!categoryName || !iconName) return;
+  dynamicCategoryIconMap.set(categoryName.trim().toLowerCase(), iconName.trim());
+}
+
+export function registerCategoryIcons(
+  pairs: Array<{ name?: string | null; icon?: string | null }>,
+): void {
+  for (const p of pairs) {
+    if (p?.name && p?.icon) {
+      registerCategoryIcon(p.name, p.icon);
+    }
+  }
+}
+
+/** True when [icon] is a known Lucide or Material icon name. */
 export function isKnownCategoryIcon(icon: string): boolean {
+  if (!icon) return false;
   if (ICON_MAP[icon] || categoryIconMap[icon]) return true;
   const lower = icon.toLowerCase();
+  if (materialCategoryIconMap[lower]) return true;
   return Object.keys(ICON_MAP).some((key) => key.toLowerCase() === lower);
 }
 
 export function getCategoryIcon(nameOrIcon?: string, fallbackName?: string): LucideIcon {
   if (!nameOrIcon && !fallbackName) return Receipt;
-  if (nameOrIcon && ICON_MAP[nameOrIcon]) return ICON_MAP[nameOrIcon];
-  if (nameOrIcon && categoryIconMap[nameOrIcon]) return categoryIconMap[nameOrIcon];
-  if (nameOrIcon) {
-    const lower = nameOrIcon.toLowerCase();
+
+  const resolve = (val?: string): LucideIcon | null => {
+    if (!val) return null;
+    const clean = val.trim();
+    if (ICON_MAP[clean]) return ICON_MAP[clean];
+    if (categoryIconMap[clean]) return categoryIconMap[clean];
+
+    const lower = clean.toLowerCase();
+    if (materialCategoryIconMap[lower]) return materialCategoryIconMap[lower];
+
+    // Check dynamic icon registered for this category name
+    if (dynamicCategoryIconMap.has(lower)) {
+      const dynamicName = dynamicCategoryIconMap.get(lower)!;
+      if (ICON_MAP[dynamicName]) return ICON_MAP[dynamicName];
+      const dynLower = dynamicName.toLowerCase();
+      if (materialCategoryIconMap[dynLower]) return materialCategoryIconMap[dynLower];
+      for (const [key, icon] of Object.entries(ICON_MAP)) {
+        if (key.toLowerCase() === dynLower) return icon;
+      }
+    }
+
     for (const [key, icon] of Object.entries(ICON_MAP)) {
       if (key.toLowerCase() === lower) return icon;
     }
-  }
-  if (fallbackName && ICON_MAP[fallbackName]) return ICON_MAP[fallbackName];
-  if (fallbackName && categoryIconMap[fallbackName]) return categoryIconMap[fallbackName];
-  return Receipt;
+    return null;
+  };
+
+  return resolve(nameOrIcon) ?? resolve(fallbackName) ?? Receipt;
 }
 
 export function getPurposeIcon(nameOrIcon?: string, fallbackName?: string): LucideIcon {

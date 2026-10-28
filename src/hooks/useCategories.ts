@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchCustomCategories, fetchDefaultCategories, fetchSharedCategories } from "@/lib/supabase-data";
 import { MINIMAL_FALLBACK_CATEGORIES, mergeDefaultAndCustom } from "@/lib/category-catalog";
+import { registerCategoryIcons } from "@/lib/transaction-ui";
 import { cacheKeys, readQueryCache, writeQueryCache } from "@/lib/query-cache";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuthReady } from "@/hooks/useAuthReady";
@@ -64,13 +65,14 @@ export function useCategories() {
 
   const categories = useMemo(() => {
     const defaults = globalDefaults ?? MINIMAL_FALLBACK_CATEGORIES;
-    if (share) {
-      return mergeDefaultAndCustom(
-        defaults,
-        (sharedData ?? []).map((cat) => ({ ...cat, source: "custom" as const })),
-      );
-    }
-    return mergeDefaultAndCustom(defaults, customData ?? []);
+    const merged = share
+      ? mergeDefaultAndCustom(
+          defaults,
+          (sharedData ?? []).map((cat) => ({ ...cat, source: "custom" as const })),
+        )
+      : mergeDefaultAndCustom(defaults, customData ?? []);
+    registerCategoryIcons(merged);
+    return merged;
   }, [share, globalDefaults, customData, sharedData]);
 
   return {
