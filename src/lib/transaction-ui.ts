@@ -1,5 +1,6 @@
 import {
   ArrowDownCircle,
+  ArrowLeftRight,
   ArrowUpCircle,
   Briefcase,
   Car,
@@ -76,6 +77,21 @@ export const transactionTypeMeta: Record<TransactionType, TransactionTypeMeta> =
       text: "text-emerald-600 dark:text-emerald-400",
       button: "bg-primary text-primary-foreground hover:bg-primary/90",
       preview: "from-emerald-50/90 via-transparent to-transparent dark:from-emerald-500/10",
+    },
+  },
+  transfer: {
+    label: "Transfer",
+    description: "Move money between accounts",
+    icon: ArrowLeftRight,
+    sheetTitle: "Account transfer",
+    sheetDescription: "Record moving funds between your own accounts.",
+    accent: {
+      border: "border-blue-200 dark:border-blue-500/25",
+      surface: "bg-blue-50 dark:bg-blue-500/10",
+      icon: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
+      text: "text-blue-600 dark:text-blue-400",
+      button: "bg-primary text-primary-foreground hover:bg-primary/90",
+      preview: "from-blue-50/90 via-transparent to-transparent dark:from-blue-500/10",
     },
   },
 };

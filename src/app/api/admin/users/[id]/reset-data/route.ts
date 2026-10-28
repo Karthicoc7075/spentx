@@ -66,12 +66,16 @@ async function handleResetUserData(
 
       // 2. Delete user data across all tables
       await admin.from("daily_snapshots").delete().eq("user_id", targetUserId);
+      await admin.from("transaction_items").delete().eq("user_id", targetUserId);
       await admin.from("transaction_splits").delete().eq("user_id", targetUserId);
       await admin.from("transactions").delete().eq("user_id", targetUserId);
       await admin.from("outing_settlements").delete().eq("user_id", targetUserId);
       await admin.from("outing_expenses").delete().eq("user_id", targetUserId);
       await admin.from("outing_participants").delete().eq("user_id", targetUserId);
       await admin.from("outings").delete().eq("user_id", targetUserId);
+      await admin.from("friend_settlements").delete().eq("user_id", targetUserId);
+      await admin.from("friend_splits").delete().eq("user_id", targetUserId);
+      await admin.from("friends").delete().eq("user_id", targetUserId);
       await admin.from("settlements").delete().eq("user_id", targetUserId);
       await admin.from("savings_goals").delete().eq("user_id", targetUserId);
       await admin.from("investments").delete().eq("user_id", targetUserId);
@@ -79,9 +83,12 @@ async function handleResetUserData(
       await admin.from("monthly_plans").delete().eq("user_id", targetUserId);
       await admin.from("purpose_shares").delete().eq("owner_id", targetUserId);
       await admin.from("share_links").delete().eq("owner_id", targetUserId);
+      await admin.from("user_merchants").delete().eq("user_id", targetUserId);
+      await admin.from("recurring_bills").delete().eq("user_id", targetUserId);
       await admin.from("accounts").delete().eq("user_id", targetUserId);
       await admin.from("categories").delete().eq("user_id", targetUserId);
       await admin.from("purposes").delete().eq("user_id", targetUserId);
+      await admin.from("contributors").delete().eq("user_id", targetUserId);
 
       // 3. Seed fresh starter data
       const { data: personalPurpose } = await admin

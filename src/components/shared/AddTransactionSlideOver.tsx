@@ -507,8 +507,10 @@ export function AddTransactionSlideOver({
   // once for the initial mount and again, explicitly, only when the sheet
   // (re)opens for a given transaction — see the effect below.
   function buildFormValues(): TransactionFormValues {
+    const rawType = initialValues?.type ?? mode;
+    const resolvedType: "income" | "expense" = rawType === "income" ? "income" : "expense";
     return {
-      type: initialValues?.type ?? mode,
+      type: resolvedType,
       amount:
         initialValues?.totalAmount ??
         initialValues?.amount ??

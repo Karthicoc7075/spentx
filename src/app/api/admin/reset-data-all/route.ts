@@ -96,15 +96,83 @@ async function handleResetDataAll(request: Request) {
         });
 
         if (rpcErr) {
-          // Fallback direct cleanup
+          // Fallback direct cleanup across all child tables in safe dependency order
           await admin.from("users").update({ default_account_id: null }).eq("id", target.id);
+
+          await admin.from("daily_snapshots").delete().eq("user_id", target.id);
+          await admin.from("transaction_items").delete().eq("user_id", target.id);
+          await admin.from("transaction_splits").delete().eq("user_id", target.id);
           await admin.from("transactions").delete().eq("user_id", target.id);
+
+          await admin.from("outing_settlements").delete().eq("user_id", target.id);
+          await admin.from("outing_expenses").delete().eq("user_id", target.id);
+          await admin.from("outing_participants").delete().eq("user_id", target.id);
           await admin.from("outings").delete().eq("user_id", target.id);
+
+          await admin.from("friend_settlements").delete().eq("user_id", target.id);
+          await admin.from("friend_splits").delete().eq("user_id", target.id);
+          await admin.from("friends").delete().eq("user_id", target.id);
+          await admin.from("settlements").delete().eq("user_id", target.id);
+
+          await admin.from("savings_goals").delete().eq("user_id", target.id);
+          await admin.from("investments").delete().eq("user_id", target.id);
+          await admin.from("budgets").delete().eq("user_id", target.id);
+          await admin.from("monthly_plans").delete().eq("user_id", target.id);
+
+          await admin.from("purpose_shares").delete().eq("owner_id", target.id);
+          await admin.from("share_links").delete().eq("owner_id", target.id);
+          await admin.from("user_merchants").delete().eq("user_id", target.id);
+          await admin.from("recurring_bills").delete().eq("user_id", target.id);
+
           await admin.from("accounts").delete().eq("user_id", target.id);
+          await admin.from("categories").delete().eq("user_id", target.id);
           await admin.from("purposes").delete().eq("user_id", target.id);
+          await admin.from("contributors").delete().eq("user_id", target.id);
+
+          // Seed fresh starter data (same as handle_new_user and admin_reset_user_data)
+          await admin.from("purposes").insert([
+            {
+              user_id: target.id,
+              name: "Personal",
+              color: "#8b7ff0",
+              is_default: true,
+              can_delete: false,
+              is_active: true,
+            },
+            {
+              user_id: target.id,
+              name: "Family",
+              color: "#14B8A6",
+              is_default: false,
+              can_delete: false,
+              is_active: true,
+            },
+          ]);
+
+          const { data: cashAccount } = await admin
+            .from("accounts")
+            .insert({
+              user_id: target.id,
+              name: "Cash",
+              type: "cash",
+              is_default: true,
+              can_delete: false,
+            })
+            .select("id")
+            .single();
+
+          await admin.from("contributors").insert({
+            user_id: target.id,
+            name: "Me",
+            is_default: true,
+            can_delete: false,
+          });
+
           await admin.from("users").update({
+            default_account_id: cashAccount?.id ?? null,
             setup_completed: false,
             show_bank_onboarding: true,
+            updated_at: new Date().toISOString(),
           }).eq("id", target.id);
         }
 

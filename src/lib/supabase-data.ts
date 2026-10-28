@@ -400,6 +400,14 @@ function toTransaction(row: Row): Transaction {
     items: mappedItems.length > 0 ? mappedItems : undefined,
     hasItems: row.has_items ?? mappedItems.length > 0,
     outingId: row.outing_id ?? undefined,
+    toAccountId: row.to_account_id ? String(row.to_account_id) : undefined,
+    transferType: row.transfer_type ? String(row.transfer_type) : undefined,
+    transferTo:
+      (Array.isArray(row.tags)
+        ? (row.tags as string[])
+            .find((t) => typeof t === "string" && t.startsWith("transfer_to:"))
+            ?.slice(12)
+        : undefined) ?? undefined,
     status: (row.status ?? "completed") as TransactionStatus,
     isAutoDetected:
       row.is_auto_detected === true ||
@@ -558,12 +566,15 @@ function planPayload(userId: string | undefined, plan: MonthlyPlan): Row {
   });
 }
 
-function normalizeOutingMembers(raw: unknown): TripMember[] {
+function normalizeOutingMembers(raw: unknown, ownerUserId?: string): TripMember[] {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item: Row, index: number) => {
+  const list = raw.map((item: Row, index: number) => {
     const name = String(item?.name ?? "Member");
+    const itemUserId = item?.user_id ?? item?.userId;
     const isCurrentUser =
-      item?.isCurrentUser === true || name.toLowerCase() === "you";
+      item?.isCurrentUser === true ||
+      name.toLowerCase() === "you" ||
+      (Boolean(ownerUserId) && Boolean(itemUserId) && itemUserId === ownerUserId);
     return {
       id: String(item?.id ?? `member-${index}`),
       name: isCurrentUser ? "You" : name,
@@ -576,6 +587,17 @@ function normalizeOutingMembers(raw: unknown): TripMember[] {
       isCurrentUser,
     };
   });
+
+  // If no member is explicitly flagged as isCurrentUser, check if there is an owner entry (no friendId)
+  if (!list.some((m) => m.isCurrentUser)) {
+    const ownerEntry = list.find((m) => !m.friendId);
+    if (ownerEntry) {
+      ownerEntry.isCurrentUser = true;
+      ownerEntry.name = "You";
+    }
+  }
+
+  return list;
 }
 
 function toOuting(row: Row): Outing {
@@ -591,7 +613,7 @@ function toOuting(row: Row): Outing {
     endDate: row.end_date ?? undefined,
     status: row.status ?? "active",
     purposeId: row.purpose_id ?? undefined,
-    members: normalizeOutingMembers(row.members),
+    members: normalizeOutingMembers(row.members, row.user_id),
     participants: row.participants ?? [],
     // Per-outing toggle removed from UI; SMS settings drive detection.
     // Default true so active trips can receive linked spends.
@@ -4383,7 +4405,7 @@ function toFriendSplit(row: Row): FriendSplit {
     amount: Number(row.amount ?? 0),
     category: row.category_id ?? "",
     date: row.split_date,
-    members: normalizeOutingMembers(row.members),
+    members: normalizeOutingMembers(row.members, row.user_id),
     paidByMemberId: row.paid_by_member_id,
     splitType: row.split_type,
     splits: row.splits ?? [],

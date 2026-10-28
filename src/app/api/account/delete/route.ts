@@ -68,7 +68,20 @@ async function handleDeleteAccount(request: Request) {
     // Sign out user session
     await supabase.auth.signOut();
 
-    return NextResponse.json({ ok: true });
+    const response = NextResponse.json({ ok: true });
+
+    // Proactively expire all Supabase auth cookies on the response so client doesn't retain stale credentials
+    try {
+      const { cookies } = await import("next/headers");
+      const cookieStore = await cookies();
+      for (const cookie of cookieStore.getAll()) {
+        if (cookie.name.startsWith("sb-") || cookie.name.includes("auth-token")) {
+          response.cookies.delete(cookie.name);
+        }
+      }
+    } catch (_) {}
+
+    return response;
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unexpected error during account deletion." },

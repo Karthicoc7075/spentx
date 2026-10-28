@@ -113,8 +113,13 @@ export function toCsv(
     "Split Amount",
   ];
 
-  const escape = (value: string | number | undefined) =>
-    `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const escape = (value: string | number | undefined) => {
+    let str = String(value ?? "");
+    if (typeof value === "string" && /^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
+    return `"${str.replaceAll('"', '""')}"`;
+  };
 
   const purposeLabel = (id?: string) =>
     purposes.length > 0 ? getPurposeDisplayName(id, purposes) : (id ?? "");
