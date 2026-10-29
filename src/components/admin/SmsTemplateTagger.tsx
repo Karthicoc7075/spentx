@@ -16,9 +16,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { SmsRuleMode, SmsTemplateRule, SmsTemplateRuleType } from "@/types";
 
@@ -50,7 +52,29 @@ export const SEEDED_BANKS = [
   "Fi Money",
 ];
 
+export const SEEDED_WALLETS = [
+  "Paytm Wallet",
+  "Amazon Pay",
+  "PhonePe Wallet",
+  "MobiKwik",
+  "Freecharge",
+  "PayZapp Wallet",
+];
+
+export const ALL_SEEDED_INSTITUTIONS = [...SEEDED_WALLETS, ...SEEDED_BANKS];
+
 export const BANK_MATCH_RULES: Array<{ bank: string; keywords: string[] }> = [
+  // ── Digital Wallets (Checked first so wallet names aren't masked by UPI/bank footer links) ──
+  { bank: "Paytm Wallet", keywords: ["paytm wallet"] },
+  { bank: "Amazon Pay", keywords: ["amazon pay balance", "amazon pay wallet", "amazon pay"] },
+  { bank: "PayZapp Wallet", keywords: ["payzapp wallet", "payzapp"] },
+  { bank: "PhonePe Wallet", keywords: ["phonepe wallet"] },
+  { bank: "MobiKwik", keywords: ["mobikwik wallet", "mobikwik"] },
+  { bank: "Freecharge", keywords: ["freecharge wallet", "freecharge"] },
+
+  // ── Commercial & Payments Banks ──
+  { bank: "Paytm Payments Bank", keywords: ["paytm payments bank", "paytm bank"] },
+  { bank: "Airtel Payments Bank", keywords: ["airtel payments bank", "airtel bank"] },
   { bank: "HDFC Bank", keywords: ["hdfc", "hdfcbk"] },
   { bank: "State Bank of India (SBI)", keywords: ["sbi", "state bank", "sbin"] },
   { bank: "ICICI Bank", keywords: ["icici", "icicib"] },
@@ -68,8 +92,6 @@ export const BANK_MATCH_RULES: Array<{ bank: string; keywords: string[] }> = [
   { bank: "RBL Bank", keywords: ["rbl"] },
   { bank: "Bandhan Bank", keywords: ["bandhan"] },
   { bank: "AU Small Finance Bank", keywords: ["au small", "aubank"] },
-  { bank: "Paytm Payments Bank", keywords: ["paytm"] },
-  { bank: "Airtel Payments Bank", keywords: ["airtel"] },
   { bank: "Jupiter", keywords: ["jupiter"] },
   { bank: "Fi Money", keywords: ["fi money", "epifi"] },
 ];
@@ -312,6 +334,8 @@ export function modeLabel(m: string): string {
     rtgs: "RTGS",
     netbanking: "NetBanking",
     wallet: "Wallet",
+    wallet_topup: "Add money (top-up)",
+    wallet_transfer: "Wallet transfer",
     autopay: "AutoPay",
     cheque: "Cheque",
     bank_debit: "Bank debit",
@@ -325,6 +349,7 @@ export function smsKindLabel(k: string): string {
   if (!k) return "Not selected";
   const map: Record<string, string> = {
     payment: "Payment",
+    wallet_topup: "Wallet top-up",
     income: "Income",
     statement: "Statement",
     refund: "Refund",
@@ -495,19 +520,22 @@ function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
 
   if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) return "time";
 
-  // Long ref numbers (10+ digits, e.g. 41001234235005, UTR 281026001234)
+  // Long ref numbers (10+ digits, e.g. 41001234235005, UTR 281026001234, order 402-123456)
   if (/^\d{10,}$/.test(text) && !text.startsWith("1800") && !text.startsWith("1900")) {
     return "referenceId";
   }
   if (/^\d{9,16}$/.test(text) && !text.startsWith("1800") && !text.startsWith("1900")) {
     return "referenceId";
   }
+  if (/^\d{3,}-\d{4,}$/.test(text)) {
+    return "referenceId";
+  }
 
   // Direction / Action words
-  if (["debited", "spent", "paid", "withdrawn", "purchase", "sent"].some((k) => lower === k || lower.startsWith(k))) {
+  if (["debited", "spent", "paid", "withdrawn", "purchase", "sent", "deducted"].some((k) => lower === k || lower.startsWith(k))) {
     return "debitType";
   }
-  if (["credited", "received", "deposited"].some((k) => lower === k || lower.startsWith(k))) {
+  if (["credited", "received", "deposited", "added"].some((k) => lower === k || lower.startsWith(k))) {
     return "creditType";
   }
   if (["transfer", "transferred"].some((k) => lower === k || lower.startsWith(k))) {
@@ -535,6 +563,12 @@ function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
     "yes",
     "indusind",
     "federal",
+    "paytm",
+    "amazon",
+    "payzapp",
+    "phonepe",
+    "mobikwik",
+    "freecharge",
   ];
   if (banks.some((b) => lower === b || lower.includes(b))) return "bankName";
 
@@ -564,6 +598,21 @@ function refineAutoTags(tokens: Token[]): Token[] {
     if (lower === "card" && (prevLower === "debit" || prevLower === "credit") && prevI >= 0) {
       next[prevI] = { ...next[prevI], field: "cardPayment" };
       next[i] = { ...next[i], field: "cardPayment" };
+    }
+
+    // Multi-word Wallet: "Paytm Wallet", "PayZapp Wallet", "PhonePe Wallet", "Amazon Pay"
+    if (lower === "wallet" && ["paytm", "payzapp", "phonepe", "mobikwik", "freecharge"].includes(prevLower) && prevI >= 0) {
+      next[prevI] = { ...next[prevI], field: "bankName" };
+      next[i] = { ...next[i], field: "bankName" };
+    }
+    if (lower === "pay" && prevLower === "amazon" && prevI >= 0) {
+      next[prevI] = { ...next[prevI], field: "bankName" };
+      next[i] = { ...next[i], field: "bankName" };
+    }
+    if (lower === "balance" && prevLower === "pay" && prevPrevLower === "amazon" && prevPrevI >= 0 && prevI >= 0) {
+      next[prevPrevI] = { ...next[prevPrevI], field: "bankName" };
+      next[prevI] = { ...next[prevI], field: "bankName" };
+      next[i] = { ...next[i], field: "bankName" };
     }
 
     // "Bal Rs.1027.78"
@@ -753,6 +802,7 @@ export function buildTemplateFromTags(input: {
   titleOption?: string;
   category?: string;
   id?: string;
+  isActive?: boolean;
 }): Omit<SmsTemplateRule, "createdBy" | "createdAt" | "updatedAt"> | null {
   const {
     sampleMessage,
@@ -766,6 +816,7 @@ export function buildTemplateFromTags(input: {
     titleOption = "merchant",
     category = "Other",
     id,
+    isActive = true,
   } = input;
 
   const hasTag = tokens.some((t) => t.selectable && t.field && t.field !== "ignoreText");
@@ -877,8 +928,73 @@ export function buildTemplateFromTags(input: {
     keywords: keywords.slice(0, 25),
     sampleMessage,
     similarityThreshold: 0.65,
-    isActive: true,
+    isActive: isActive ?? true,
   };
+}
+
+// Pattern placeholder ({MERCHANT}, {ACCOUNTLAST4}…) -> tagger field id.
+const PATTERN_FIELD_BY_TOKEN: Record<string, TemplateFieldId> = (() => {
+  const m: Record<string, TemplateFieldId> = {};
+  for (const f of TEMPLATE_FIELD_TYPES) m[f.id.toUpperCase()] = f.id;
+  m.TITLE = "merchant";
+  m.MERCHANTNAME = "merchant";
+  m.CARDNUMBER = "accountLast4";
+  m.ACCOUNTNUMBER = "accountLast4";
+  return m;
+})();
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Edit mode: rebuild word tags by matching the saved template_pattern against
+ * the saved sample_message. Each {FIELD} becomes a lazy capture group; words
+ * inside a captured span get that field. Returns null when the pattern does not
+ * match the sample (caller falls back to extraction_map substring matching).
+ */
+function tagTokensFromPattern(sample: string, pattern: string, tokens: Token[]): Token[] | null {
+  if (!sample || !pattern) return null;
+  const placeholder = /\{([A-Za-z0-9_]+)\}/g;
+  const fields: (TemplateFieldId | null)[] = [];
+  // Every literal part is its own group too, so span offsets can be summed up.
+  let source = "^(\\s*)";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = placeholder.exec(pattern)) !== null) {
+    source += `(${escapeRegExp(pattern.slice(last, m.index))})([\\s\\S]+?)`;
+    fields.push(PATTERN_FIELD_BY_TOKEN[m[1].toUpperCase()] ?? null);
+    last = m.index + m[0].length;
+  }
+  if (fields.length === 0) return null;
+  source += `(${escapeRegExp(pattern.slice(last))})(\\s*)$`;
+
+  let match: RegExpExecArray | null;
+  try {
+    match = new RegExp(source).exec(sample);
+  } catch {
+    return null;
+  }
+  if (!match) return null;
+
+  const spans: { start: number; end: number; field: TemplateFieldId }[] = [];
+  let offset = match[1].length;
+  for (let i = 0; i < fields.length; i++) {
+    offset += match[2 + i * 2].length;
+    const value = match[3 + i * 2];
+    const field = fields[i];
+    if (field && value.trim()) {
+      spans.push({ start: offset, end: offset + value.length, field });
+    }
+    offset += value.length;
+  }
+  if (spans.length === 0) return null;
+
+  return tokens.map((t) => {
+    if (!t.selectable) return t;
+    const span = spans.find((sp) => t.start < sp.end && t.end > sp.start);
+    return span ? { ...t, field: span.field } : t;
+  });
 }
 
 // ============================================================================
@@ -932,9 +1048,10 @@ export function SmsTemplateTagger({
     (existing as any)?.smsKind ?? existingMeta?.smsKind ?? (existing ? "payment" : ""),
   );
   const [status, setStatus] = useState<"success" | "failed" | "pending" | "">(existing ? "success" : "");
+  const [isActive, setIsActive] = useState<boolean>(existing?.isActive ?? true);
 
-  // Server-Driven Bank State
-  const [bankCatalog, setBankCatalog] = useState<string[]>(SEEDED_BANKS);
+  // Server-Driven Bank & Wallet State
+  const [bankCatalog, setBankCatalog] = useState<string[]>(ALL_SEEDED_INSTITUTIONS);
   const [selectedBank, setSelectedBank] = useState(existing?.bankName ?? "");
   const [newBankInput, setNewBankInput] = useState("");
   const [showAddBankModal, setShowAddBankModal] = useState(false);
@@ -950,9 +1067,18 @@ export function SmsTemplateTagger({
     if (existing?.sampleMessage) {
       const map = existing.extractionMap ?? {};
       const tok = tokenize(existing.sampleMessage, false);
+      // Rebuild tags from template_pattern first; extraction_map keys are often
+      // catalog tag names (Payee, Amount…) that never appear in the sample.
+      const fromPattern = tagTokensFromPattern(
+        existing.sampleMessage,
+        existing.templatePattern ?? "",
+        tok,
+      );
+      if (fromPattern) return fromPattern;
       return tok.map((t) => {
         if (!t.selectable) return t;
         for (const [orig, f] of Object.entries(map)) {
+          if (!orig || orig === "__meta" || orig.startsWith("__")) continue;
           if (orig.includes(t.text) || t.text.includes(orig)) {
             const fieldId = f === "merchantName" || f === "title" ? "merchant" : (f as TemplateFieldId);
             return { ...t, field: fieldId };
@@ -1003,18 +1129,40 @@ export function SmsTemplateTagger({
       return;
     }
 
-    const lower = trimmed.toLowerCase();
+    // Strip URLs, disclaimers, and dispute lines so links (e.g. https://1.hdfc.bank.in/...)
+    // or SMS BLOCK lines never cause false bank detections
+    const cleanForMatching = trimmed
+      .replace(/https?:\/\/[^\s]+/gi, "")
+      .replace(/(?:report|dispute|call|sms\s+block\w*)[:\s]+[^\n\.]+/gi, "");
+    const cleanLower = cleanForMatching.toLowerCase();
 
-    // 1. Detect Bank
+    // 1. Detect Bank / Wallet
     let detectedBank = "";
+
+    // Disambiguation: Check if SMS is for Paytm Payments Bank (a bank) or Paytm Wallet (a wallet)
+    const isPaytmPaymentsBank =
+      /\bpaytm\s+(?:payments\s+)?bank\b/i.test(cleanLower) ||
+      (/\bpaytm\b/i.test(cleanLower) && /\b(?:a\/c|account|acct)\b/i.test(cleanLower) && !/\bwallet\b/i.test(cleanLower));
+
+    // If money is debited FROM a bank A/c TOWARDS a wallet, the bank is the debiting bank, not the wallet
+    const isDebitedFromBankTowardsWallet =
+      /\b(?:debited|transferred|spent)\s+from\b/i.test(cleanLower) &&
+      /\b(?:a\/c|account|acct)\b/i.test(cleanLower) &&
+      /\b(?:towards|to)\s+(?:paytm\s+wallet|amazon\s+pay|payzapp|phonepe\s+wallet|mobikwik|freecharge|wallet)\b/i.test(cleanLower);
+
     for (const rule of BANK_MATCH_RULES) {
+      // If it's a Paytm Payments Bank account SMS, don't let Paytm Wallet rule capture it
+      if (isPaytmPaymentsBank && rule.bank === "Paytm Wallet") continue;
+      // If it's debited from a bank a/c towards a wallet, skip wallet rules so the actual bank matches
+      if (isDebitedFromBankTowardsWallet && SEEDED_WALLETS.includes(rule.bank)) continue;
+
       const match = rule.keywords.some((kw) => {
         const cleanKw = kw.trim();
         if (cleanKw.length <= 4) {
           const regex = new RegExp(`(?:^|[^a-z0-9])${cleanKw}(?:[^a-z0-9]|$)`, "i");
-          return regex.test(trimmed);
+          return regex.test(cleanForMatching);
         }
-        return lower.includes(cleanKw);
+        return cleanLower.includes(cleanKw);
       });
       if (match) {
         detectedBank = rule.bank;
@@ -1026,13 +1174,13 @@ export function SmsTemplateTagger({
       for (const b of bankCatalog) {
         const bLower = b.toLowerCase();
         const cleanB = bLower.replace(/\(.*?\)/g, "").trim();
-        const words = cleanB.split(/\s+/).filter((w) => w.length > 2 && w !== "bank");
+        const words = cleanB.split(/\s+/).filter((w) => w.length > 2 && w !== "bank" && w !== "wallet");
         if (
-          lower.includes(cleanB) ||
+          cleanLower.includes(cleanB) ||
           (words.length > 0 &&
             words.some((w) => {
               const regex = new RegExp(`(?:^|[^a-z0-9])${w}(?:[^a-z0-9]|$)`, "i");
-              return regex.test(trimmed);
+              return regex.test(cleanForMatching);
             }))
         ) {
           detectedBank = b;
@@ -1049,17 +1197,17 @@ export function SmsTemplateTagger({
     let detectedKind = "";
 
     const isCredit =
-      /\b(?:credited|credit to|received|refund(?:ed)?|cashback|deposited|deposit of|reversal)\b/i.test(lower) ||
-      /\btransferred to your\b/i.test(lower);
+      /\b(?:credited|credit to|received|refund(?:ed)?|cashback|deposited|deposit of|reversal|added to|added)\b/i.test(cleanLower) ||
+      /\btransferred to your\b/i.test(cleanLower);
 
     const isNoMoneyMoved =
-      (/\b(?:statement|due date|total (?:amount )?due|min(?:imum)? (?:amount )?due|e-statement|bill generated)\b/i.test(lower) ||
-        (/\b(?:avail(?:able)?|avl) limit\b/i.test(lower) && !/\b(?:spent|debited)\b/i.test(lower))) &&
+      (/\b(?:statement|due date|total (?:amount )?due|min(?:imum)? (?:amount )?due|e-statement|bill generated)\b/i.test(cleanLower) ||
+        (/\b(?:avail(?:able)?|avl) limit\b/i.test(cleanLower) && !/\b(?:spent|debited|paid|deducted)\b/i.test(cleanLower))) &&
       !isCredit;
 
     const isDebit =
-      /\b(?:debited|spent|withdrawn|paid|transferred from|sent|txn of|deducted|purchase of|charged)\b/i.test(lower) ||
-      /\bused at\b/i.test(lower);
+      /\b(?:debited|spent|withdrawn|paid|transferred from|sent|txn of|deducted|purchase of|charged)\b/i.test(cleanLower) ||
+      /\bused at\b/i.test(cleanLower);
 
     if (isCredit) {
       detectedDirection = "money_in";
@@ -1069,76 +1217,124 @@ export function SmsTemplateTagger({
       detectedDirection = "money_out";
     }
 
-    // 3. Detect Paid From
-    if (
-      /\b(?:credit card|cc ending|c\/card)\b/i.test(lower) ||
-      (/\bcard ending\b/i.test(lower) && (/\blimit\b/i.test(lower) || /\breward\b/i.test(lower) || /\bcredit\b/i.test(lower)))
+    // 3. Detect Paid From (with disambiguation rules):
+    // - "Paytm Wallet" / "Amazon Pay balance" → Wallet
+    // - "Paytm Payments Bank A/c XXxxxx" → Bank account (it is a bank)
+    // - "via Paytm UPI / PhonePe" from a bank a/c → Bank account (app only)
+    // - "debited from Bank A/c towards Wallet" → Bank account
+    const isViaAppUpiFromBank =
+      /\bvia\s+(?:paytm|phonepe|gpay|google pay|bhim)\b/i.test(cleanLower) &&
+      /\b(?:a\/c|account|acct|bank)\b/i.test(cleanLower);
+
+    if (isViaAppUpiFromBank || isDebitedFromBankTowardsWallet || isPaytmPaymentsBank) {
+      detectedPaidFrom = "bank_account";
+    } else if (
+      SEEDED_WALLETS.includes(detectedBank) ||
+      /\b(?:wallet|paytm wallet|amazon pay(?:\s+balance)?|payzapp(?:\s+wallet)?|phonepe wallet|mobikwik|freecharge)\b/i.test(cleanLower)
+    ) {
+      detectedPaidFrom = "wallet";
+    } else if (
+      /\b(?:credit card|cc ending|c\/card)\b/i.test(cleanLower) ||
+      (/\bcard ending\b/i.test(cleanLower) && (/\blimit\b/i.test(cleanLower) || /\breward\b/i.test(cleanLower) || /\bcredit\b/i.test(cleanLower)))
     ) {
       detectedPaidFrom = "credit_card";
-    } else if (/\b(?:debit card|dc ending|dc\b|atm\/debit)\b/i.test(lower)) {
+    } else if (/\b(?:debit card|dc ending|dc\b|atm\/debit)\b/i.test(cleanLower)) {
       detectedPaidFrom = "debit_card";
-    } else if (/\b(?:wallet|paytm wallet|amazon pay)\b/i.test(lower)) {
-      detectedPaidFrom = "wallet";
-    } else if (/\b(?:a\/c|account|acct|savings|current a\/c|a\/c no)\b/i.test(lower)) {
+    } else if (/\b(?:a\/c|account|acct|savings|current a\/c|a\/c no)\b/i.test(cleanLower)) {
       detectedPaidFrom = "bank_account";
-    } else if (/\bcard ending\b/i.test(lower) || /\bcard x\b/i.test(lower)) {
-      detectedPaidFrom = /\batm\b/i.test(lower) ? "debit_card" : "credit_card";
+    } else if (/\bcard ending\b/i.test(cleanLower) || /\bcard x\b/i.test(cleanLower)) {
+      detectedPaidFrom = /\batm\b/i.test(cleanLower) ? "debit_card" : "credit_card";
     }
 
     // 4. Detect Mode
-    if (/\b(?:upi|vpa|gpay|google pay|phonepe|bhim)\b/i.test(lower) || /[a-z0-9._-]+@[a-z]{3,}/i.test(lower)) {
+    if (detectedPaidFrom === "wallet") {
+      if (detectedDirection === "money_in") {
+        if (/\bcashback\b/i.test(cleanLower)) {
+          detectedMode = "cashback";
+        } else if (/\brefund\b/i.test(cleanLower)) {
+          detectedMode = "refund";
+        } else {
+          detectedMode = "wallet_topup"; // "Add money (top-up)"
+        }
+      } else {
+        if (/\b(?:upi|vpa)\b/i.test(cleanLower)) {
+          detectedMode = "upi";
+        } else if (/\b(?:online|e-?com)\b/i.test(cleanLower)) {
+          detectedMode = "online";
+        } else {
+          detectedMode = "wallet_transfer";
+        }
+      }
+    } else if (/\b(?:upi|vpa|gpay|google pay|phonepe|bhim)\b/i.test(cleanLower) || /[a-z0-9._-]+@[a-z]{3,}/i.test(cleanLower)) {
       detectedMode = "upi";
-    } else if (/\b(?:atm|atm w\/d|atm cash|cash withdrawal|cash wdl|w\/d)\b/i.test(lower)) {
+    } else if (/\b(?:atm|atm w\/d|atm cash|cash withdrawal|cash wdl|w\/d)\b/i.test(cleanLower)) {
       detectedMode = "atm";
-    } else if (/\b(?:pos|pos purchase|pos swipe|swipe|at pos)\b/i.test(lower)) {
+    } else if (/\b(?:pos|pos purchase|pos swipe|swipe|at pos)\b/i.test(cleanLower)) {
       detectedMode = "pos";
-    } else if (/\b(?:netbanking|net banking|internet banking)\b/i.test(lower)) {
+    } else if (/\b(?:netbanking|net banking|internet banking)\b/i.test(cleanLower)) {
       detectedMode = "netbanking";
-    } else if (/\b(?:e-?com|online|payment gateway)\b/i.test(lower)) {
+    } else if (/\b(?:e-?com|online|payment gateway)\b/i.test(cleanLower)) {
       detectedMode = "online";
-    } else if (/\bneft\b/i.test(lower)) {
+    } else if (/\bneft\b/i.test(cleanLower)) {
       detectedMode = "neft";
-    } else if (/\bimps\b/i.test(lower)) {
+    } else if (/\bimps\b/i.test(cleanLower)) {
       detectedMode = "imps";
-    } else if (/\brtgs\b/i.test(lower)) {
+    } else if (/\brtgs\b/i.test(cleanLower)) {
       detectedMode = "rtgs";
-    } else if (/\b(?:autopay|nach|mandate|standing instruction)\b/i.test(lower)) {
+    } else if (/\b(?:autopay|nach|mandate|standing instruction)\b/i.test(cleanLower)) {
       detectedMode = "autopay";
-    } else if (/\b(?:cheque|chq|clearing)\b/i.test(lower)) {
+    } else if (/\b(?:cheque|chq|clearing)\b/i.test(cleanLower)) {
       detectedMode = "cheque";
-    } else if (/\b(?:fee|charges?|gst)\b/i.test(lower)) {
+    } else if (/\b(?:fee|charges?|gst)\b/i.test(cleanLower)) {
       detectedMode = detectedPaidFrom === "credit_card" ? "card_charge" : "bank_debit";
     } else if (detectedDirection === "no_money_moved") {
       detectedMode = "none";
-    } else if (detectedDirection === "money_in" && /\brefund\b/i.test(lower)) {
+    } else if (detectedDirection === "money_in" && /\brefund\b/i.test(cleanLower)) {
       detectedMode = "refund";
-    } else if (detectedDirection === "money_in" && /\bcashback\b/i.test(lower)) {
+    } else if (detectedDirection === "money_in" && /\bcashback\b/i.test(cleanLower)) {
       detectedMode = "cashback";
     } else if (detectedPaidFrom === "credit_card" || detectedPaidFrom === "debit_card") {
       detectedMode = "pos";
     }
 
     // 5. Detect SMS Kind
-    if (detectedDirection === "no_money_moved" || /\b(?:statement|due date|bill generated)\b/i.test(lower)) {
+    const isCashback = /\bcashback\b/i.test(cleanLower);
+    const isRefund = /\b(?:refund|reversal)\b/i.test(cleanLower);
+
+    const isWalletTopupSms =
+      !isCashback &&
+      !isRefund &&
+      ((/\b(?:added to|loaded to|top-?up|topped up)\b/i.test(cleanLower) &&
+        /\b(?:wallet|paytm wallet|amazon pay|payzapp)\b/i.test(cleanLower)) ||
+       (detectedPaidFrom === "wallet" && detectedDirection === "money_in") ||
+       (detectedPaidFrom === "bank_account" && detectedDirection === "money_out" && /\b(?:wallet|paytm wallet|amazon pay|payzapp)\b/i.test(cleanLower)));
+
+    if (isCashback) {
+      detectedKind = "cashback";
+    } else if (isRefund) {
+      detectedKind = "refund";
+    } else if (isWalletTopupSms) {
+      detectedKind = "wallet_topup";
+    } else if (detectedDirection === "no_money_moved" || /\b(?:statement|due date|bill generated)\b/i.test(cleanLower)) {
       detectedKind = "statement";
-    } else if (/\b(?:balance alert|bal:? rs|available balance)\b/i.test(lower) && !detectedDirection) {
+    } else if (/\b(?:balance alert|bal:? rs|available balance)\b/i.test(cleanLower) && !detectedDirection) {
       detectedKind = "balance_alert";
-    } else if (/\b(?:atm|cash withdrawal|w\/d)\b/i.test(lower)) {
+    } else if (/\b(?:atm|cash withdrawal|w\/d)\b/i.test(cleanLower)) {
       detectedKind = "cash_withdrawal";
       setSelectedCategory("ATM Cash Withdrawal");
-    } else if (/\b(?:fee|charges?|annual maintenance|penalty)\b/i.test(lower)) {
+    } else if (/\b(?:fee|charges?|annual maintenance|penalty)\b/i.test(cleanLower)) {
       detectedKind = "fee";
       setSelectedCategory("Bank Charges");
-    } else if (/\b(?:autopay|nach|mandate|recurring)\b/i.test(lower)) {
+    } else if (/\b(?:autopay|nach|mandate|recurring)\b/i.test(cleanLower)) {
       detectedKind = "autopay";
       setSelectedCategory("Utility Bills");
-    } else if (/\b(?:emi|installment)\b/i.test(lower)) {
+    } else if (/\b(?:emi|installment)\b/i.test(cleanLower)) {
       detectedKind = "emi";
-    } else if (/\b(?:refund|reversal)\b/i.test(lower)) {
+    } else if (/\b(?:refund|reversal)\b/i.test(cleanLower)) {
       detectedKind = "refund";
-    } else if (/\bcashback\b/i.test(lower)) {
+    } else if (/\bcashback\b/i.test(cleanLower)) {
       detectedKind = "cashback";
-    } else if (/\b(?:card bill payment|payment received towards credit card)\b/i.test(lower)) {
+    } else if (/\b(?:card bill payment|payment received towards credit card)\b/i.test(cleanLower)) {
       detectedKind = detectedDirection === "money_in" ? "card_bill_payment_received" : "card_bill_payment";
     } else if (detectedDirection === "money_in") {
       detectedKind = "income";
@@ -1148,12 +1344,12 @@ export function SmsTemplateTagger({
 
     // 6. Detect Status
     let detectedStatus: "success" | "failed" | "pending" | "" = "";
-    if (/\b(?:failed|declined|unsuccessful|rejected|failure)\b/i.test(lower)) {
+    if (/\b(?:failed|declined|unsuccessful|rejected|failure)\b/i.test(cleanLower)) {
       detectedStatus = "failed";
-    } else if (/\b(?:pending|initiated|processing|in progress)\b/i.test(lower)) {
+    } else if (/\b(?:pending|initiated|processing|in progress)\b/i.test(cleanLower)) {
       detectedStatus = "pending";
     } else if (
-      /\b(?:successful|success|completed|done|processed)\b/i.test(lower) ||
+      /\b(?:successful|success|completed|done|processed)\b/i.test(cleanLower) ||
       detectedDirection !== ""
     ) {
       detectedStatus = "success";
@@ -1208,7 +1404,8 @@ export function SmsTemplateTagger({
     } else if (newPaid === "debit_card") {
       if (!mode || mode === "bank_debit") setMode("pos");
     } else if (newPaid === "wallet") {
-      if (!mode) setMode("wallet_transfer");
+      if (!mode) setMode(direction === "money_in" ? "wallet_topup" : "wallet_transfer");
+      if (direction === "money_in" && !smsKind) setSmsKind("wallet_topup");
     } else {
       if (!mode || mode === "card_charge") setMode("upi");
     }
@@ -1216,7 +1413,9 @@ export function SmsTemplateTagger({
 
   function handleModeChange(newMode: string) {
     setMode(newMode);
-    if (newMode === "atm") {
+    if (newMode === "wallet_topup") {
+      setSmsKind("wallet_topup");
+    } else if (newMode === "atm") {
       setSmsKind("cash_withdrawal");
       setSelectedCategory("ATM Cash Withdrawal");
     } else if (newMode === "autopay") {
@@ -1387,7 +1586,23 @@ export function SmsTemplateTagger({
     }
 
     // Mode-specific validation rules
-    if (mode === "upi") {
+    if (paidFrom === "wallet") {
+      rules.push({
+        label: "Wallet name",
+        passed: taggedFields.has("bankName") || taggedFields.has("merchant") || Boolean(customTitle.trim()),
+      });
+      if (direction === "money_in") {
+        rules.push({
+          label: "Credit / Added word",
+          passed: taggedFields.has("creditType") || taggedFields.has("refundType"),
+        });
+      } else {
+        rules.push({
+          label: "Debit / Paid word",
+          passed: taggedFields.has("debitType"),
+        });
+      }
+    } else if (mode === "upi") {
       rules.push({
         label: "UPI ID or Merchant",
         passed: taggedFields.has("upiId") || taggedFields.has("merchant") || Boolean(customTitle.trim()),
@@ -1556,6 +1771,7 @@ export function SmsTemplateTagger({
       titleOption: resolvedTitle,
       category: selectedCategory,
       id: existing?.id,
+      isActive,
     });
     if (!rule) return;
     onSave(rule);
@@ -1574,7 +1790,17 @@ export function SmsTemplateTagger({
         <div className="space-y-1">
           <h3 className="text-base font-bold text-foreground">Template Added Successfully!</h3>
           <p className="text-xs text-muted-foreground">
-            {selectedBank} · {smsKind.toUpperCase()} ({direction})
+            {selectedBank} · {smsKind.toUpperCase()} ({direction}) ·{" "}
+            <span
+              className={cn(
+                "font-semibold",
+                isActive
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-muted-foreground",
+              )}
+            >
+              {isActive ? "Active (Synced)" : "Inactive / Draft"}
+            </span>
           </p>
         </div>
         <p className="text-xs text-muted-foreground max-w-sm">
@@ -1686,6 +1912,7 @@ export function SmsTemplateTagger({
                 setSample(e.target.value);
                 autoFillFromSms(e.target.value);
               }}
+              spellCheck={false}
               autoFocus
             />
           </div>
@@ -1702,10 +1929,10 @@ export function SmsTemplateTagger({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              {/* Bank Selection */}
+              {/* Bank / Wallet Selection */}
               <div className="space-y-1">
                 <Label className={cn("text-[11px] font-semibold", isBankMissing && "text-rose-600 dark:text-rose-400")}>
-                  Bank {isBankMissing && "*"}
+                  Bank / Wallet {isBankMissing && "*"}
                 </Label>
                 <select
                   className={cn(
@@ -1715,25 +1942,36 @@ export function SmsTemplateTagger({
                   value={selectedBank}
                   onChange={(e) => setSelectedBank(e.target.value)}
                 >
-                  <option value="">-- Select Bank (Required) --</option>
-                  {bankCatalog.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
+                  <option value="">-- Select Bank or Wallet (Required) --</option>
+                  <optgroup label="👛 Digital Wallets">
+                    {SEEDED_WALLETS.map((w) => (
+                      <option key={w} value={w}>
+                        {w}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="🏦 Commercial & Payments Banks">
+                    {bankCatalog
+                      .filter((b) => !SEEDED_WALLETS.includes(b))
+                      .map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                  </optgroup>
                 </select>
                 {isBankMissing && (
                   <div className="flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium pt-1">
                     <span className="flex items-center gap-1">
                       <AlertCircle className="size-3.5 shrink-0" />
-                      Bank not found in SMS. Select from list or add new bank.
+                      Bank or wallet not found in SMS. Select from list or add new.
                     </span>
                     <button
                       type="button"
                       className="font-bold underline hover:text-rose-700 dark:hover:text-rose-300 flex items-center gap-0.5 ml-2 shrink-0"
                       onClick={() => setShowAddBankModal(true)}
                     >
-                      <Plus className="size-3" /> Add Bank
+                      <Plus className="size-3" /> Add Bank / Wallet
                     </button>
                   </div>
                 )}
@@ -1869,9 +2107,9 @@ export function SmsTemplateTagger({
                   )}
                   {direction === "money_out" && paidFrom === "wallet" && (
                     <>
-                      <option value="upi">UPI</option>
-                      <option value="online">Online</option>
                       <option value="wallet_transfer">Wallet transfer</option>
+                      <option value="online">Online</option>
+                      <option value="upi">UPI</option>
                     </>
                   )}
                   {direction === "money_out" && !paidFrom && (
@@ -1889,6 +2127,7 @@ export function SmsTemplateTagger({
                   )}
                   {direction === "money_in" && (
                     <>
+                      <option value="wallet_topup">Add money (top-up)</option>
                       <option value="upi">UPI</option>
                       <option value="neft">NEFT / IMPS / RTGS</option>
                       <option value="payment_received">Payment received (Card)</option>
@@ -1939,6 +2178,7 @@ export function SmsTemplateTagger({
                   {direction === "money_out" && (
                     <>
                       <option value="payment">Payment (Standard spend)</option>
+                      <option value="wallet_topup">Wallet top-up (Bank ➔ Wallet transfer)</option>
                       <option value="cash_withdrawal">Cash withdrawal (ATM)</option>
                       <option value="autopay">AutoPay (Subscription / Mandate)</option>
                       <option value="fee">Fee (Bank charges / GST)</option>
@@ -1948,6 +2188,7 @@ export function SmsTemplateTagger({
                   )}
                   {direction === "money_in" && (
                     <>
+                      <option value="wallet_topup">Wallet top-up (Bank ➔ Wallet transfer)</option>
                       <option value="income">Income (Salary / Transfer in)</option>
                       <option value="refund">Refund (Lowers original spend)</option>
                       <option value="cashback">Cashback</option>
@@ -1966,6 +2207,7 @@ export function SmsTemplateTagger({
                   {!direction && (
                     <>
                       <option value="payment">Payment (Standard spend)</option>
+                      <option value="wallet_topup">Wallet top-up (Bank ➔ Wallet transfer)</option>
                       <option value="cash_withdrawal">Cash withdrawal (ATM)</option>
                       <option value="autopay">AutoPay (Subscription / Mandate)</option>
                       <option value="income">Income (Salary / Transfer in)</option>
@@ -2032,6 +2274,41 @@ export function SmsTemplateTagger({
                   onChange={(e) => setDateFormat(e.target.value)}
                 />
               </div>
+
+              {/* Status Toggle (Active / Inactive) */}
+              <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3.5 py-2.5 sm:col-span-2 shadow-2xs">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Label className="text-[11px] font-semibold text-foreground">Rule Status</Label>
+                    <Badge
+                      className={cn(
+                        "text-[9px] uppercase px-1.5 py-0",
+                        isActive
+                          ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-semibold"
+                          : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {isActive ? "Active" : "Inactive / Draft"}
+                    </Badge>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    {isActive
+                      ? "Active — Synced to all mobile devices on next rules refresh."
+                      : "Inactive / Draft — Saved on server, but skipped on mobile devices."}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "text-xs font-semibold",
+                      isActive ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+                    )}
+                  >
+                    {isActive ? "Active" : "Inactive"}
+                  </span>
+                  <Switch checked={isActive} onCheckedChange={setIsActive} />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2078,6 +2355,21 @@ export function SmsTemplateTagger({
               <span>{smsKindLabel(smsKind)}</span>
               <span className="text-muted-foreground">·</span>
               <span className="capitalize">{status}</span>
+              <span className="text-muted-foreground">·</span>
+              <button
+                type="button"
+                onClick={() => setIsActive((prev) => !prev)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-all hover:scale-105",
+                  isActive
+                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                    : "bg-muted text-muted-foreground",
+                )}
+                title="Click to toggle Active / Inactive status"
+              >
+                <span className={cn("size-1.5 rounded-full", isActive ? "bg-emerald-500" : "bg-muted-foreground")} />
+                <span>{isActive ? "Active" : "Inactive"}</span>
+              </button>
             </div>
             <Button
               type="button"
@@ -2436,6 +2728,41 @@ export function SmsTemplateTagger({
             )}
           </div>
 
+          {/* Active / Inactive Status Section */}
+          <div className="flex items-center justify-between rounded-xl border border-border bg-muted/20 p-3.5 shadow-2xs">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-foreground">Rule Status</span>
+                <Badge
+                  className={cn(
+                    "text-[9px] uppercase px-1.5 py-0",
+                    isActive
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-semibold"
+                      : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {isActive ? "Active" : "Inactive / Draft"}
+                </Badge>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {isActive
+                  ? "Active — Phones will parse SMS using this template on next refresh."
+                  : "Inactive / Draft — Saved on server but will not match transactions on mobile."}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "text-xs font-semibold",
+                  isActive ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground",
+                )}
+              >
+                {isActive ? "Active" : "Inactive"}
+              </span>
+              <Switch checked={isActive} onCheckedChange={setIsActive} />
+            </div>
+          </div>
+
           {/* Page 3 Action Footer */}
           <div className="flex items-center justify-between border-t border-border pt-3">
             <Button
@@ -2449,23 +2776,36 @@ export function SmsTemplateTagger({
             </Button>
             <Button
               type="button"
-              className="h-9 text-xs font-semibold px-4 bg-emerald-600 hover:bg-emerald-700 text-white"
+              className={cn(
+                "h-9 text-xs font-semibold px-4 text-white",
+                isActive
+                  ? "bg-emerald-600 hover:bg-emerald-700"
+                  : "bg-amber-600 hover:bg-amber-700",
+              )}
               disabled={saving || !safetyChecks.allPassed}
               onClick={handleFinalSave}
             >
               <Check className="mr-1.5 size-3.5" />
-              {saving ? "Saving to Server DB…" : "✓ Add template"}
+              {saving
+                ? "Saving to Server DB…"
+                : existing
+                ? isActive
+                  ? "✓ Save Active Template"
+                  : "Save Inactive Template"
+                : isActive
+                ? "✓ Add Active Template"
+                : "Add Inactive Template"}
             </Button>
           </div>
         </div>
       )}
 
-      {/* ── MODAL: CREATE NEW BANK ── */}
+      {/* ── MODAL: CREATE NEW BANK OR WALLET ── */}
       {showAddBankModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-sm rounded-xl border border-border bg-background p-4 shadow-xl space-y-3 animate-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-border pb-2">
-              <h4 className="text-xs font-bold text-foreground">Add New Bank to Server DB</h4>
+              <h4 className="text-xs font-bold text-foreground">Add New Bank or Wallet to Server DB</h4>
               <button
                 type="button"
                 className="text-muted-foreground hover:text-foreground"
@@ -2475,10 +2815,10 @@ export function SmsTemplateTagger({
               </button>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-[11px] font-semibold">Bank Display Name</Label>
+              <Label className="text-[11px] font-semibold">Bank or Wallet Display Name</Label>
               <Input
                 className="h-8 text-xs"
-                placeholder="e.g. AU Small Finance Bank"
+                placeholder="e.g. PhonePe Wallet or AU Small Finance Bank"
                 value={newBankInput}
                 onChange={(e) => setNewBankInput(e.target.value)}
                 autoFocus
