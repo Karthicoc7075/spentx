@@ -79,22 +79,31 @@ This document details the complete design and field taxonomy for the Admin SMS T
 
 ---
 
-## 3. Template-Level Settings
+## 3. Page 1: Paste SMS & Automated Details Detection
 
-Every template must configure these top-level properties in the editor:
+When an SMS is entered or pasted on Page 1:
+1. **Intelligent Auto-Detection**:
+   - **Bank**: Auto-matched against `BANK_MATCH_RULES` and `bankCatalog` (e.g. HDFC, SBI, ICICI, Axis, Kotak, PNB, BOB, Canara, Union, IDFC FIRST, IndusInd, Yes Bank, Federal, RBL, etc.).
+   - **Direction**: Auto-detects `Money out` (debit/spend/withdraw), `Money in` (credit/received/refund/cashback), or `No money moved` (statement/due date/alert).
+   - **Paid From / Received In**: Auto-detects `Bank account`, `Credit card`, `Debit card`, or `Wallet`.
+   - **Mode**: Auto-detects `UPI`, `ATM`, `POS`, `Online`, `NetBanking`, `NEFT`, `IMPS`, `RTGS`, `AutoPay`, `Cheque`, etc.
+   - **SMS Kind**: Auto-detects `Payment`, `Statement`, `Cash withdrawal`, `AutoPay`, `Fee`, `EMI`, `Income`, `Refund`, `Cashback`, `Balance alert`, etc.
+   - **Status**: Auto-detects `Success`, `Failed` (declined/unsuccessful), or `Pending`.
+   - **Sender ID & Date Format**: Extracted from headers and date tokens.
 
-1. **SMS Kind (Dropdown)**:
-   - `Payment` (Standard debit/credit money movement)
-   - `Statement` (Credit card monthly bill reminder)
-   - `Transfer` (ATM cash withdrawal or internal account transfer)
-   - `Failed` (Failed / declined transaction alert)
-   - `Account Update` (KYC, balance alert, non-monetary update)
-2. **Bank Name (Input / Dropdown)**:
-   - Normalized bank key (e.g., `HDFC`, `SBI`, `ICICI`, `Axis`, `Kotak`, `AirtelPaymentsBank`).
-3. **Sender IDs (Comma-Separated Input)**:
-   - Sender headers that use this format (e.g., `VM-HDFCBK, VK-HDFCBK, HDFCBK, BP-HDFCBK`).
-4. **Date Format (Input / Dropdown)**:
-   - Expected date pattern format if date is extracted (e.g., `dd-MMM-yy`, `dd/MM/yyyy`, `yyyy-MM-dd:HH:mm:ss`).
+2. **Empty Fallback & Red Border Alert**:
+   - If any field cannot be reliably determined from the SMS text, it remains **empty (`""`)**.
+   - Missing fields are highlighted with a **high-visibility red border and focus ring** (`border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700`).
+   - Specific helper alerts appear beneath each missing field guiding the admin on what needs to be selected.
+
+3. **Bank Not Found Handling**:
+   - If the SMS does not contain a recognized bank, the Bank dropdown shows `-- Select Bank (Required) --` with a red border.
+   - An alert appears with a direct `+ Add Bank` action: `⚠️ Bank not found in SMS. Select from list or add new bank.`.
+   - Clicking `+ Add Bank` opens a modal allowing admins to enter and persist the new bank name immediately.
+
+4. **Gated Progression**:
+   - The **"Next: Tag Words"** button remains disabled until all 6 required details are selected and valid.
+   - A warning prompt appears if any red-bordered fields remain unfilled.
 
 ---
 

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertCircle,
   ArrowLeft,
   Check,
   CheckCircle2,
@@ -47,6 +48,30 @@ export const SEEDED_BANKS = [
   "Airtel Payments Bank",
   "Jupiter",
   "Fi Money",
+];
+
+export const BANK_MATCH_RULES: Array<{ bank: string; keywords: string[] }> = [
+  { bank: "HDFC Bank", keywords: ["hdfc", "hdfcbk"] },
+  { bank: "State Bank of India (SBI)", keywords: ["sbi", "state bank", "sbin"] },
+  { bank: "ICICI Bank", keywords: ["icici", "icicib"] },
+  { bank: "Axis Bank", keywords: ["axis", "axisbk", "utib"] },
+  { bank: "Kotak Mahindra Bank", keywords: ["kotak", "kmbl"] },
+  { bank: "Punjab National Bank (PNB)", keywords: ["pnb", "punjab national"] },
+  { bank: "Bank of Baroda (BOB)", keywords: ["baroda", "bob "] },
+  { bank: "Canara Bank", keywords: ["canara", "cnrb"] },
+  { bank: "Union Bank of India", keywords: ["union bank", "uboi"] },
+  { bank: "IDFC FIRST Bank", keywords: ["idfc"] },
+  { bank: "IndusInd Bank", keywords: ["indusind", "indusb"] },
+  { bank: "Yes Bank", keywords: ["yes bank", "yesbnk"] },
+  { bank: "Federal Bank", keywords: ["federal"] },
+  { bank: "Indian Bank", keywords: ["indian bank"] },
+  { bank: "RBL Bank", keywords: ["rbl"] },
+  { bank: "Bandhan Bank", keywords: ["bandhan"] },
+  { bank: "AU Small Finance Bank", keywords: ["au small", "aubank"] },
+  { bank: "Paytm Payments Bank", keywords: ["paytm"] },
+  { bank: "Airtel Payments Bank", keywords: ["airtel"] },
+  { bank: "Jupiter", keywords: ["jupiter"] },
+  { bank: "Fi Money", keywords: ["fi money", "epifi"] },
 ];
 
 // Corpus of typical messages from other banks to guard against cross-bank collisions
@@ -255,13 +280,15 @@ const COMMON_MERCHANTS = new Set([
   "dunzo",
 ]);
 
-export function directionLabel(d: "money_out" | "money_in" | "no_money_moved"): string {
+export function directionLabel(d: "money_out" | "money_in" | "no_money_moved" | string): string {
   if (d === "money_out") return "Money out";
   if (d === "money_in") return "Money in";
-  return "No money moved";
+  if (d === "no_money_moved") return "No money moved";
+  return "Not selected";
 }
 
 export function paidFromLabel(p: string, _d?: string): string {
+  if (!p) return "Not selected";
   const map: Record<string, string> = {
     bank_account: "Bank account",
     debit_card: "Debit card",
@@ -273,6 +300,7 @@ export function paidFromLabel(p: string, _d?: string): string {
 }
 
 export function modeLabel(m: string): string {
+  if (!m) return "Not selected";
   const map: Record<string, string> = {
     upi: "UPI",
     pos: "POS",
@@ -284,11 +312,17 @@ export function modeLabel(m: string): string {
     rtgs: "RTGS",
     netbanking: "NetBanking",
     wallet: "Wallet",
+    autopay: "AutoPay",
+    cheque: "Cheque",
+    bank_debit: "Bank debit",
+    card_charge: "Card charge",
+    none: "None",
   };
   return map[m] ?? m.toUpperCase();
 }
 
 export function smsKindLabel(k: string): string {
+  if (!k) return "Not selected";
   const map: Record<string, string> = {
     payment: "Payment",
     income: "Income",
@@ -298,6 +332,14 @@ export function smsKindLabel(k: string): string {
     balance_alert: "Balance alert",
     failure: "Failure",
     otp_promo: "OTP / Promo",
+    fee: "Fee",
+    autopay: "AutoPay",
+    emi: "EMI",
+    cashback: "Cashback",
+    due_reminder: "Due reminder",
+    limit_alert: "Limit alert",
+    card_bill_payment: "Card bill payment",
+    card_bill_payment_received: "Card bill payment received",
   };
   return map[k] ?? k;
 }
@@ -872,17 +914,28 @@ export function SmsTemplateTagger({
   const [sample, setSample] = useState(
     existing?.sampleMessage || initialSample || "",
   );
-  const [direction, setDirection] = useState<"money_out" | "money_in" | "no_money_moved">(
-    existing?.type === "credit" ? "money_in" : existing?.type === "transfer" ? "money_out" : "money_out",
+  const existingMeta = useMemo(() => {
+    try {
+      if (existing?.extractionMap?.["__meta"]) {
+        return JSON.parse(existing.extractionMap["__meta"]);
+      }
+    } catch {}
+    return null;
+  }, [existing]);
+
+  const [direction, setDirection] = useState<"money_out" | "money_in" | "no_money_moved" | "">(
+    existing?.type === "credit" ? "money_in" : existing?.type === "transfer" ? "money_out" : existing ? "money_out" : "",
   );
-  const [paidFrom, setPaidFrom] = useState<string>("bank_account");
-  const [mode, setMode] = useState<string>("upi");
-  const [smsKind, setSmsKind] = useState<string>("payment");
-  const [status, setStatus] = useState<"success" | "failed" | "pending">("success");
+  const [paidFrom, setPaidFrom] = useState<string>(existing ? "bank_account" : "");
+  const [mode, setMode] = useState<string>(existing?.mode ?? (existing ? "upi" : ""));
+  const [smsKind, setSmsKind] = useState<string>(
+    (existing as any)?.smsKind ?? existingMeta?.smsKind ?? (existing ? "payment" : ""),
+  );
+  const [status, setStatus] = useState<"success" | "failed" | "pending" | "">(existing ? "success" : "");
 
   // Server-Driven Bank State
   const [bankCatalog, setBankCatalog] = useState<string[]>(SEEDED_BANKS);
-  const [selectedBank, setSelectedBank] = useState(existing?.bankName ?? "HDFC Bank");
+  const [selectedBank, setSelectedBank] = useState(existing?.bankName ?? "");
   const [newBankInput, setNewBankInput] = useState("");
   const [showAddBankModal, setShowAddBankModal] = useState(false);
 
@@ -927,77 +980,192 @@ export function SmsTemplateTagger({
   const [testSmsInput, setTestSmsInput] = useState("");
   const [testSmsResult, setTestSmsResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Auto-detect on initial sample if present
+  useEffect(() => {
+    if (initialSample && !existing) {
+      autoFillFromSms(initialSample);
+    }
+  }, []);
+
   // --------------------------------------------------------------------------
   // AUTO-DETECT ON SMS PASTE (Page 1)
   // --------------------------------------------------------------------------
   function autoFillFromSms(text: string) {
-    const lower = text.toLowerCase();
+    const trimmed = text.trim();
+    if (!trimmed) {
+      setSelectedBank("");
+      setDirection("");
+      setPaidFrom("");
+      setMode("");
+      setSmsKind("");
+      setStatus("");
+      setSenderId("");
+      return;
+    }
+
+    const lower = trimmed.toLowerCase();
 
     // 1. Detect Bank
-    for (const b of bankCatalog) {
-      const bCore = b.split(" ")[0].toLowerCase();
-      if (lower.includes(bCore)) {
-        setSelectedBank(b);
+    let detectedBank = "";
+    for (const rule of BANK_MATCH_RULES) {
+      const match = rule.keywords.some((kw) => {
+        const cleanKw = kw.trim();
+        if (cleanKw.length <= 4) {
+          const regex = new RegExp(`(?:^|[^a-z0-9])${cleanKw}(?:[^a-z0-9]|$)`, "i");
+          return regex.test(trimmed);
+        }
+        return lower.includes(cleanKw);
+      });
+      if (match) {
+        detectedBank = rule.bank;
         break;
       }
     }
 
+    if (!detectedBank) {
+      for (const b of bankCatalog) {
+        const bLower = b.toLowerCase();
+        const cleanB = bLower.replace(/\(.*?\)/g, "").trim();
+        const words = cleanB.split(/\s+/).filter((w) => w.length > 2 && w !== "bank");
+        if (
+          lower.includes(cleanB) ||
+          (words.length > 0 &&
+            words.some((w) => {
+              const regex = new RegExp(`(?:^|[^a-z0-9])${w}(?:[^a-z0-9]|$)`, "i");
+              return regex.test(trimmed);
+            }))
+        ) {
+          detectedBank = b;
+          break;
+        }
+      }
+    }
+    setSelectedBank(detectedBank);
+
     // 2. Detect Direction
-    if (lower.includes("credited") || lower.includes("received") || lower.includes("refund")) {
-      setDirection("money_in");
-      setPaidFrom("bank_account");
-      setMode("upi");
-      setSmsKind("income");
-    } else if (
-      lower.includes("statement") ||
-      lower.includes("due date") ||
-      lower.includes("total amount due") ||
-      lower.includes("bal:") ||
-      lower.includes("balance:")
+    let detectedDirection: "money_out" | "money_in" | "no_money_moved" | "" = "";
+    let detectedPaidFrom = "";
+    let detectedMode = "";
+    let detectedKind = "";
+
+    const isCredit =
+      /\b(?:credited|credit to|received|refund(?:ed)?|cashback|deposited|deposit of|reversal)\b/i.test(lower) ||
+      /\btransferred to your\b/i.test(lower);
+
+    const isNoMoneyMoved =
+      (/\b(?:statement|due date|total (?:amount )?due|min(?:imum)? (?:amount )?due|e-statement|bill generated)\b/i.test(lower) ||
+        (/\b(?:avail(?:able)?|avl) limit\b/i.test(lower) && !/\b(?:spent|debited)\b/i.test(lower))) &&
+      !isCredit;
+
+    const isDebit =
+      /\b(?:debited|spent|withdrawn|paid|transferred from|sent|txn of|deducted|purchase of|charged)\b/i.test(lower) ||
+      /\bused at\b/i.test(lower);
+
+    if (isCredit) {
+      detectedDirection = "money_in";
+    } else if (isNoMoneyMoved) {
+      detectedDirection = "no_money_moved";
+    } else if (isDebit) {
+      detectedDirection = "money_out";
+    }
+
+    // 3. Detect Paid From
+    if (
+      /\b(?:credit card|cc ending|c\/card)\b/i.test(lower) ||
+      (/\bcard ending\b/i.test(lower) && (/\blimit\b/i.test(lower) || /\breward\b/i.test(lower) || /\bcredit\b/i.test(lower)))
     ) {
-      if (lower.includes("card") || lower.includes("due")) {
-        setDirection("no_money_moved");
-        setPaidFrom("credit_card");
-        setMode("none");
-        setSmsKind("statement");
-      }
-    } else {
-      setDirection("money_out");
-      if (lower.includes("credit card") || lower.includes("ending")) {
-        setPaidFrom("credit_card");
-        setMode("pos");
-        setSmsKind("payment");
-      } else if (lower.includes("debit card") || lower.includes("dc ")) {
-        setPaidFrom("debit_card");
-        setMode("pos");
-        setSmsKind("payment");
-      } else if (lower.includes("atm") || lower.includes("w/d")) {
-        setPaidFrom("bank_account");
-        setMode("atm");
-        setSmsKind("cash_withdrawal");
-        setSelectedCategory("ATM Cash Withdrawal");
-      } else if (lower.includes("fee") || lower.includes("charge")) {
-        setPaidFrom("bank_account");
-        setMode("bank_debit");
-        setSmsKind("fee");
-        setSelectedCategory("Bank Charges");
-      } else {
-        setPaidFrom("bank_account");
-        setMode("upi");
-        setSmsKind("payment");
-      }
+      detectedPaidFrom = "credit_card";
+    } else if (/\b(?:debit card|dc ending|dc\b|atm\/debit)\b/i.test(lower)) {
+      detectedPaidFrom = "debit_card";
+    } else if (/\b(?:wallet|paytm wallet|amazon pay)\b/i.test(lower)) {
+      detectedPaidFrom = "wallet";
+    } else if (/\b(?:a\/c|account|acct|savings|current a\/c|a\/c no)\b/i.test(lower)) {
+      detectedPaidFrom = "bank_account";
+    } else if (/\bcard ending\b/i.test(lower) || /\bcard x\b/i.test(lower)) {
+      detectedPaidFrom = /\batm\b/i.test(lower) ? "debit_card" : "credit_card";
     }
 
-    // 3. Detect Status
-    if (lower.includes("failed") || lower.includes("declined") || lower.includes("unsuccessful")) {
-      setStatus("failed");
-    } else if (lower.includes("pending") || lower.includes("initiated")) {
-      setStatus("pending");
-    } else {
-      setStatus("success");
+    // 4. Detect Mode
+    if (/\b(?:upi|vpa|gpay|google pay|phonepe|bhim)\b/i.test(lower) || /[a-z0-9._-]+@[a-z]{3,}/i.test(lower)) {
+      detectedMode = "upi";
+    } else if (/\b(?:atm|atm w\/d|atm cash|cash withdrawal|cash wdl|w\/d)\b/i.test(lower)) {
+      detectedMode = "atm";
+    } else if (/\b(?:pos|pos purchase|pos swipe|swipe|at pos)\b/i.test(lower)) {
+      detectedMode = "pos";
+    } else if (/\b(?:netbanking|net banking|internet banking)\b/i.test(lower)) {
+      detectedMode = "netbanking";
+    } else if (/\b(?:e-?com|online|payment gateway)\b/i.test(lower)) {
+      detectedMode = "online";
+    } else if (/\bneft\b/i.test(lower)) {
+      detectedMode = "neft";
+    } else if (/\bimps\b/i.test(lower)) {
+      detectedMode = "imps";
+    } else if (/\brtgs\b/i.test(lower)) {
+      detectedMode = "rtgs";
+    } else if (/\b(?:autopay|nach|mandate|standing instruction)\b/i.test(lower)) {
+      detectedMode = "autopay";
+    } else if (/\b(?:cheque|chq|clearing)\b/i.test(lower)) {
+      detectedMode = "cheque";
+    } else if (/\b(?:fee|charges?|gst)\b/i.test(lower)) {
+      detectedMode = detectedPaidFrom === "credit_card" ? "card_charge" : "bank_debit";
+    } else if (detectedDirection === "no_money_moved") {
+      detectedMode = "none";
+    } else if (detectedDirection === "money_in" && /\brefund\b/i.test(lower)) {
+      detectedMode = "refund";
+    } else if (detectedDirection === "money_in" && /\bcashback\b/i.test(lower)) {
+      detectedMode = "cashback";
+    } else if (detectedPaidFrom === "credit_card" || detectedPaidFrom === "debit_card") {
+      detectedMode = "pos";
     }
 
-    // 4. Detect Sender ID
+    // 5. Detect SMS Kind
+    if (detectedDirection === "no_money_moved" || /\b(?:statement|due date|bill generated)\b/i.test(lower)) {
+      detectedKind = "statement";
+    } else if (/\b(?:balance alert|bal:? rs|available balance)\b/i.test(lower) && !detectedDirection) {
+      detectedKind = "balance_alert";
+    } else if (/\b(?:atm|cash withdrawal|w\/d)\b/i.test(lower)) {
+      detectedKind = "cash_withdrawal";
+      setSelectedCategory("ATM Cash Withdrawal");
+    } else if (/\b(?:fee|charges?|annual maintenance|penalty)\b/i.test(lower)) {
+      detectedKind = "fee";
+      setSelectedCategory("Bank Charges");
+    } else if (/\b(?:autopay|nach|mandate|recurring)\b/i.test(lower)) {
+      detectedKind = "autopay";
+      setSelectedCategory("Utility Bills");
+    } else if (/\b(?:emi|installment)\b/i.test(lower)) {
+      detectedKind = "emi";
+    } else if (/\b(?:refund|reversal)\b/i.test(lower)) {
+      detectedKind = "refund";
+    } else if (/\bcashback\b/i.test(lower)) {
+      detectedKind = "cashback";
+    } else if (/\b(?:card bill payment|payment received towards credit card)\b/i.test(lower)) {
+      detectedKind = detectedDirection === "money_in" ? "card_bill_payment_received" : "card_bill_payment";
+    } else if (detectedDirection === "money_in") {
+      detectedKind = "income";
+    } else if (detectedDirection === "money_out") {
+      detectedKind = "payment";
+    }
+
+    // 6. Detect Status
+    let detectedStatus: "success" | "failed" | "pending" | "" = "";
+    if (/\b(?:failed|declined|unsuccessful|rejected|failure)\b/i.test(lower)) {
+      detectedStatus = "failed";
+    } else if (/\b(?:pending|initiated|processing|in progress)\b/i.test(lower)) {
+      detectedStatus = "pending";
+    } else if (
+      /\b(?:successful|success|completed|done|processed)\b/i.test(lower) ||
+      detectedDirection !== ""
+    ) {
+      detectedStatus = "success";
+    }
+
+    setDirection(detectedDirection);
+    setPaidFrom(detectedPaidFrom);
+    setMode(detectedMode);
+    setSmsKind(detectedKind);
+    setStatus(detectedStatus);
+
+    // 7. Detect Sender ID
     const senderMatch = text.match(/(?:from|by)\s+([A-Za-z0-9_-]{6,10})/i);
     if (senderMatch) setSenderId(senderMatch[1]);
   }
@@ -1012,33 +1180,37 @@ export function SmsTemplateTagger({
   }
 
   // Handle cascading dropdown changes safely
-  function handleDirectionChange(newDir: "money_out" | "money_in" | "no_money_moved") {
+  function handleDirectionChange(newDir: "money_out" | "money_in" | "no_money_moved" | "") {
     setDirection(newDir);
+    if (!newDir) return;
     if (newDir === "money_out") {
-      setPaidFrom("bank_account");
-      setMode("upi");
-      setSmsKind("payment");
+      if (!paidFrom) setPaidFrom("bank_account");
+      if (!mode) setMode("upi");
+      if (!smsKind) setSmsKind("payment");
     } else if (newDir === "money_in") {
-      setPaidFrom("bank_account");
-      setMode("upi");
-      setSmsKind("income");
+      if (!paidFrom) setPaidFrom("bank_account");
+      if (!mode) setMode("upi");
+      if (!smsKind) setSmsKind("income");
     } else {
-      setPaidFrom("credit_card");
+      if (!paidFrom) setPaidFrom("credit_card");
       setMode("none");
-      setSmsKind("statement");
+      if (!smsKind) setSmsKind("statement");
     }
   }
 
   function handlePaidFromChange(newPaid: string) {
     setPaidFrom(newPaid);
+    if (!newPaid) return;
     if (newPaid === "credit_card") {
-      setMode(direction === "money_in" ? "payment_received" : "pos");
+      if (!mode || mode === "bank_debit") {
+        setMode(direction === "money_in" ? "payment_received" : "pos");
+      }
     } else if (newPaid === "debit_card") {
-      setMode("pos");
+      if (!mode || mode === "bank_debit") setMode("pos");
     } else if (newPaid === "wallet") {
-      setMode("wallet_transfer");
+      if (!mode) setMode("wallet_transfer");
     } else {
-      setMode("upi");
+      if (!mode || mode === "card_charge") setMode("upi");
     }
   }
 
@@ -1417,6 +1589,13 @@ export function SmsTemplateTagger({
             className="h-9 text-xs"
             onClick={() => {
               setSample("");
+              setSelectedBank("");
+              setDirection("");
+              setPaidFrom("");
+              setMode("");
+              setSmsKind("");
+              setStatus("");
+              setTokens([]);
               setStep(1);
               setIsSuccessView(false);
             }}
@@ -1428,6 +1607,23 @@ export function SmsTemplateTagger({
       </div>
     );
   }
+
+  const isBankMissing = Boolean(sample.trim() && !selectedBank);
+  const isDirMissing = Boolean(sample.trim() && !direction);
+  const isPaidFromMissing = Boolean(sample.trim() && !paidFrom);
+  const isModeMissing = Boolean(sample.trim() && direction !== "no_money_moved" && !mode);
+  const isKindMissing = Boolean(sample.trim() && !smsKind);
+  const isStatusMissing = Boolean(sample.trim() && !status);
+
+  const isPage1Complete = Boolean(
+    sample.trim() &&
+    selectedBank &&
+    direction &&
+    paidFrom &&
+    (direction === "no_money_moved" || mode) &&
+    smsKind &&
+    status
+  );
 
   const containerClass = cn(
     "space-y-4",
@@ -1509,7 +1705,9 @@ export function SmsTemplateTagger({
               {/* Bank Selection */}
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
-                  <Label className="text-[11px] font-semibold">Bank</Label>
+                  <Label className={cn("text-[11px] font-semibold", isBankMissing && "text-rose-600 dark:text-rose-400")}>
+                    Bank {isBankMissing && "*"}
+                  </Label>
                   <button
                     type="button"
                     className="text-[10px] font-medium text-primary hover:underline flex items-center gap-0.5"
@@ -1519,42 +1717,77 @@ export function SmsTemplateTagger({
                   </button>
                 </div>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isBankMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={selectedBank}
                   onChange={(e) => setSelectedBank(e.target.value)}
                 >
+                  <option value="">-- Select Bank (Required) --</option>
                   {bankCatalog.map((b) => (
                     <option key={b} value={b}>
                       {b}
                     </option>
                   ))}
                 </select>
+                {isBankMissing && (
+                  <div className="flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium pt-1">
+                    <span className="flex items-center gap-1">
+                      <AlertCircle className="size-3.5 shrink-0" />
+                      Bank not found in SMS. Select from list or add new bank.
+                    </span>
+                    <button
+                      type="button"
+                      className="font-bold underline hover:text-rose-700 dark:hover:text-rose-300 flex items-center gap-0.5 ml-2 shrink-0"
+                      onClick={() => setShowAddBankModal(true)}
+                    >
+                      <Plus className="size-3" /> Add Bank
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Direction */}
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold">Direction</Label>
+                <Label className={cn("text-[11px] font-semibold", isDirMissing && "text-rose-600 dark:text-rose-400")}>
+                  Direction {isDirMissing && "*"}
+                </Label>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isDirMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={direction}
                   onChange={(e) => handleDirectionChange(e.target.value as any)}
                 >
+                  <option value="">-- Select Direction (Required) --</option>
                   <option value="money_out">🔴 Money out (Debit / Expense)</option>
                   <option value="money_in">🟢 Money in (Credit / Income)</option>
                   <option value="no_money_moved">⚪ No money moved (Statement / Alert)</option>
                 </select>
+                {isDirMissing && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1 pt-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    Direction not detected. Please select Money out, Money in, or No money moved.
+                  </p>
+                )}
               </div>
 
               {/* Paid from / Received in */}
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold">
-                  {direction === "money_out" ? "Paid from" : direction === "money_in" ? "Received in" : "Account / Card"}
+                <Label className={cn("text-[11px] font-semibold", isPaidFromMissing && "text-rose-600 dark:text-rose-400")}>
+                  {direction === "money_out" ? "Paid from" : direction === "money_in" ? "Received in" : "Account / Card"} {isPaidFromMissing && "*"}
                 </Label>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isPaidFromMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={paidFrom}
                   onChange={(e) => handlePaidFromChange(e.target.value)}
                 >
+                  <option value="">-- Select Account / Card (Required) --</option>
                   {direction === "money_out" && (
                     <>
                       <option value="bank_account">Bank account</option>
@@ -1579,18 +1812,39 @@ export function SmsTemplateTagger({
                       <option value="wallet">Wallet</option>
                     </>
                   )}
+                  {!direction && (
+                    <>
+                      <option value="bank_account">Bank account</option>
+                      <option value="credit_card">Credit card</option>
+                      <option value="debit_card">Debit card</option>
+                      <option value="wallet">Wallet</option>
+                      <option value="prepaid_card">Prepaid card</option>
+                    </>
+                  )}
                 </select>
+                {isPaidFromMissing && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1 pt-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    Account / card type not detected. Please select Bank account, Credit card, Debit card, etc.
+                  </p>
+                )}
               </div>
 
               {/* Mode */}
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold">Mode</Label>
+                <Label className={cn("text-[11px] font-semibold", isModeMissing && "text-rose-600 dark:text-rose-400")}>
+                  Mode {isModeMissing && "*"}
+                </Label>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isModeMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={mode}
                   onChange={(e) => handleModeChange(e.target.value)}
                   disabled={direction === "no_money_moved"}
                 >
+                  <option value="">-- Select Mode (Required) --</option>
                   {direction === "money_out" && paidFrom === "bank_account" && (
                     <>
                       <option value="upi">UPI</option>
@@ -1629,6 +1883,19 @@ export function SmsTemplateTagger({
                       <option value="wallet_transfer">Wallet transfer</option>
                     </>
                   )}
+                  {direction === "money_out" && !paidFrom && (
+                    <>
+                      <option value="upi">UPI</option>
+                      <option value="pos">POS</option>
+                      <option value="online">Online</option>
+                      <option value="atm">ATM</option>
+                      <option value="autopay">AutoPay / NACH</option>
+                      <option value="neft">NEFT</option>
+                      <option value="imps">IMPS</option>
+                      <option value="rtgs">RTGS</option>
+                      <option value="netbanking">Net banking</option>
+                    </>
+                  )}
                   {direction === "money_in" && (
                     <>
                       <option value="upi">UPI</option>
@@ -1641,17 +1908,43 @@ export function SmsTemplateTagger({
                     </>
                   )}
                   {direction === "no_money_moved" && <option value="none">None (Alert / Statement)</option>}
+                  {!direction && (
+                    <>
+                      <option value="upi">UPI</option>
+                      <option value="pos">POS</option>
+                      <option value="online">Online</option>
+                      <option value="atm">ATM</option>
+                      <option value="autopay">AutoPay</option>
+                      <option value="neft">NEFT</option>
+                      <option value="imps">IMPS</option>
+                      <option value="rtgs">RTGS</option>
+                      <option value="refund">Refund</option>
+                      <option value="cashback">Cashback</option>
+                    </>
+                  )}
                 </select>
+                {isModeMissing && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1 pt-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    Payment mode not detected. Please select UPI, POS, ATM, Online, etc.
+                  </p>
+                )}
               </div>
 
               {/* SMS Kind */}
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold">SMS Kind</Label>
+                <Label className={cn("text-[11px] font-semibold", isKindMissing && "text-rose-600 dark:text-rose-400")}>
+                  SMS Kind {isKindMissing && "*"}
+                </Label>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isKindMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={smsKind}
                   onChange={(e) => setSmsKind(e.target.value)}
                 >
+                  <option value="">-- Select SMS Kind (Required) --</option>
                   {direction === "money_out" && (
                     <>
                       <option value="payment">Payment (Standard spend)</option>
@@ -1679,21 +1972,53 @@ export function SmsTemplateTagger({
                       <option value="limit_alert">Limit alert</option>
                     </>
                   )}
+                  {!direction && (
+                    <>
+                      <option value="payment">Payment (Standard spend)</option>
+                      <option value="cash_withdrawal">Cash withdrawal (ATM)</option>
+                      <option value="autopay">AutoPay (Subscription / Mandate)</option>
+                      <option value="income">Income (Salary / Transfer in)</option>
+                      <option value="refund">Refund</option>
+                      <option value="cashback">Cashback</option>
+                      <option value="statement">Statement (Credit card bill)</option>
+                      <option value="fee">Fee (Bank charges / GST)</option>
+                      <option value="emi">EMI (Installment)</option>
+                      <option value="balance_alert">Balance alert</option>
+                    </>
+                  )}
                 </select>
+                {isKindMissing && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1 pt-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    SMS kind not detected. Please select Payment, Cash withdrawal, Statement, etc.
+                  </p>
+                )}
               </div>
 
               {/* Status */}
               <div className="space-y-1">
-                <Label className="text-[11px] font-semibold">Status</Label>
+                <Label className={cn("text-[11px] font-semibold", isStatusMissing && "text-rose-600 dark:text-rose-400")}>
+                  Status {isStatusMissing && "*"}
+                </Label>
                 <select
-                  className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
+                  className={cn(
+                    "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
+                    isStatusMissing && "border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700 dark:text-rose-300 font-semibold"
+                  )}
                   value={status}
                   onChange={(e) => setStatus(e.target.value as any)}
                 >
+                  <option value="">-- Select Status (Required) --</option>
                   <option value="success">Success</option>
                   <option value="failed">Failed (Declined / ₹0 in ledger)</option>
                   <option value="pending">Pending (Verify required)</option>
                 </select>
+                {isStatusMissing && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1 pt-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    Status not detected. Please select Success, Failed, or Pending.
+                  </p>
+                )}
               </div>
 
               {/* Sender ID (Optional) */}
@@ -1724,15 +2049,23 @@ export function SmsTemplateTagger({
             <Button type="button" variant="outline" className="h-9 text-xs" onClick={onCancel}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              className="h-9 text-xs font-semibold"
-              disabled={!sample.trim()}
-              onClick={handleGoToPage2}
-            >
-              Next: Tag Words
-              <ChevronRight className="ml-1 size-3.5" />
-            </Button>
+            <div className="flex items-center gap-3">
+              {!isPage1Complete && sample.trim() && (
+                <span className="text-[11px] text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1">
+                  <AlertCircle className="size-3.5 shrink-0" />
+                  Complete required fields in red to continue
+                </span>
+              )}
+              <Button
+                type="button"
+                className="h-9 text-xs font-semibold"
+                disabled={!isPage1Complete}
+                onClick={handleGoToPage2}
+              >
+                Next: Tag Words
+                <ChevronRight className="ml-1 size-3.5" />
+              </Button>
+            </div>
           </div>
         </div>
       )}
