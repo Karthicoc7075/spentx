@@ -121,32 +121,30 @@ The Page 2 tagging interface is structured strictly in top-to-bottom order:
    - Clicking Edit returns to Page 1 with all tagged tokens preserved.
    - Returning to Page 2 automatically prunes tags that no longer fit (with a brief notice banner) and re-evaluates required tags.
 
-2. **Beneficiary Protection Banner (Conditional)**:
-   - Displays only if the SMS mentions receiver account keywords (`"to A/c"`, `"credited to"`, `"towards A/c"`) or multiple account numbers.
-   - Instructs admin to tag receiver account numbers as `ignoreText` so the user's personal account is never overwritten.
-
-3. **SMS Word Badges Cloud (Touch-Friendly)**:
+2. **SMS Word Badges Cloud (Touch-Friendly)**:
    - Tap word 1, then tap word 2 to select an entire phrase (no keyboard shift key required).
    - Trailing punctuation (`.` `,` `;` `:`) is automatically stripped into non-selectable separators (`"28-Oct-26."` → `"28-Oct-26"` + `"."`).
+   - Common known merchants (`AMAZON`, `FLIPKART`, `SWIGGY`, `ZOMATO`, etc.) and words following prepositions (`at`, `on`, `to`, `for`) are auto-tagged as `merchant`.
+   - Receiver account numbers (`to A/c XX9999`) are automatically shielded as `ignoreText` in parser logic.
    - Consecutive words for a merchant (e.g. `"Big Basket"`) share a unified Amber badge and compile into a single `{MERCHANT}` placeholder.
    - Prepositions (`at`, `on`, `via`, `to`) are automatically excluded from merchant tags.
 
-4. **Filtered Tag Palette**:
+3. **Filtered Tag Palette**:
    - Displays only relevant tags determined by Page 1 choices (Direction + Paid from + Mode + SMS kind + Status).
    - Single `"Merchant"` tag (duplicate `"Merchant name"` removed).
    - Redundant `"Payment mode"` tag removed (already selected on Page 1).
    - `[ + Show more tags ]` toggle link to access secondary tags if needed.
 
-5. **Mode-Specific Required Tags Checklist (Rule A + B + C + D)**:
-   - **UPI Mode:** Amount + (UPI ID or Merchant) + Account last4 + Debit word.
-   - **Card Mode:** Amount + Card last4 + Merchant ("where spent") + Debit word.
+4. **Mode-Specific Required Tags Checklist (Rule A + B + C + D)**:
+   - **UPI Mode:** Amount + (UPI ID or Merchant or Custom title) + Account last4 + Debit/Credit word.
+   - **Card Mode:** Amount + Card last4 + (Merchant or Custom title) + Debit word.
    - **ATM Mode:** Amount + ATM word + Account or Card last4 (no merchant required).
+   - **Fee / Charges Mode:** Amount + Account or Bank name + Debit/Charge word (no merchant required).
    - **Income / Transfer / Statement:** Kind-specific rules.
 
-6. **Title Section**:
-   - Displays resolved title (`Merchant` → `UPI ID` → `Category Default`).
-   - If there is no merchant in the SMS (like ATM or Bank Charges), the app automatically uses **Category as the Title** (`"ATM Cash Withdrawal"`, `"Bank Charges"`, etc.). A merchant tag is optional in those cases.
-   - 1-tap Category suggestion pills (`ATM Cash Withdrawal`, `Bank Charges`, `Annual Fee`, `Utility Bills`, etc.) plus custom fixed title option.
+5. **Title Section**:
+   - Displays resolved title: `Title resolved from Merchant tag: "AMAZON"`, or `Title resolved from UPI ID: "handle"`.
+   - If no merchant is present in the SMS, cleanly prompts: `No merchant in SMS. Enter custom title:` with a single input field. Entering a title satisfies the title and merchant requirement.
 
 ---
 

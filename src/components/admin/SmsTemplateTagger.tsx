@@ -221,6 +221,40 @@ const CONNECTING_WORDS = new Set([
   "block",
 ]);
 
+const COMMON_MERCHANTS = new Set([
+  "amazon",
+  "flipkart",
+  "swiggy",
+  "zomato",
+  "uber",
+  "ola",
+  "blinkit",
+  "zepto",
+  "bigbasket",
+  "myntra",
+  "netflix",
+  "spotify",
+  "makemytrip",
+  "irctc",
+  "starbucks",
+  "kfc",
+  "mcdonalds",
+  "dominos",
+  "reliance",
+  "dmart",
+  "jio",
+  "airtel",
+  "tataplay",
+  "cred",
+  "cultfit",
+  "nykaa",
+  "ajio",
+  "zara",
+  "decathlon",
+  "bookmyshow",
+  "dunzo",
+]);
+
 export function directionLabel(d: "money_out" | "money_in" | "no_money_moved"): string {
   if (d === "money_out") return "Money out";
   if (d === "money_in") return "Money in";
@@ -462,6 +496,9 @@ function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
   ];
   if (banks.some((b) => lower === b || lower.includes(b))) return "bankName";
 
+  const cleanWord = lower.replace(/[^a-z0-9]/g, "");
+  if (COMMON_MERCHANTS.has(cleanWord)) return "merchant";
+
   return null;
 }
 
@@ -527,9 +564,23 @@ function refineAutoTags(tokens: Token[]): Token[] {
       next[i] = { ...next[i], field: "ignoreText" };
     }
 
-    // After "At" or "towards" or "to" (when not followed by A/c), capitalized word -> merchant
-    if ((prevLower === "at" || prevLower === "towards") && /^[A-Za-z]/.test(text) && !next[i].field) {
-      if (!CONNECTING_WORDS.has(lower)) {
+    // Common known merchant check
+    const cleanWord = lower.replace(/[^a-z0-9]/g, "");
+    if (COMMON_MERCHANTS.has(cleanWord) && !next[i].field) {
+      next[i] = { ...next[i], field: "merchant" };
+    }
+
+    // After "At", "on", "to", "towards", "for", "info" (when not followed by A/c), word -> merchant
+    const isMerchantPreposition =
+      prevLower === "at" ||
+      prevLower === "towards" ||
+      prevLower === "for" ||
+      prevLower === "info" ||
+      (prevLower === "on" && !lower.includes("card") && !/^\d/.test(text)) ||
+      (prevLower === "to" && prevPrevLower !== "a/c" && prevPrevLower !== "account" && !isBeneficiaryAcct);
+
+    if (isMerchantPreposition && /^[A-Za-z]/.test(text) && !next[i].field) {
+      if (!CONNECTING_WORDS.has(lower) && !["card", "acct", "account", "balance", "bal", "rs", "inr"].includes(lower)) {
         next[i] = { ...next[i], field: "merchant" };
       }
     }
@@ -1136,11 +1187,10 @@ export function SmsTemplateTagger({
   const resolvedTitle = useMemo(() => {
     if (detectedMerchant) return detectedMerchant;
     if (detectedUpiId) return detectedUpiId.split("@")[0];
-    if (titleFallbackChoice === "fixed" && customTitle.trim()) return customTitle.trim();
+    if (customTitle.trim()) return customTitle.trim();
     if (mode === "atm") return "ATM Cash Withdrawal";
-    if (selectedCategory && selectedCategory.trim()) return selectedCategory.trim();
     return "Bank Transaction";
-  }, [detectedMerchant, detectedUpiId, titleFallbackChoice, customTitle, selectedCategory, mode]);
+  }, [detectedMerchant, detectedUpiId, customTitle, mode]);
 
   // Filtered tags for the Tag Palette
   const relevantTagIds = useMemo(() => {
@@ -1168,7 +1218,7 @@ export function SmsTemplateTagger({
     if (mode === "upi") {
       rules.push({
         label: "UPI ID or Merchant",
-        passed: taggedFields.has("upiId") || taggedFields.has("merchant"),
+        passed: taggedFields.has("upiId") || taggedFields.has("merchant") || Boolean(customTitle.trim()),
       });
       rules.push({
         label: "Account last4",
@@ -1192,7 +1242,7 @@ export function SmsTemplateTagger({
       });
       rules.push({
         label: "Merchant (where spent)",
-        passed: taggedFields.has("merchant"),
+        passed: taggedFields.has("merchant") || Boolean(customTitle.trim()),
       });
       if (direction === "money_in") {
         rules.push({
@@ -1731,18 +1781,7 @@ export function SmsTemplateTagger({
             </div>
           )}
 
-          {/* 2. Beneficiary Protection Banner (Shown only if SMS mentions receiver account) */}
-          {hasBeneficiaryAlert && (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-2">
-              <ShieldAlert className="size-4 shrink-0 mt-0.5" />
-              <div>
-                <strong>Beneficiary Protection:</strong> If the SMS mentions receiver account (e.g. &quot;to A/c XX9999&quot;),
-                mark it as <strong>Ignore</strong> so it doesn&apos;t overwrite the user&apos;s own account.
-              </div>
-            </div>
-          )}
-
-          {/* 3. Word Badges Cloud (Tap word, then tap last word to select phrase) */}
+          {/* Word Badges Cloud (Tap word, then tap last word to select phrase) */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label className="text-xs font-semibold">
@@ -1916,74 +1955,27 @@ export function SmsTemplateTagger({
                 <span>Title resolved from UPI ID: <strong>&quot;{detectedUpiId.split("@")[0]}&quot;</strong></span>
               </div>
             ) : (
-              <div className="space-y-2.5 text-xs">
-                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 text-[11px] text-amber-900 dark:text-amber-200">
-                  <p className="font-semibold">No merchant in SMS (e.g. ATM or Bank Charges)</p>
-                  <p className="mt-0.5 text-muted-foreground">The app automatically uses <strong>Category as the Title</strong>. A merchant tag is optional.</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-[11px] font-semibold text-muted-foreground">Choose Category / Title:</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      "ATM Cash Withdrawal",
-                      "Bank Charges",
-                      "Annual Fee",
-                      "Utility Bills",
-                      "Groceries",
-                      "Food & Dining",
-                      "Shopping",
-                      "Transfer",
-                      "Fuel",
-                      "Other",
-                    ].map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        className={cn(
-                          "rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors",
-                          selectedCategory === cat && !customTitle.trim()
-                            ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
-                            : "bg-background text-foreground border-border hover:bg-muted"
-                        )}
-                        onClick={() => {
-                          setSelectedCategory(cat);
-                          setCustomTitle("");
-                          setTitleFallbackChoice("desc");
-                        }}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-border flex items-center gap-2">
-                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">Or custom title:</span>
-                  <Input
-                    className="h-7 max-w-xs text-xs"
-                    placeholder="e.g. HDFC Annual Fee"
-                    value={customTitle}
-                    onChange={(e) => {
-                      setCustomTitle(e.target.value);
-                      setTitleFallbackChoice("fixed");
-                    }}
-                  />
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] text-muted-foreground">
+                    No merchant in SMS. Enter custom title:
+                  </p>
                   {customTitle && (
-                    <Button
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-[10px] px-2"
-                      onClick={() => {
-                        setCustomTitle("");
-                        setTitleFallbackChoice("desc");
-                      }}
+                      className="text-[10px] text-muted-foreground hover:text-foreground hover:underline"
+                      onClick={() => setCustomTitle("")}
                     >
                       Clear
-                    </Button>
+                    </button>
                   )}
                 </div>
+                <Input
+                  className="h-8 w-full text-xs"
+                  placeholder="e.g. AMAZON, ATM Cash Withdrawal, or Annual Fee"
+                  value={customTitle}
+                  onChange={(e) => setCustomTitle(e.target.value)}
+                />
               </div>
             )}
           </div>
