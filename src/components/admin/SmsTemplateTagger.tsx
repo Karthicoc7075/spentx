@@ -1704,18 +1704,9 @@ export function SmsTemplateTagger({
             <div className="grid gap-3 sm:grid-cols-2">
               {/* Bank Selection */}
               <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <Label className={cn("text-[11px] font-semibold", isBankMissing && "text-rose-600 dark:text-rose-400")}>
-                    Bank {isBankMissing && "*"}
-                  </Label>
-                  <button
-                    type="button"
-                    className="text-[10px] font-medium text-primary hover:underline flex items-center gap-0.5"
-                    onClick={() => setShowAddBankModal(true)}
-                  >
-                    <Plus className="size-3" /> New Bank
-                  </button>
-                </div>
+                <Label className={cn("text-[11px] font-semibold", isBankMissing && "text-rose-600 dark:text-rose-400")}>
+                  Bank {isBankMissing && "*"}
+                </Label>
                 <select
                   className={cn(
                     "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
