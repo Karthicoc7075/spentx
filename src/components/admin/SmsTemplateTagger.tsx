@@ -466,6 +466,37 @@ export function getRelevantTagIds(
   return ids;
 }
 
+// Type / action words (Debit word, Credit word, ATM word…). Whole-word match on
+// the letters only, so "statement" is not an ATM word and "Debit Card" stays card.
+const TYPE_WORD_RULES: Array<[RegExp, TemplateFieldId]> = [
+  [/^(?:debited|spent|paid|withdrawn|deducted|sent|purchase|purchased|charged)$/, "debitType"],
+  [/^(?:credited|received|deposited|added)$/, "creditType"],
+  [/^(?:refund|refunded|reversal|reversed)$/, "refundType"],
+  [/^(?:transfer|transferred)$/, "transferType"],
+  [/^atm$/, "atmWithdraw"],
+  [/^emi$/, "emi"],
+  [/^autopay$/, "autoPay"],
+  [/^(?:failed|declined|unsuccessful|rejected)$/, "status"],
+];
+
+function detectTypeWord(text: string): TemplateFieldId | null {
+  const word = text.toLowerCase().replace(/[^a-z]/g, "");
+  if (!word) return null;
+  for (const [re, field] of TYPE_WORD_RULES) {
+    if (re.test(word)) return field;
+  }
+  return null;
+}
+
+/** Tag untagged words that are type/action words; never overrides existing tags. */
+function tagTypeWords(tokens: Token[]): Token[] {
+  return tokens.map((t) => {
+    if (!t.selectable || t.field) return t;
+    const field = detectTypeWord(t.text);
+    return field ? { ...t, field } : t;
+  });
+}
+
 function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
   const lower = text.toLowerCase().trim();
   const prevLower = (prev ?? "").toLowerCase().trim();
@@ -531,23 +562,10 @@ function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
     return "referenceId";
   }
 
-  // Direction / Action words
-  if (["debited", "spent", "paid", "withdrawn", "purchase", "sent", "deducted"].some((k) => lower === k || lower.startsWith(k))) {
-    return "debitType";
-  }
-  if (["credited", "received", "deposited", "added"].some((k) => lower === k || lower.startsWith(k))) {
-    return "creditType";
-  }
-  if (["transfer", "transferred"].some((k) => lower === k || lower.startsWith(k))) {
-    return "transferType";
-  }
-  if (lower === "atm" || lower.includes("atm")) return "atmWithdraw";
+  // Direction / action / status words
+  const typeWord = detectTypeWord(text);
+  if (typeWord) return typeWord;
   if (lower === "card") return "cardPayment";
-
-  // Failed / pending status
-  if (["failed", "declined", "unsuccessful", "rejected"].includes(lower)) {
-    return "status";
-  }
 
   const banks = [
     "hdfc",
@@ -1074,18 +1092,22 @@ export function SmsTemplateTagger({
         existing.templatePattern ?? "",
         tok,
       );
-      if (fromPattern) return fromPattern;
-      return tok.map((t) => {
+      if (fromPattern) return tagTypeWords(fromPattern);
+      // Fallback: only keys that are real sample text (catalog names like
+      // "Balance" would otherwise tag "Bal", "Ref"… by substring).
+      const sampleText = existing.sampleMessage;
+      return tagTypeWords(tok.map((t) => {
         if (!t.selectable) return t;
         for (const [orig, f] of Object.entries(map)) {
           if (!orig || orig === "__meta" || orig.startsWith("__")) continue;
+          if (!sampleText.includes(orig)) continue;
           if (orig.includes(t.text) || t.text.includes(orig)) {
             const fieldId = f === "merchantName" || f === "title" ? "merchant" : (f as TemplateFieldId);
             return { ...t, field: fieldId };
           }
         }
         return t;
-      });
+      }));
     }
     if (initialSample) return tokenize(initialSample, true);
     return [];
