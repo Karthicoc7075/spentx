@@ -112,15 +112,49 @@ Before saving, the tagger validates that the minimum required fields for the cho
 
 ---
 
-## 5. Pre-Save Quality Checks & Guardrails
+## 5. Page 2 Layout & Interaction Rules
 
-To prevent faulty templates from reaching user devices, the Admin Tagger executes three automated checks before saving:
+The Page 2 tagging interface is structured strictly in top-to-bottom order:
 
-1. **No Overlapping Tags Check**:
-   - The same word token cannot have two conflicting tags (e.g., marked as both `amount` and `balance`, or `cardLast4` and `accountLast4`).
-2. **Interactive Extraction Preview**:
-   - Renders the live parsed JSON output directly beside the sample SMS so the admin sees exactly what values will be extracted before committing.
-3. **Corpus Conflict Test (Cross-Bank Collision Guard)**:
-   - Runs the newly generated regex against a test corpus of existing SMS messages from **other banks**.
-   - If the template matches another bank's message with high similarity, it triggers a warning:
-     > *"Warning: This pattern also matched an SBI SMS in the corpus. Add a bank name keyword or restrict Sender IDs to prevent false matches."*
+1. **Details Summary Bar**:
+   - `Money out · Debit card · POS · Payment · Success [ ✏️ Edit ]`
+   - Clicking Edit returns to Page 1 with all tagged tokens preserved.
+   - Returning to Page 2 automatically prunes tags that no longer fit (with a brief notice banner) and re-evaluates required tags.
+
+2. **Beneficiary Protection Banner (Conditional)**:
+   - Displays only if the SMS mentions receiver account keywords (`"to A/c"`, `"credited to"`, `"towards A/c"`) or multiple account numbers.
+   - Instructs admin to tag receiver account numbers as `ignoreText` so the user's personal account is never overwritten.
+
+3. **SMS Word Badges Cloud (Touch-Friendly)**:
+   - Tap word 1, then tap word 2 to select an entire phrase (no keyboard shift key required).
+   - Trailing punctuation (`.` `,` `;` `:`) is automatically stripped into non-selectable separators (`"28-Oct-26."` → `"28-Oct-26"` + `"."`).
+   - Consecutive words for a merchant (e.g. `"Big Basket"`) share a unified Amber badge and compile into a single `{MERCHANT}` placeholder.
+   - Prepositions (`at`, `on`, `via`, `to`) are automatically excluded from merchant tags.
+
+4. **Filtered Tag Palette**:
+   - Displays only relevant tags determined by Page 1 choices (Direction + Paid from + Mode + SMS kind + Status).
+   - Single `"Merchant"` tag (duplicate `"Merchant name"` removed).
+   - Redundant `"Payment mode"` tag removed (already selected on Page 1).
+   - `[ + Show more tags ]` toggle link to access secondary tags if needed.
+
+5. **Mode-Specific Required Tags Checklist (Rule A + B + C + D)**:
+   - **UPI Mode:** Amount + (UPI ID or Merchant) + Account last4 + Debit word.
+   - **Card Mode:** Amount + Card last4 + Merchant ("where spent") + Debit word.
+   - **ATM Mode:** Amount + ATM word + Account or Card last4 (no merchant required).
+   - **Income / Transfer / Statement:** Kind-specific rules.
+
+6. **Title Section**:
+   - Displays resolved title (`Merchant` → `UPI ID` → `Category Default`).
+   - If there is no merchant in the SMS (like ATM or Bank Charges), the app automatically uses **Category as the Title** (`"ATM Cash Withdrawal"`, `"Bank Charges"`, etc.). A merchant tag is optional in those cases.
+   - 1-tap Category suggestion pills (`ATM Cash Withdrawal`, `Bank Charges`, `Annual Fee`, `Utility Bills`, etc.) plus custom fixed title option.
+
+---
+
+## 6. Pre-Save Quality Checks & Guardrails
+
+The Admin Tagger executes automated checks before saving:
+1. **Single Amount Only**: Exactly one transaction amount is tagged.
+2. **Reference Isolation**: Ref / UTR numbers are not confused with amounts or account numbers.
+3. **No Stray Numbers**: Flags any untagged 4+ digit numeric strings.
+4. **Required Tags Present**: Rule A + B + C + D validation pass.
+5. **Corpus Conflict Test**: Guards against cross-bank false matches.

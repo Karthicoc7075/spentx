@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Pencil,
   Plus,
   RotateCcw,
   ShieldAlert,
@@ -96,8 +97,7 @@ export const TEMPLATE_FIELD_TYPES = [
   { id: "autoPay", label: "AutoPay word", group: "type" },
 
   // Parties & Accounts
-  { id: "title", label: "Title / Merchant", group: "who" },
-  { id: "merchantName", label: "Merchant name", group: "who" },
+  { id: "merchant", label: "Merchant", group: "who" },
   { id: "bankName", label: "Bank name", group: "who" },
   { id: "accountLast4", label: "Account last4", group: "card" },
   { id: "cardLast4", label: "Card last4", group: "card" },
@@ -105,7 +105,6 @@ export const TEMPLATE_FIELD_TYPES = [
   { id: "accountType", label: "Account type (Savings/Current)", group: "card" },
 
   // Tracking, IDs & Channels
-  { id: "paymentMode", label: "Payment mode (UPI/POS/NEFT…)", group: "ids" },
   { id: "referenceId", label: "Ref / UTR", group: "ids" },
   { id: "upiId", label: "UPI ID", group: "ids" },
   { id: "chequeNumber", label: "Cheque no.", group: "ids" },
@@ -149,8 +148,11 @@ const FIELD_COLORS: Record<string, string> = {
   feeOrInterest: "bg-red-500/20 text-red-800 ring-red-500/40 dark:text-red-300",
   autoPay: "bg-sky-500/20 text-sky-800 ring-sky-500/40 dark:text-sky-300",
 
-  title: "bg-violet-500/20 text-violet-800 ring-violet-500/40 dark:text-violet-300",
-  merchantName: "bg-violet-500/25 text-violet-900 ring-violet-500/40 dark:text-violet-200",
+  // Unified Amber color for Merchant ("Big Basket")
+  merchant: "bg-amber-500/25 text-amber-900 ring-amber-500/40 dark:text-amber-200",
+  title: "bg-amber-500/25 text-amber-900 ring-amber-500/40 dark:text-amber-200",
+  merchantName: "bg-amber-500/25 text-amber-900 ring-amber-500/40 dark:text-amber-200",
+
   bankName: "bg-sky-500/20 text-sky-800 ring-sky-500/40 dark:text-sky-300",
   accountLast4: "bg-cyan-500/20 text-cyan-800 ring-cyan-500/40 dark:text-cyan-300",
   cardLast4: "bg-blue-500/25 text-blue-900 ring-blue-500/40 dark:text-blue-200",
@@ -164,8 +166,8 @@ const FIELD_COLORS: Record<string, string> = {
   status: "bg-red-500/25 text-red-900 ring-red-500/40 dark:text-red-200",
   phone: "bg-slate-500/20 text-slate-700 ring-slate-500/40 dark:text-slate-300",
 
-  date: "bg-amber-500/20 text-amber-800 ring-amber-500/40 dark:text-amber-300",
-  time: "bg-amber-500/15 text-amber-700 ring-amber-500/30 dark:text-amber-200",
+  date: "bg-yellow-500/20 text-yellow-800 ring-yellow-500/40 dark:text-yellow-300",
+  time: "bg-yellow-500/15 text-yellow-700 ring-yellow-500/30 dark:text-yellow-200",
   dateTime: "bg-orange-500/20 text-orange-800 ring-orange-500/40 dark:text-orange-200",
   dueDate: "bg-red-500/20 text-red-800 ring-red-500/40 dark:text-red-300",
 
@@ -193,6 +195,175 @@ function tokenTag(field: string) {
 // ============================================================================
 // TOKENIZING & AUTO-DETECTION
 // ============================================================================
+
+const CONNECTING_WORDS = new Set([
+  "at",
+  "on",
+  "via",
+  "to",
+  "for",
+  "using",
+  "with",
+  "from",
+  "by",
+  "in",
+  "through",
+  "dated",
+  "ref",
+  "refno",
+  "avl",
+  "bal",
+  "balance",
+  "clear",
+  "sms",
+  "not",
+  "call",
+  "block",
+]);
+
+export function directionLabel(d: "money_out" | "money_in" | "no_money_moved"): string {
+  if (d === "money_out") return "Money out";
+  if (d === "money_in") return "Money in";
+  return "No money moved";
+}
+
+export function paidFromLabel(p: string, _d?: string): string {
+  const map: Record<string, string> = {
+    bank_account: "Bank account",
+    debit_card: "Debit card",
+    credit_card: "Credit card",
+    wallet: "Wallet",
+    prepaid_card: "Prepaid card",
+  };
+  return map[p] ?? p;
+}
+
+export function modeLabel(m: string): string {
+  const map: Record<string, string> = {
+    upi: "UPI",
+    pos: "POS",
+    online: "Online",
+    card: "Card",
+    atm: "ATM",
+    neft: "NEFT",
+    imps: "IMPS",
+    rtgs: "RTGS",
+    netbanking: "NetBanking",
+    wallet: "Wallet",
+  };
+  return map[m] ?? m.toUpperCase();
+}
+
+export function smsKindLabel(k: string): string {
+  const map: Record<string, string> = {
+    payment: "Payment",
+    income: "Income",
+    statement: "Statement",
+    refund: "Refund",
+    cash_withdrawal: "Cash withdrawal",
+    balance_alert: "Balance alert",
+    failure: "Failure",
+    otp_promo: "OTP / Promo",
+  };
+  return map[k] ?? k;
+}
+
+export function getRelevantTagIds(
+  direction: string,
+  paidFrom: string,
+  mode: string,
+  smsKind: string,
+  status: string,
+): Set<TemplateFieldId> {
+  const ids = new Set<TemplateFieldId>([
+    "amount",
+    "bankName",
+    "referenceId",
+    "date",
+    "time",
+    "dateTime",
+    "balance",
+    "ignoreText",
+  ]);
+
+  // Direction & SMS kind
+  if (direction === "money_out") {
+    if (smsKind === "payment") {
+      ids.add("debitType");
+      ids.add("merchant");
+    } else if (smsKind === "cash_withdrawal") {
+      ids.add("atmWithdraw");
+      ids.add("debitType");
+    } else if (smsKind === "statement") {
+      ids.add("totalDue");
+      ids.add("minimumDue");
+      ids.add("dueDate");
+    } else if (smsKind === "refund") {
+      ids.add("refundType");
+      ids.add("merchant");
+    } else {
+      ids.add("debitType");
+      ids.add("merchant");
+    }
+  } else if (direction === "money_in") {
+    ids.add("creditType");
+    ids.add("merchant");
+    if (smsKind === "refund") ids.add("refundType");
+  } else {
+    // no_money_moved
+    if (smsKind === "statement") {
+      ids.add("totalDue");
+      ids.add("minimumDue");
+      ids.add("dueDate");
+      ids.add("cardLimit");
+    } else if (smsKind === "balance_alert") {
+      ids.add("balance");
+      ids.add("cardLimit");
+    }
+  }
+
+  // Paid from
+  if (paidFrom === "debit_card") {
+    ids.add("cardLast4");
+    ids.add("cardPayment");
+    ids.add("accountLast4");
+  } else if (paidFrom === "credit_card") {
+    ids.add("cardLast4");
+    ids.add("cardPayment");
+    ids.add("cardLimit");
+    ids.add("totalDue");
+    ids.add("minimumDue");
+    ids.add("dueDate");
+    ids.add("emi");
+    ids.add("feeOrInterest");
+  } else if (paidFrom === "bank_account") {
+    ids.add("accountLast4");
+    ids.add("accountType");
+    ids.add("chequeNumber");
+  }
+
+  // Mode
+  if (mode === "upi") {
+    ids.add("upiId");
+    ids.add("merchant");
+  } else if (mode === "pos" || mode === "online" || mode === "card") {
+    ids.add("merchant");
+    ids.add("cardLast4");
+    ids.add("cardPayment");
+  } else if (mode === "atm") {
+    ids.add("atmWithdraw");
+  } else if (mode === "neft" || mode === "imps" || mode === "rtgs") {
+    ids.add("transferType");
+    ids.add("accountLast4");
+  }
+
+  // Status
+  if (status === "failed" || status === "pending") {
+    ids.add("status");
+  }
+
+  return ids;
+}
 
 function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
   const lower = text.toLowerCase().trim();
@@ -233,18 +404,26 @@ function autoDetectField(text: string, prev?: string): TemplateFieldId | null {
   if (text.includes("@") && !text.includes(".com")) return "upiId";
 
   // Phone / helpline
-  if (/^\d{8,}(?:\/[a-z]+)?$/i.test(text) || /^1[89]\d{8,}/.test(text) || /^\d{10,}$/.test(text)) {
+  if (/^\d{8,}(?:\/[a-z]+)?$/i.test(text) || /^1[89]\d{8,}/.test(text)) {
     return "phone";
   }
 
-  if (/^\d{2}[-/]\d{2}[-/]\d{2,4}$/.test(text) || /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(text)) {
+  // Date regex supporting month names (e.g. 28-Oct-26, 28-Oct-2026, 28/10/2026, 28-10-26)
+  if (
+    /^\d{1,2}[-/](?:[a-zA-Z]{3,}|\d{1,2})[-/]\d{2,4}$/.test(text) ||
+    /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(text)
+  ) {
     if (prevLower.includes("due")) return "dueDate";
     return "date";
   }
+
   if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(text)) return "time";
 
-  // Long ref numbers
-  if (/^\d{9,16}$/.test(text) && !text.startsWith("18") && !text.startsWith("19")) {
+  // Long ref numbers (10+ digits, e.g. 41001234235005, UTR 281026001234)
+  if (/^\d{10,}$/.test(text) && !text.startsWith("1800") && !text.startsWith("1900")) {
+    return "referenceId";
+  }
+  if (/^\d{9,16}$/.test(text) && !text.startsWith("1800") && !text.startsWith("1900")) {
     return "referenceId";
   }
 
@@ -295,10 +474,18 @@ function refineAutoTags(tokens: Token[]): Token[] {
   for (let s = 0; s < selIdx.length; s++) {
     const i = selIdx[s];
     const prevI = s > 0 ? selIdx[s - 1] : -1;
+    const prevPrevI = s > 1 ? selIdx[s - 2] : -1;
     const prevText = prevI >= 0 ? next[prevI].text : "";
     const prevLower = prevText.toLowerCase();
+    const prevPrevLower = prevPrevI >= 0 ? next[prevPrevI].text.toLowerCase() : "";
     const text = next[i].text;
     const lower = text.toLowerCase();
+
+    // Multi-word Card Type: "Debit Card" or "Credit Card"
+    if (lower === "card" && (prevLower === "debit" || prevLower === "credit") && prevI >= 0) {
+      next[prevI] = { ...next[prevI], field: "cardPayment" };
+      next[i] = { ...next[i], field: "cardPayment" };
+    }
 
     // "Bal Rs.1027.78"
     if (
@@ -316,17 +503,38 @@ function refineAutoTags(tokens: Token[]): Token[] {
       next[i] = { ...next[i], field: "cardLast4" };
     }
 
-    // "to A/c XX9999" -> Beneficiary shield: mark other account as ignoreText
-    if ((prevLower === "to" || prevLower === "in") && (/^[x*X]{2,}\d{3,4}$/.test(text) || /^\d{4,}$/.test(text))) {
+    // Beneficiary Protection: "to A/c XX9999", "to XX9999", "credited to XX9999", "towards A/c XX9999", "to beneficiary A/c XX9999"
+    let isBeneficiaryAcct = false;
+    for (let back = 1; back <= 4; back++) {
+      const bIdx = s - back;
+      if (bIdx >= 0) {
+        const bText = next[selIdx[bIdx]].text.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (bText === "to" || bText === "towards" || bText === "transferred" || bText === "credited" || bText === "beneficiary") {
+          isBeneficiaryAcct = true;
+          break;
+        }
+        if (bText === "from" || bText === "debited") {
+          isBeneficiaryAcct = false;
+          break;
+        }
+      }
+    }
+
+    if (
+      isBeneficiaryAcct &&
+      (/^[x*X.]{1,}\d{2,6}$/i.test(text) || /^\d{4,}$/.test(text) || next[i].field === "accountLast4")
+    ) {
       next[i] = { ...next[i], field: "ignoreText" };
     }
 
-    // After "At" next capitalized words → title
-    if (prevLower === "at" && /^[A-Za-z]/.test(text) && !next[i].field) {
-      next[i] = { ...next[i], field: "title" };
+    // After "At" or "towards" or "to" (when not followed by A/c), capitalized word -> merchant
+    if ((prevLower === "at" || prevLower === "towards") && /^[A-Za-z]/.test(text) && !next[i].field) {
+      if (!CONNECTING_WORDS.has(lower)) {
+        next[i] = { ...next[i], field: "merchant" };
+      }
     }
 
-    // Helpline: 18002586161/SMS
+    // Helpline
     if (/^\d{8,}\//.test(text) || lower.includes("1800")) {
       next[i] = { ...next[i], field: "phone" };
     }
@@ -336,13 +544,29 @@ function refineAutoTags(tokens: Token[]): Token[] {
     }
   }
 
-  // Propagate title to following ALLCAPS tokens (e.g. PAULPANDI KATHIRESAN)
+  // Extra Beneficiary Guard: If multiple accountLast4 tags remain in money_out, ensure receiver accounts are ignoreText
+  const acctIndices = next
+    .map((t, idx) => (t.selectable && t.field === "accountLast4" ? idx : -1))
+    .filter((idx) => idx >= 0);
+  if (acctIndices.length > 1) {
+    for (let a = 1; a < acctIndices.length; a++) {
+      const idx = acctIndices[a];
+      next[idx] = { ...next[idx], field: "ignoreText" };
+    }
+  }
+
+  // Propagate merchant to consecutive words (e.g. "BIG BASKET"), STOPPING at connector words!
   for (let s = 0; s < selIdx.length - 1; s++) {
     const i = selIdx[s];
     const j = selIdx[s + 1];
-    if (next[i].field === "title" && /^[A-Za-z][A-Za-z.'-]+$/.test(next[j].text)) {
-      if (!next[j].field || next[j].field === "title") {
-        next[j] = { ...next[j], field: "title" };
+    if (next[i].field === "merchant") {
+      const nextWord = next[j].text.toLowerCase();
+      // STOP before connector words like "on", "at", "via", "using", "with"
+      if (CONNECTING_WORDS.has(nextWord)) {
+        continue;
+      }
+      if (/^[A-Za-z0-9][A-Za-z0-9.'&-]*$/.test(next[j].text) && (!next[j].field || next[j].field === "merchant")) {
+        next[j] = { ...next[j], field: "merchant" };
       }
     }
   }
@@ -356,6 +580,7 @@ function tokenize(message: string, withAuto = true): Token[] {
   let lastEnd = 0;
   let match: RegExpExecArray | null;
   let prevSelectable = "";
+
   while ((match = pattern.exec(message)) !== null) {
     if (match.index > lastEnd) {
       const ws = message.slice(lastEnd, match.index);
@@ -369,17 +594,43 @@ function tokenize(message: string, withAuto = true): Token[] {
         });
       }
     }
-    const word = match[0];
+
+    const rawWord = match[0];
+    let word = rawWord;
+    let trailingPunct = "";
+
+    // Strip trailing punctuation from words ("28-Oct-26." -> "28-Oct-26", "41001234235005." -> "41001234235005")
+    const matchPunct = rawWord.match(/^(.+?)([.,;:!?\]\)]+)$/);
+    if (matchPunct && !/^([.,;:!?\]\)]+)$/.test(rawWord)) {
+      word = matchPunct[1];
+      trailingPunct = matchPunct[2];
+    }
+
+    const wordStart = match.index;
+    const wordEnd = match.index + word.length;
+
     tokens.push({
       text: word,
-      start: match.index,
-      end: match.index + word.length,
+      start: wordStart,
+      end: wordEnd,
       selectable: true,
       field: withAuto ? autoDetectField(word, prevSelectable) : null,
     });
     prevSelectable = word;
-    lastEnd = match.index + word.length;
+
+    if (trailingPunct) {
+      tokens.push({
+        text: trailingPunct,
+        start: wordEnd,
+        end: match.index + rawWord.length,
+        selectable: false,
+        field: null,
+      });
+    }
+
+    lastEnd = match.index + rawWord.length;
   }
+
   if (lastEnd < message.length) {
     tokens.push({
       text: message.slice(lastEnd),
@@ -389,6 +640,7 @@ function tokenize(message: string, withAuto = true): Token[] {
       field: null,
     });
   }
+
   return withAuto ? refineAutoTags(tokens) : tokens;
 }
 
@@ -467,9 +719,13 @@ export function buildTemplateFromTags(input: {
         ? "accountLast4"
         : seg.field === "dateTime"
           ? "date"
-          : seg.field === "phone"
-            ? "ignoreText"
-            : seg.field;
+          : seg.field === "merchant" || seg.field === "merchantName" || seg.field === "title"
+            ? "merchant"
+            : seg.field === "cardPayment"
+              ? "cardPayment"
+              : seg.field === "phone"
+                ? "ignoreText"
+                : seg.field;
 
     if (fieldForPattern === "ignoreText") {
       for (const w of original.trim().split(/\s+/)) {
@@ -486,8 +742,8 @@ export function buildTemplateFromTags(input: {
         ? "accountLast4"
         : seg.field === "dateTime"
           ? "date"
-          : seg.field === "merchantName"
-            ? "title"
+          : seg.field === "merchant" || seg.field === "merchantName" || seg.field === "title"
+            ? "merchant"
             : seg.field;
   }
 
@@ -584,7 +840,7 @@ export function SmsTemplateTagger({
   const [dateFormat, setDateFormat] = useState("dd-MMM-yy");
 
   // --------------------------------------------------------------------------
-  // PAGE 2 STATE: Word Badges, Title & Category
+  // PAGE 2 STATE: Word Badges, Filtered Palette & Title
   // --------------------------------------------------------------------------
   const [tokens, setTokens] = useState<Token[]>(() => {
     if (existing?.sampleMessage) {
@@ -594,7 +850,8 @@ export function SmsTemplateTagger({
         if (!t.selectable) return t;
         for (const [orig, f] of Object.entries(map)) {
           if (orig.includes(t.text) || t.text.includes(orig)) {
-            return { ...t, field: f as TemplateFieldId };
+            const fieldId = f === "merchantName" || f === "title" ? "merchant" : (f as TemplateFieldId);
+            return { ...t, field: fieldId };
           }
         }
         return t;
@@ -605,6 +862,8 @@ export function SmsTemplateTagger({
   });
   const [activeToken, setActiveToken] = useState<number | null>(null);
   const [rangeAnchor, setRangeAnchor] = useState<number | null>(null);
+  const [showMoreTags, setShowMoreTags] = useState(false);
+  const [reconcileNotice, setReconcileNotice] = useState<string | null>(null);
 
   // Title selection hierarchy
   const [customTitle, setCustomTitle] = useState("");
@@ -665,6 +924,12 @@ export function SmsTemplateTagger({
         setPaidFrom("bank_account");
         setMode("atm");
         setSmsKind("cash_withdrawal");
+        setSelectedCategory("ATM Cash Withdrawal");
+      } else if (lower.includes("fee") || lower.includes("charge")) {
+        setPaidFrom("bank_account");
+        setMode("bank_debit");
+        setSmsKind("fee");
+        setSelectedCategory("Bank Charges");
       } else {
         setPaidFrom("bank_account");
         setMode("upi");
@@ -728,12 +993,20 @@ export function SmsTemplateTagger({
 
   function handleModeChange(newMode: string) {
     setMode(newMode);
-    if (newMode === "atm") setSmsKind("cash_withdrawal");
-    else if (newMode === "autopay") setSmsKind("autopay");
-    else if (newMode === "cheque") setSmsKind(direction === "money_in" ? "income" : "payment");
-    else if (newMode === "payment_received") setSmsKind("card_bill_payment_received");
-    else if (newMode === "card_charge") setSmsKind("fee");
-    else if (newMode === "bank_debit") setSmsKind("fee");
+    if (newMode === "atm") {
+      setSmsKind("cash_withdrawal");
+      setSelectedCategory("ATM Cash Withdrawal");
+    } else if (newMode === "autopay") {
+      setSmsKind("autopay");
+      setSelectedCategory("Utility Bills");
+    } else if (newMode === "cheque") {
+      setSmsKind(direction === "money_in" ? "income" : "payment");
+    } else if (newMode === "payment_received") {
+      setSmsKind("card_bill_payment_received");
+    } else if (newMode === "card_charge" || newMode === "bank_debit") {
+      setSmsKind("fee");
+      setSelectedCategory("Bank Charges");
+    }
   }
 
   // Add new bank dynamically to server state
@@ -749,45 +1022,110 @@ export function SmsTemplateTagger({
   }
 
   // --------------------------------------------------------------------------
-  // PAGE 2: TAGGING LOGIC
+  // PAGE 1 -> PAGE 2 TRANSITION & INTELLIGENT RECONCILIATION
   // --------------------------------------------------------------------------
-  function assignField(tokenIndex: number, field: TemplateFieldId | null) {
-    setTokens((prev) => {
-      const next = prev.map((t) => ({ ...t }));
-      if (rangeAnchor != null && rangeAnchor !== tokenIndex) {
-        const a = Math.min(rangeAnchor, tokenIndex);
-        const b = Math.max(rangeAnchor, tokenIndex);
-        for (let i = a; i <= b; i++) {
-          if (next[i]?.selectable) next[i] = { ...next[i], field };
-        }
-      } else {
-        next[tokenIndex] = { ...next[tokenIndex], field };
+  function handleGoToPage2() {
+    if (!sample.trim()) return;
+    const currentSampleText = sample.trim();
+    const tokenizedText = tokens.map((t) => t.text).join("");
+    const isSameText = currentSampleText.replace(/\s+/g, "") === tokenizedText.replace(/\s+/g, "");
+
+    if (tokens.length === 0 || !isSameText) {
+      const tok = tokenize(currentSampleText, true);
+      setTokens(tok);
+      setStep(2);
+      return;
+    }
+
+    // Returning to Page 2 after editing choices on Page 1:
+    // Keep tags that still fit, prune obsolete ones, and alert user
+    const validTags = getRelevantTagIds(direction, paidFrom, mode, smsKind, status);
+    let removedCount = 0;
+    const reconciled = tokens.map((t) => {
+      if (t.field && t.field !== "ignoreText" && !validTags.has(t.field)) {
+        removedCount += 1;
+        return { ...t, field: null };
       }
-      return next;
+      return t;
     });
+
+    setTokens(reconciled);
+    if (removedCount > 0) {
+      setReconcileNotice(`Removed ${removedCount} tag(s) that no longer match your updated details.`);
+      setTimeout(() => setReconcileNotice(null), 6000);
+    }
+    setStep(2);
+  }
+
+  // --------------------------------------------------------------------------
+  // PAGE 2: TOUCH-FRIENDLY PHRASE SELECTION & TAGGING LOGIC
+  // --------------------------------------------------------------------------
+  const selectedTokenIndices = useMemo(() => {
+    if (activeToken === null) return [];
+    if (rangeAnchor === null) return [activeToken];
+    const start = Math.min(activeToken, rangeAnchor);
+    const end = Math.max(activeToken, rangeAnchor);
+    const res: number[] = [];
+    for (let idx = start; idx <= end; idx++) {
+      if (tokens[idx]?.selectable) res.push(idx);
+    }
+    return res;
+  }, [activeToken, rangeAnchor, tokens]);
+
+  const selectedPhraseText = useMemo(() => {
+    if (selectedTokenIndices.length === 0) return "";
+    return selectedTokenIndices.map((i) => tokens[i].text).join(" ");
+  }, [selectedTokenIndices, tokens]);
+
+  const selectedField = useMemo(() => {
+    if (selectedTokenIndices.length === 0) return null;
+    const firstField = tokens[selectedTokenIndices[0]]?.field;
+    const allSame = selectedTokenIndices.every((i) => tokens[i]?.field === firstField);
+    return allSame ? firstField : null;
+  }, [selectedTokenIndices, tokens]);
+
+  function onTokenClick(index: number) {
+    if (!tokens[index]?.selectable) return;
+    if (activeToken === null) {
+      setActiveToken(index);
+      setRangeAnchor(null);
+    } else if (rangeAnchor === null) {
+      if (index === activeToken) {
+        setActiveToken(null);
+      } else {
+        setRangeAnchor(activeToken);
+        setActiveToken(index);
+      }
+    } else {
+      setActiveToken(index);
+      setRangeAnchor(null);
+    }
+  }
+
+  function assignFieldToSelection(field: TemplateFieldId | null) {
+    if (selectedTokenIndices.length === 0) return;
+    setTokens((prev) =>
+      prev.map((t, idx) =>
+        selectedTokenIndices.includes(idx) ? { ...t, field } : t,
+      ),
+    );
     setActiveToken(null);
     setRangeAnchor(null);
   }
 
-  function onTokenClick(index: number, e: MouseEvent) {
-    if (!tokens[index]?.selectable) return;
-    if (e.shiftKey && rangeAnchor != null) {
-      setActiveToken(index);
-      return;
-    }
-    if (e.shiftKey) {
-      setRangeAnchor(index);
-      setActiveToken(index);
-      return;
-    }
-    setRangeAnchor(null);
-    setActiveToken((cur) => (cur === index ? null : index));
-  }
+  // Beneficiary alert: show only if SMS has "to A/c", "credited to", or 2+ accounts
+  const hasBeneficiaryAlert = useMemo(() => {
+    const lower = sample.toLowerCase();
+    const mentionsToAc = /\b(?:to|credited to|towards|transfer to)\s+(?:a\/c|acct|account|acc)/i.test(lower);
+    const accountMatches = sample.match(/(?:[x*X]{2,}|\*{2,})\d{3,4}|\b\d{9,18}\b/g) ?? [];
+    return mentionsToAc || accountMatches.length >= 2;
+  }, [sample]);
 
-  // Extract titles from tagged tokens
+  // Extract titles from tagged tokens (joins consecutive merchant words e.g. "Big Basket")
   const detectedMerchant = useMemo(() => {
-    const t = tokens.find((tok) => tok.field === "title" || tok.field === "merchantName");
-    return t ? t.text.replace(/[^a-zA-Z0-9\s]/g, "").trim() : null;
+    const merchantTokens = tokens.filter((tok) => tok.selectable && tok.field === "merchant");
+    if (merchantTokens.length === 0) return null;
+    return merchantTokens.map((t) => t.text.replace(/[^a-zA-Z0-9\s.'&-]/g, "").trim()).join(" ").trim();
   }, [tokens]);
 
   const detectedUpiId = useMemo(() => {
@@ -799,52 +1137,113 @@ export function SmsTemplateTagger({
     if (detectedMerchant) return detectedMerchant;
     if (detectedUpiId) return detectedUpiId.split("@")[0];
     if (titleFallbackChoice === "fixed" && customTitle.trim()) return customTitle.trim();
+    if (mode === "atm") return "ATM Cash Withdrawal";
+    if (selectedCategory && selectedCategory.trim()) return selectedCategory.trim();
     return "Bank Transaction";
-  }, [detectedMerchant, detectedUpiId, titleFallbackChoice, customTitle]);
+  }, [detectedMerchant, detectedUpiId, titleFallbackChoice, customTitle, selectedCategory, mode]);
+
+  // Filtered tags for the Tag Palette
+  const relevantTagIds = useMemo(() => {
+    return getRelevantTagIds(direction, paidFrom, mode, smsKind, status);
+  }, [direction, paidFrom, mode, smsKind, status]);
+
+  const displayedTags = useMemo(() => {
+    if (showMoreTags) return TEMPLATE_FIELD_TYPES;
+    return TEMPLATE_FIELD_TYPES.filter((f) => relevantTagIds.has(f.id));
+  }, [showMoreTags, relevantTagIds]);
 
   // --------------------------------------------------------------------------
-  // LIVE REQUIRED TAGS CALCULATOR: Rule A + B + C + D
+  // LIVE REQUIRED TAGS CALCULATOR: Rule A + B + C + D (Mode-Specific)
   // --------------------------------------------------------------------------
   const requiredTagsEvaluation = useMemo(() => {
     const taggedFields = new Set(tokens.filter((t) => t.selectable && t.field).map((t) => t.field!));
-
     const rules: Array<{ label: string; passed: boolean }> = [];
 
-    // Rule A: By SMS Kind
-    if (smsKind === "payment") {
+    // Amount is required for money movements
+    if (direction !== "no_money_moved") {
       rules.push({ label: "Amount", passed: taggedFields.has("amount") });
-      rules.push({ label: "Debit word", passed: taggedFields.has("debitType") });
-    } else if (smsKind === "income") {
-      rules.push({ label: "Amount", passed: taggedFields.has("amount") });
-      rules.push({ label: "Credit word", passed: taggedFields.has("creditType") });
-    } else if (smsKind === "refund") {
-      rules.push({ label: "Amount", passed: taggedFields.has("amount") });
-      rules.push({ label: "Refund word", passed: taggedFields.has("refundType") });
-    } else if (smsKind === "cash_withdrawal") {
-      rules.push({ label: "Amount", passed: taggedFields.has("amount") });
-      rules.push({ label: "ATM word", passed: taggedFields.has("atmWithdraw") });
+    }
+
+    // Mode-specific validation rules
+    if (mode === "upi") {
+      rules.push({
+        label: "UPI ID or Merchant",
+        passed: taggedFields.has("upiId") || taggedFields.has("merchant"),
+      });
+      rules.push({
+        label: "Account last4",
+        passed: taggedFields.has("accountLast4") || taggedFields.has("cardLast4"),
+      });
+      if (direction === "money_in") {
+        rules.push({
+          label: "Credit word",
+          passed: taggedFields.has("creditType"),
+        });
+      } else {
+        rules.push({
+          label: "Debit word",
+          passed: taggedFields.has("debitType"),
+        });
+      }
+    } else if (mode === "pos" || mode === "online" || mode === "card" || paidFrom === "credit_card" || paidFrom === "debit_card") {
+      rules.push({
+        label: "Card last4",
+        passed: taggedFields.has("cardLast4"),
+      });
+      rules.push({
+        label: "Merchant (where spent)",
+        passed: taggedFields.has("merchant"),
+      });
+      if (direction === "money_in") {
+        rules.push({
+          label: "Credit / Refund word",
+          passed: taggedFields.has("creditType") || taggedFields.has("refundType"),
+        });
+      } else if (smsKind === "payment") {
+        rules.push({
+          label: "Debit word",
+          passed: taggedFields.has("debitType"),
+        });
+      }
+    } else if (mode === "atm" || smsKind === "cash_withdrawal") {
+      rules.push({
+        label: "ATM word",
+        passed: taggedFields.has("atmWithdraw"),
+      });
+      rules.push({
+        label: "Card or Account last4",
+        passed: taggedFields.has("cardLast4") || taggedFields.has("accountLast4"),
+      });
+      // ATM mode: no merchant needed!
+    } else if (smsKind === "fee" || mode === "card_charge" || mode === "bank_debit") {
+      rules.push({
+        label: "Account or Bank name",
+        passed: taggedFields.has("accountLast4") || taggedFields.has("cardLast4") || taggedFields.has("bankName"),
+      });
+      rules.push({
+        label: "Debit / Charge word",
+        passed: taggedFields.has("debitType") || taggedFields.has("feeOrInterest"),
+      });
+      // Fee/Charge mode: no merchant needed!
     } else if (smsKind === "statement") {
       rules.push({ label: "Total due", passed: taggedFields.has("totalDue") });
       rules.push({ label: "Due date", passed: taggedFields.has("dueDate") || taggedFields.has("date") });
-    } else {
-      rules.push({ label: "Amount", passed: taggedFields.has("amount") });
-    }
-
-    // Rule B: By Account/Card
-    if (paidFrom === "credit_card" || paidFrom === "debit_card") {
-      rules.push({ label: "Card last4", passed: taggedFields.has("cardLast4") || taggedFields.has("accountLast4") });
-    } else if (paidFrom === "bank_account") {
+    } else if (direction === "money_in") {
+      rules.push({ label: "Credit word", passed: taggedFields.has("creditType") });
       rules.push({ label: "Account last4 or Bank", passed: taggedFields.has("accountLast4") || taggedFields.has("bankName") });
+    } else {
+      rules.push({ label: "Account last4 or Bank", passed: taggedFields.has("accountLast4") || taggedFields.has("bankName") });
+      rules.push({ label: "Debit word", passed: taggedFields.has("debitType") });
     }
 
-    // Rule D: By Status
+    // Status word for failed/pending
     if (status === "failed" || status === "pending") {
       rules.push({ label: "Status word", passed: taggedFields.has("status") });
     }
 
     const allPassed = rules.every((r) => r.passed);
     return { rules, allPassed };
-  }, [tokens, smsKind, paidFrom, status]);
+  }, [tokens, mode, paidFrom, direction, smsKind, status]);
 
   // --------------------------------------------------------------------------
   // PAGE 3: 5 AUTOMATED SAFETY CHECKS
@@ -1279,11 +1678,7 @@ export function SmsTemplateTagger({
               type="button"
               className="h-9 text-xs font-semibold"
               disabled={!sample.trim()}
-              onClick={() => {
-                const tok = tokenize(sample.trim(), true);
-                setTokens(tok);
-                setStep(2);
-              }}
+              onClick={handleGoToPage2}
             >
               Next: Tag Words
               <ChevronRight className="ml-1 size-3.5" />
@@ -1297,19 +1692,62 @@ export function SmsTemplateTagger({
       {/* ==================================================================== */}
       {step === 2 && (
         <div className="space-y-4">
-          {/* Beneficiary Shield Info */}
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-2">
-            <ShieldAlert className="size-4 shrink-0 mt-0.5" />
-            <div>
-              <strong>Beneficiary Protection:</strong> If the SMS mentions receiver account (e.g. &quot;to A/c XX9999&quot;),
-              mark it as <strong>Ignore</strong> so it doesn&apos;t overwrite the user&apos;s own account.
+          {/* 1. Details Summary Bar */}
+          <div className="flex items-center justify-between rounded-lg border border-border bg-muted/40 px-3.5 py-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-foreground flex-wrap">
+              <span className="font-semibold">{directionLabel(direction)}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>{paidFromLabel(paidFrom, direction)}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>{modeLabel(mode)}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>{smsKindLabel(smsKind)}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="capitalize">{status}</span>
             </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs font-semibold text-primary hover:text-primary gap-1 px-2 shrink-0"
+              onClick={() => setStep(1)}
+            >
+              <Pencil className="size-3" />
+              Edit
+            </Button>
           </div>
 
-          {/* Word Badges Cloud */}
+          {/* Reconciliation Notice Banner (if any tags were pruned on return) */}
+          {reconcileNotice && (
+            <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[11px] text-sky-800 dark:text-sky-200 flex items-center justify-between">
+              <span>{reconcileNotice}</span>
+              <button
+                type="button"
+                className="text-xs font-bold hover:underline"
+                onClick={() => setReconcileNotice(null)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* 2. Beneficiary Protection Banner (Shown only if SMS mentions receiver account) */}
+          {hasBeneficiaryAlert && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 flex items-start gap-2">
+              <ShieldAlert className="size-4 shrink-0 mt-0.5" />
+              <div>
+                <strong>Beneficiary Protection:</strong> If the SMS mentions receiver account (e.g. &quot;to A/c XX9999&quot;),
+                mark it as <strong>Ignore</strong> so it doesn&apos;t overwrite the user&apos;s own account.
+              </div>
+            </div>
+          )}
+
+          {/* 3. Word Badges Cloud (Tap word, then tap last word to select phrase) */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <Label className="text-xs font-semibold">Tap a word to tag (Shift+click for multi-word phrase)</Label>
+              <Label className="text-xs font-semibold">
+                Tap a word to tag. Tap a first word then a second word to select a phrase.
+              </Label>
               <span className="text-[10px] text-muted-foreground font-mono">
                 {tokens.filter((t) => t.selectable && t.field && t.field !== "ignoreText").length} tagged
               </span>
@@ -1323,30 +1761,50 @@ export function SmsTemplateTagger({
                     }
                     return null;
                   }
-                  const inRange =
-                    rangeAnchor != null &&
-                    activeToken != null &&
-                    index >= Math.min(rangeAnchor, activeToken) &&
-                    index <= Math.max(rangeAnchor, activeToken);
+                  const isSelected = selectedTokenIndices.includes(index);
+                  const isAnchor = rangeAnchor === index;
+                  const isMerchant = token.field === "merchant";
+
+                  // Check if previous or next selectable token is also merchant
+                  const isPrevMerchant = (() => {
+                    if (!isMerchant) return false;
+                    for (let p = index - 1; p >= 0; p--) {
+                      if (tokens[p].selectable) return tokens[p].field === "merchant";
+                    }
+                    return false;
+                  })();
+                  const isNextMerchant = (() => {
+                    if (!isMerchant) return false;
+                    for (let n = index + 1; n < tokens.length; n++) {
+                      if (tokens[n].selectable) return tokens[n].field === "merchant";
+                    }
+                    return false;
+                  })();
+
                   const color = token.field
                     ? FIELD_COLORS[token.field] ?? FIELD_COLORS.ignoreText
                     : "bg-muted/70 text-foreground ring-border hover:bg-muted";
+
                   return (
                     <button
                       key={index}
                       type="button"
                       className={cn(
-                        "inline-flex max-w-full flex-col items-start rounded-lg px-2.5 py-1 text-left text-xs font-medium ring-1 transition-all",
+                        "inline-flex max-w-full flex-col items-start px-2.5 py-1 text-left text-xs font-medium ring-1 transition-all",
                         color,
-                        (activeToken === index || inRange) && "ring-2 ring-primary shadow-sm",
-                        rangeAnchor === index && "outline outline-2 outline-offset-1 outline-amber-500",
+                        isMerchant && isPrevMerchant && isNextMerchant && "rounded-none ring-x-0 mx-0",
+                        isMerchant && !isPrevMerchant && isNextMerchant && "rounded-l-lg rounded-r-none ring-r-0 -mr-1.5 z-1",
+                        isMerchant && isPrevMerchant && !isNextMerchant && "rounded-r-lg rounded-l-none ring-l-0 z-1",
+                        (!isMerchant || (!isPrevMerchant && !isNextMerchant)) && "rounded-lg",
+                        isSelected && "ring-2 ring-primary shadow-sm z-10",
+                        isAnchor && "outline outline-2 outline-offset-1 outline-amber-500 z-10",
                       )}
-                      onClick={(e) => onTokenClick(index, e)}
+                      onClick={() => onTokenClick(index)}
                     >
                       <span className="break-all font-mono font-medium">{token.text}</span>
                       {token.field ? (
                         <span className="mt-0.5 text-[9px] font-bold uppercase tracking-wider opacity-90">
-                          {fieldLabel(token.field)}
+                          {isMerchant && isPrevMerchant ? "" : fieldLabel(token.field)}
                         </span>
                       ) : null}
                     </button>
@@ -1356,48 +1814,55 @@ export function SmsTemplateTagger({
             </div>
           </div>
 
-          {/* Filtered Tag Palette (Opens on active token) */}
-          {activeToken != null && tokens[activeToken]?.selectable && (
+          {/* 4. Filtered Tag Palette (Opens on active token or phrase) */}
+          {selectedTokenIndices.length > 0 && (
             <div className="space-y-2.5 rounded-lg border border-border bg-card p-3 shadow-sm animate-in fade-in-50">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold text-foreground">
-                  Mark &quot;{tokens[activeToken].text}&quot; as:
+                  Mark &quot;{selectedPhraseText}&quot; as:
                 </p>
                 <Button
                   type="button"
                   variant="ghost"
                   className="h-6 px-2 text-[10px]"
-                  onClick={() => assignField(activeToken, null)}
+                  onClick={() => assignFieldToSelection(null)}
                 >
                   Clear Tag
                 </Button>
               </div>
+
+              {/* Filtered Tag Buttons */}
               <div className="flex flex-wrap gap-1.5">
-                {TEMPLATE_FIELD_TYPES.filter((f) => {
-                  // Filter out irrelevant tags based on Page 1 choices
-                  if (direction === "money_out" && f.id === "creditType") return false;
-                  if (direction === "money_in" && f.id === "debitType") return false;
-                  if (paidFrom === "credit_card" && (f.id === "atmWithdraw" || f.id === "accountLast4")) return false;
-                  return true;
-                }).map((f) => (
+                {displayedTags.map((f) => (
                   <button
                     key={f.id}
                     type="button"
                     className={cn(
                       "rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 transition-transform active:scale-95",
-                      FIELD_COLORS[f.id],
-                      tokens[activeToken].field === f.id && "ring-2 ring-primary shadow-sm",
+                      FIELD_COLORS[f.id] ?? FIELD_COLORS.ignoreText,
+                      selectedField === f.id && "ring-2 ring-primary shadow-sm",
                     )}
-                    onClick={() => assignField(activeToken, f.id)}
+                    onClick={() => assignFieldToSelection(f.id)}
                   >
                     {f.label}
                   </button>
                 ))}
               </div>
+
+              {/* Show more tags toggle */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  className="text-[11px] font-medium text-primary hover:underline"
+                  onClick={() => setShowMoreTags((prev) => !prev)}
+                >
+                  {showMoreTags ? "− Show fewer tags" : "+ Show more tags"}
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Live Required Tags Bar */}
+          {/* 5. Required Tags Checklist (Rule A + B + C + D) */}
           <div className="rounded-lg border border-border bg-muted/30 p-2.5">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -1429,11 +1894,16 @@ export function SmsTemplateTagger({
             </div>
           </div>
 
-          {/* Title Resolver Section */}
+          {/* 6. Title Section */}
           <div className="space-y-3 rounded-xl border border-border bg-muted/20 p-3.5">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-              Title & Category (What user sees in app)
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                Title (What user sees in app)
+              </p>
+              <span className="text-[11px] text-muted-foreground">
+                Resolved: <strong className="text-foreground">{resolvedTitle}</strong>
+              </span>
+            </div>
 
             {detectedMerchant ? (
               <div className="flex items-center gap-2 text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 rounded-md p-2">
@@ -1446,70 +1916,76 @@ export function SmsTemplateTagger({
                 <span>Title resolved from UPI ID: <strong>&quot;{detectedUpiId.split("@")[0]}&quot;</strong></span>
               </div>
             ) : (
-              <div className="space-y-2 text-xs">
-                <p className="text-[11px] text-muted-foreground">
-                  No merchant or UPI ID found. Choose how to title this transaction:
-                </p>
+              <div className="space-y-2.5 text-xs">
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2.5 text-[11px] text-amber-900 dark:text-amber-200">
+                  <p className="font-semibold">No merchant in SMS (e.g. ATM or Bank Charges)</p>
+                  <p className="mt-0.5 text-muted-foreground">The app automatically uses <strong>Category as the Title</strong>. A merchant tag is optional.</p>
+                </div>
+
                 <div className="space-y-1.5">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="titleOption"
-                      checked={titleFallbackChoice === "desc"}
-                      onChange={() => setTitleFallbackChoice("desc")}
-                    />
-                    <span>From Description (e.g. &quot;ANNUAL FEE&quot;)</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="titleOption"
-                      checked={titleFallbackChoice === "fixed"}
-                      onChange={() => setTitleFallbackChoice("fixed")}
-                    />
-                    <span>Fixed custom title:</span>
-                    <Input
-                      className="h-7 w-52 text-xs"
-                      placeholder="e.g. HDFC Annual Fee"
-                      value={customTitle}
-                      onChange={(e) => {
-                        setCustomTitle(e.target.value);
-                        setTitleFallbackChoice("fixed");
+                  <Label className="text-[11px] font-semibold text-muted-foreground">Choose Category / Title:</Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      "ATM Cash Withdrawal",
+                      "Bank Charges",
+                      "Annual Fee",
+                      "Utility Bills",
+                      "Groceries",
+                      "Food & Dining",
+                      "Shopping",
+                      "Transfer",
+                      "Fuel",
+                      "Other",
+                    ].map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors",
+                          selectedCategory === cat && !customTitle.trim()
+                            ? "bg-primary text-primary-foreground border-primary font-semibold shadow-xs"
+                            : "bg-background text-foreground border-border hover:bg-muted"
+                        )}
+                        onClick={() => {
+                          setSelectedCategory(cat);
+                          setCustomTitle("");
+                          setTitleFallbackChoice("desc");
+                        }}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-border flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">Or custom title:</span>
+                  <Input
+                    className="h-7 max-w-xs text-xs"
+                    placeholder="e.g. HDFC Annual Fee"
+                    value={customTitle}
+                    onChange={(e) => {
+                      setCustomTitle(e.target.value);
+                      setTitleFallbackChoice("fixed");
+                    }}
+                  />
+                  {customTitle && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-[10px] px-2"
+                      onClick={() => {
+                        setCustomTitle("");
+                        setTitleFallbackChoice("desc");
                       }}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="titleOption"
-                      checked={titleFallbackChoice === "verify"}
-                      onChange={() => setTitleFallbackChoice("verify")}
-                    />
-                    <span>Ask user to verify in-app</span>
-                  </label>
+                    >
+                      Clear
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
-
-            {/* Category */}
-            <div className="space-y-1 pt-1">
-              <Label className="text-[11px] font-semibold">Category</Label>
-              <select
-                className="h-8 w-full max-w-xs rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40"
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-              >
-                <option value="Shopping">Shopping</option>
-                <option value="Food & Dining">Food & Dining</option>
-                <option value="Groceries">Groceries</option>
-                <option value="Transportation">Transportation</option>
-                <option value="Bills & Utilities">Bills & Utilities</option>
-                <option value="Salary">Salary</option>
-                <option value="Bank Charges">Bank Charges</option>
-                <option value="Transfer">Transfer</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
           </div>
 
           {/* Page 2 Action Footer */}
