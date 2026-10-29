@@ -489,7 +489,7 @@ function detectTypeWord(text: string): TemplateFieldId | null {
 }
 
 /** Tag untagged words that are type/action words; never overrides existing tags. */
-function tagTypeWords(tokens: Token[]): Token[] {
+export function tagTypeWords(tokens: Token[]): Token[] {
   return tokens.map((t) => {
     if (!t.selectable || t.field) return t;
     const field = detectTypeWord(t.text);
@@ -734,7 +734,7 @@ function refineAutoTags(tokens: Token[]): Token[] {
   return next;
 }
 
-function tokenize(message: string, withAuto = true): Token[] {
+export function tokenize(message: string, withAuto = true): Token[] {
   const tokens: Token[] = [];
   const pattern = /\S+/g;
   let lastEnd = 0;
@@ -971,7 +971,7 @@ function escapeRegExp(text: string) {
  * inside a captured span get that field. Returns null when the pattern does not
  * match the sample (caller falls back to extraction_map substring matching).
  */
-function tagTokensFromPattern(sample: string, pattern: string, tokens: Token[]): Token[] | null {
+export function tagTokensFromPattern(sample: string, pattern: string, tokens: Token[]): Token[] | null {
   if (!sample || !pattern) return null;
   const placeholder = /\{([A-Za-z0-9_]+)\}/g;
   const fields: (TemplateFieldId | null)[] = [];
@@ -1092,11 +1092,12 @@ export function SmsTemplateTagger({
         existing.templatePattern ?? "",
         tok,
       );
-      if (fromPattern) return tagTypeWords(fromPattern);
+      // Edit shows exactly what is saved: no front-end auto-tagging here.
+      if (fromPattern) return fromPattern;
       // Fallback: only keys that are real sample text (catalog names like
       // "Balance" would otherwise tag "Bal", "Ref"… by substring).
       const sampleText = existing.sampleMessage;
-      return tagTypeWords(tok.map((t) => {
+      return tok.map((t) => {
         if (!t.selectable) return t;
         for (const [orig, f] of Object.entries(map)) {
           if (!orig || orig === "__meta" || orig.startsWith("__")) continue;
@@ -1107,7 +1108,7 @@ export function SmsTemplateTagger({
           }
         }
         return t;
-      }));
+      });
     }
     if (initialSample) return tokenize(initialSample, true);
     return [];
