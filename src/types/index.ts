@@ -350,7 +350,16 @@ export type AppConfig = {
 };
 
 export type SmsTemplateRuleType = "debit" | "credit" | "transfer";
-export type SmsRuleMode = "upi" | "atm" | "card";
+export type SmsRuleMode =
+  | "upi"
+  | "atm"
+  | "card"
+  | "netbanking"
+  | "wallet"
+  | "wallet_topup"
+  | "wallet_transfer"
+  | "other"
+  | (string & {});
 
 export type SmsTemplateRule = {
   id: string;
