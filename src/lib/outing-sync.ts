@@ -9,6 +9,13 @@ export function hasOutingUnlinkedOptOut(transaction: Transaction) {
   return (transaction.tags ?? []).includes(OUTING_UNLINKED_TAG);
 }
 
+/** Missing autoAddMode is on. Old trips were created with auto-add on. */
+export function outingAutoAddEnabled(outing: {
+  autoAddMode?: boolean | null;
+}): boolean {
+  return outing.autoAddMode !== false;
+}
+
 export function withOutingUnlinkedTag(tags?: string[]) {
   const next = (tags ?? []).filter((t) => t !== OUTING_UNLINKED_TAG);
   next.push(OUTING_UNLINKED_TAG);
@@ -191,6 +198,7 @@ export function getActiveAutoOuting(outings: Outing[]): Outing | null {
       o.status === "active" &&
       !o.isQuickSplit &&
       o.isActive !== false &&
+      outingAutoAddEnabled(o) &&
       isWithinOutingDates(o, today),
   );
   if (active.length === 0) return null;
@@ -309,6 +317,7 @@ export function getOutingCandidatesForTransaction(
     (outing) =>
       outing.status === "active" &&
       !outing.isQuickSplit &&
+      outingAutoAddEnabled(outing) &&
       isWithinOutingWindow(outing, date, timeZone),
   );
 }
