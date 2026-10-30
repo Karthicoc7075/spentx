@@ -427,7 +427,8 @@ grant execute on function public.submit_support_sms(text, text, text, text)
   to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- Drop rows with no activity for 30 days. 21:30 UTC = 03:00 IST.
+-- Drop support SMS older than 30 days and reviewed (added/ignored) template
+-- requests with no activity for 30 days. Open ('new') requests are kept. 21:30 UTC = 03:00 IST.
 -- Unschedule first when the job is already there (re-run safe).
 -- ---------------------------------------------------------------------------
 
@@ -439,7 +440,8 @@ set search_path = public
 as $$
 begin
   delete from public.sms_template_requests
-    where last_seen < now() - interval '30 days';
+    where last_seen < now() - interval '30 days'
+      and status in ('added', 'ignored'); -- open ('new') requests stay until reviewed
   delete from public.sms_support_requests
     where created_at < now() - interval '30 days';
   delete from public.sms_outbound_daily
