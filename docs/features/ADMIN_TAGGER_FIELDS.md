@@ -83,11 +83,17 @@ This document details the complete design and field taxonomy for the Admin SMS T
 
 When an SMS is entered or pasted on Page 1:
 1. **Intelligent Auto-Detection**:
-   - **Bank**: Auto-matched against `BANK_MATCH_RULES` and `bankCatalog` (e.g. HDFC, SBI, ICICI, Axis, Kotak, PNB, BOB, Canara, Union, IDFC FIRST, IndusInd, Yes Bank, Federal, RBL, etc.).
+   - **Bank / Wallet**: Auto-matched against `BANK_MATCH_RULES` and `bankCatalog` (Commercial banks e.g. HDFC, SBI, ICICI, Axis, Kotak, PNB, BOB, Canara, Union, IDFC FIRST, IndusInd, Yes Bank, Federal, RBL, etc., and Digital Wallets e.g. Paytm Wallet, Amazon Pay, PhonePe Wallet, MobiKwik, Freecharge, PayZapp Wallet).
+     - *URL stripping*: Footers, report links (`https://...`), and dispute lines are stripped before bank matching to prevent security links (e.g. `1.hdfc.bank.in`) from triggering false bank detections.
+     - *Wallet disambiguation*:
+       - `"Paytm Wallet"` / `"Amazon Pay balance"` ➔ `Paid from: Wallet` & `Bank / Wallet: Paytm Wallet / Amazon Pay`.
+       - `"Paytm Payments Bank A/c XXxxxx"` ➔ `Paid from: Bank account` & `Bank / Wallet: Paytm Payments Bank`.
+       - `"via Paytm UPI / PhonePe"` from a bank a/c ➔ `Paid from: Bank account` (rail only).
    - **Direction**: Auto-detects `Money out` (debit/spend/withdraw), `Money in` (credit/received/refund/cashback), or `No money moved` (statement/due date/alert).
    - **Paid From / Received In**: Auto-detects `Bank account`, `Credit card`, `Debit card`, or `Wallet`.
-   - **Mode**: Auto-detects `UPI`, `ATM`, `POS`, `Online`, `NetBanking`, `NEFT`, `IMPS`, `RTGS`, `AutoPay`, `Cheque`, etc.
-   - **SMS Kind**: Auto-detects `Payment`, `Statement`, `Cash withdrawal`, `AutoPay`, `Fee`, `EMI`, `Income`, `Refund`, `Cashback`, `Balance alert`, etc.
+   - **Mode**: Auto-detects `UPI`, `ATM`, `POS`, `Online`, `NetBanking`, `NEFT`, `IMPS`, `RTGS`, `AutoPay`, `Cheque`, `Wallet transfer`, `Add money (top-up)` (`wallet_topup`), etc.
+   - **SMS Kind**: Auto-detects `Payment`, `Wallet top-up` (`wallet_topup`), `Statement`, `Cash withdrawal`, `AutoPay`, `Fee`, `EMI`, `Income`, `Refund`, `Cashback`, `Balance alert`, etc.
+     - *Wallet top-up*: Represents a transfer from Bank ➔ Wallet (NOT income or spending). Allowed for both `Money in + Wallet` and `Money out + Bank account`, enabling the app to merge bank debit and wallet credit SMS into a single transfer.
    - **Status**: Auto-detects `Success`, `Failed` (declined/unsuccessful), or `Pending`.
    - **Sender ID & Date Format**: Extracted from headers and date tokens.
 
@@ -96,10 +102,10 @@ When an SMS is entered or pasted on Page 1:
    - Missing fields are highlighted with a **high-visibility red border and focus ring** (`border-rose-500 ring-2 ring-rose-500/25 bg-rose-500/5 text-rose-700`).
    - Specific helper alerts appear beneath each missing field guiding the admin on what needs to be selected.
 
-3. **Bank Not Found Handling**:
-   - If the SMS does not contain a recognized bank, the Bank dropdown shows `-- Select Bank (Required) --` with a red border.
-   - An alert appears with a direct `+ Add Bank` action: `⚠️ Bank not found in SMS. Select from list or add new bank.`.
-   - Clicking `+ Add Bank` opens a modal allowing admins to enter and persist the new bank name immediately.
+3. **Bank or Wallet Not Found Handling**:
+   - If the SMS does not contain a recognized bank or wallet, the dropdown shows `-- Select Bank or Wallet (Required) --` with a red border.
+   - An alert appears with a direct `+ Add Bank / Wallet` action: `⚠️ Bank or wallet not found in SMS. Select from list or add new.`.
+   - Clicking `+ Add Bank / Wallet` opens a modal allowing admins to enter and persist the new name immediately.
 
 4. **Gated Progression**:
    - The **"Next: Tag Words"** button remains disabled until all 6 required details are selected and valid.
@@ -113,11 +119,15 @@ Before saving, the tagger validates that the minimum required fields for the cho
 
 | SMS Kind | Required Fields | Prohibited Fields |
 | :--- | :--- | :--- |
-| **`Payment`** | `amount` AND (`debitType` OR `creditType`) AND (`accountLast4` OR `cardLast4` OR `bankName`) | `totalDue`, `dueDate` |
+| **`Payment`** | `amount` AND (`debitType` OR `creditType`) AND (`accountLast4` OR `cardLast4` OR `bankName` / `Wallet name`) | `totalDue`, `dueDate` |
+| **`Wallet top-up`** | `amount` AND (`creditType` OR `debitType`) AND (`bankName` / `Wallet name` OR `accountLast4`) | `totalDue` |
 | **`Statement`** | `totalDue` AND `dueDate` AND (`cardLast4` OR `bankName`) | `debitType` (Must NOT create a transaction) |
 | **`Transfer`** | `amount` AND (`atmWithdraw` OR `transferType` OR `billPayment`) | — |
 | **`Failed`** | `amount` AND `status` | `debitType` (Must not add to spend) |
 | **`Account Update`** | `balance` OR `cardLimit` | `amount`, `debitType` |
+
+> [!NOTE]
+> **Wallet Validation Rule:** When `Paid from` is `Wallet`, the validation requires `Amount + Debit/Credit word + Wallet name` (tagged as `bankName` or `merchant`). No account last 4 digits are required. Balance tokens represent the wallet balance.
 
 ---
 

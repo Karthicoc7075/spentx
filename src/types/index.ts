@@ -356,6 +356,8 @@ export type SmsRuleMode =
   | "card"
   | "netbanking"
   | "wallet"
+  | "wallet_topup"
+  | "wallet_transfer"
   | "other"
   | (string & {});
 

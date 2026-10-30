@@ -63,6 +63,41 @@ export const SEEDED_WALLETS = [
 
 export const ALL_SEEDED_INSTITUTIONS = [...SEEDED_WALLETS, ...SEEDED_BANKS];
 
+/** Normalize a bank/wallet name: lowercase, drop "bank", spaces and symbols. */
+export function normalizeBankKey(name: string): string {
+  return (name || "")
+    .toLowerCase()
+    .replace(/\(.*?\)/g, " ")
+    .replace(/bank/g, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/** Map any bank name (e.g. "Axis Bank", "State Bank of India (SBI)") to an existing DB name, or "". */
+export function matchExistingBank(name: string, existing: string[]): string {
+  const raw = (name || "").trim();
+  if (!raw) return "";
+  const keys = [normalizeBankKey(raw)];
+  const paren = raw.match(/\(([^)]+)\)/);
+  if (paren) keys.push(normalizeBankKey(paren[1]));
+  const candidates = keys.filter(Boolean);
+  for (const k of candidates) {
+    const exact = existing.find((b) => normalizeBankKey(b) === k);
+    if (exact) return exact;
+  }
+  // Prefix fallback: "Kotak Mahindra" -> "Kotak", "IDFC FIRST" -> "IDFC"
+  let best = "";
+  let bestLen = 0;
+  for (const b of existing) {
+    const bk = normalizeBankKey(b);
+    if (bk.length < 3) continue;
+    if (candidates.some((k) => k.startsWith(bk)) && bk.length > bestLen) {
+      best = b;
+      bestLen = bk.length;
+    }
+  }
+  return best;
+}
+
 export const BANK_MATCH_RULES: Array<{ bank: string; keywords: string[] }> = [
   // ── Digital Wallets (Checked first so wallet names aren't masked by UPI/bank footer links) ──
   { bank: "Paytm Wallet", keywords: ["paytm wallet"] },
@@ -145,6 +180,7 @@ export const TEMPLATE_FIELD_TYPES = [
 
   // Parties & Accounts
   { id: "merchant", label: "Merchant", group: "who" },
+  { id: "upiMerchant", label: "UPI / Merchant", group: "who" },
   { id: "bankName", label: "Bank name", group: "who" },
   { id: "accountLast4", label: "Account last4", group: "card" },
   { id: "cardLast4", label: "Card last4", group: "card" },
@@ -209,6 +245,7 @@ const FIELD_COLORS: Record<string, string> = {
   paymentMode: "bg-indigo-500/20 text-indigo-800 ring-indigo-500/40 dark:text-indigo-300",
   referenceId: "bg-fuchsia-500/20 text-fuchsia-800 ring-fuchsia-500/40 dark:text-fuchsia-300",
   upiId: "bg-indigo-500/25 text-indigo-900 ring-indigo-500/40 dark:text-indigo-200",
+  upiMerchant: "bg-violet-500/25 text-violet-900 ring-violet-500/40 dark:text-violet-200",
   chequeNumber: "bg-stone-500/20 text-stone-800 ring-stone-500/40 dark:text-stone-300",
   status: "bg-red-500/25 text-red-900 ring-red-500/40 dark:text-red-200",
   phone: "bg-slate-500/20 text-slate-700 ring-slate-500/40 dark:text-slate-300",
@@ -234,6 +271,9 @@ const FIELD_GROUPS = [
 function fieldLabel(id: string) {
   return TEMPLATE_FIELD_TYPES.find((f) => f.id === id)?.label ?? id;
 }
+
+/** Extra extraction_map key suffix for a "UPI / Merchant" word (maps the same text to upiId). */
+const UPI_MERCHANT_KEY_SUFFIX = "#upi";
 
 function tokenTag(field: string) {
   return `{${field.toUpperCase()}}`;
@@ -447,6 +487,7 @@ export function getRelevantTagIds(
   if (mode === "upi") {
     ids.add("upiId");
     ids.add("merchant");
+    ids.add("upiMerchant");
   } else if (mode === "pos" || mode === "online" || mode === "card") {
     ids.add("merchant");
     ids.add("cardLast4");
@@ -904,9 +945,13 @@ export function buildTemplateFromTags(input: {
         ? "accountLast4"
         : seg.field === "dateTime"
           ? "date"
-          : seg.field === "merchant" || seg.field === "merchantName" || seg.field === "title"
+          : seg.field === "merchant" || seg.field === "merchantName" || seg.field === "title" || seg.field === "upiMerchant"
             ? "merchant"
             : seg.field;
+    // "UPI / Merchant": same word is both the payee and the UPI ID.
+    if (seg.field === "upiMerchant") {
+      extractionMap[`${original}${UPI_MERCHANT_KEY_SUFFIX}`] = "upiId";
+    }
   }
 
   for (const part of template.split(/\{[A-Z_]+\}/)) {
@@ -922,7 +967,9 @@ export function buildTemplateFromTags(input: {
   const exactTaggedValues: Record<string, string> = {};
   for (const [orig, field] of Object.entries(extractionMap)) {
     if (field && !field.startsWith("_")) {
-      exactTaggedValues[field] = orig;
+      exactTaggedValues[field] = orig.endsWith(UPI_MERCHANT_KEY_SUFFIX)
+        ? orig.slice(0, -UPI_MERCHANT_KEY_SUFFIX.length)
+        : orig;
     }
   }
 
@@ -1026,6 +1073,8 @@ export type SmsTemplateTaggerProps = {
   initialSample?: string;
   existing?: SmsTemplateRule | null;
   embedded?: boolean;
+  /** Distinct bank/wallet names already in sms_template_rules. */
+  dbBanks?: string[];
 };
 
 export function SmsTemplateTagger({
@@ -1035,6 +1084,7 @@ export function SmsTemplateTagger({
   initialSample = "",
   existing = null,
   embedded = false,
+  dbBanks = [],
 }: SmsTemplateTaggerProps) {
   // Navigation: Step 1, 2, or 3
   const [step, setStep] = useState<1 | 2 | 3>(
@@ -1069,7 +1119,19 @@ export function SmsTemplateTagger({
   const [isActive, setIsActive] = useState<boolean>(existing?.isActive ?? true);
 
   // Server-Driven Bank & Wallet State
-  const [bankCatalog, setBankCatalog] = useState<string[]>(ALL_SEEDED_INSTITUTIONS);
+  // Bank & Wallet list = only names that exist in the DB (+ any added this session)
+  const [bankCatalog, setBankCatalog] = useState<string[]>(() => {
+    const set = new Set<string>(dbBanks.map((b) => b.trim()).filter(Boolean));
+    if (existing?.bankName?.trim()) set.add(existing.bankName.trim());
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  });
+  useEffect(() => {
+    setBankCatalog((prev) => {
+      const set = new Set<string>([...prev, ...dbBanks.map((b) => b.trim()).filter(Boolean)]);
+      return Array.from(set).sort((a, b) => a.localeCompare(b));
+    });
+  }, [dbBanks]);
+  const [bankSearch, setBankSearch] = useState("");
   const [selectedBank, setSelectedBank] = useState(existing?.bankName ?? "");
   const [newBankInput, setNewBankInput] = useState("");
   const [showAddBankModal, setShowAddBankModal] = useState(false);
@@ -1103,7 +1165,12 @@ export function SmsTemplateTagger({
           if (!orig || orig === "__meta" || orig.startsWith("__")) continue;
           if (!sampleText.includes(orig)) continue;
           if (orig.includes(t.text) || t.text.includes(orig)) {
-            const fieldId = f === "merchantName" || f === "title" ? "merchant" : (f as TemplateFieldId);
+            const isUpiMerchant = f === "merchant" && map[`${orig}${UPI_MERCHANT_KEY_SUFFIX}`] === "upiId";
+            const fieldId = isUpiMerchant
+              ? "upiMerchant"
+              : f === "merchantName" || f === "title"
+                ? "merchant"
+                : (f as TemplateFieldId);
             return { ...t, field: fieldId };
           }
         }
@@ -1211,7 +1278,8 @@ export function SmsTemplateTagger({
         }
       }
     }
-    setSelectedBank(detectedBank);
+    // Only select a bank that already exists in the DB list; otherwise leave unselected
+    setSelectedBank(matchExistingBank(detectedBank, bankCatalog));
 
     // 2. Detect Direction
     let detectedDirection: "money_out" | "money_in" | "no_money_moved" | "" = "";
@@ -1458,10 +1526,13 @@ export function SmsTemplateTagger({
   function handleSaveNewBank() {
     const trimmed = newBankInput.trim();
     if (!trimmed) return;
-    if (!bankCatalog.includes(trimmed)) {
+    const existingMatch = matchExistingBank(trimmed, bankCatalog);
+    if (existingMatch) {
+      setSelectedBank(existingMatch);
+    } else {
       setBankCatalog((prev) => [trimmed, ...prev]);
+      setSelectedBank(trimmed);
     }
-    setSelectedBank(trimmed);
     setNewBankInput("");
     setShowAddBankModal(false);
   }
@@ -1568,13 +1639,15 @@ export function SmsTemplateTagger({
 
   // Extract titles from tagged tokens (joins consecutive merchant words e.g. "Big Basket")
   const detectedMerchant = useMemo(() => {
-    const merchantTokens = tokens.filter((tok) => tok.selectable && tok.field === "merchant");
+    const merchantTokens = tokens.filter(
+      (tok) => tok.selectable && (tok.field === "merchant" || tok.field === "upiMerchant"),
+    );
     if (merchantTokens.length === 0) return null;
     return merchantTokens.map((t) => t.text.replace(/[^a-zA-Z0-9\s.'&-]/g, "").trim()).join(" ").trim();
   }, [tokens]);
 
   const detectedUpiId = useMemo(() => {
-    const t = tokens.find((tok) => tok.field === "upiId");
+    const t = tokens.find((tok) => tok.field === "upiId" || tok.field === "upiMerchant");
     return t ? t.text.trim() : null;
   }, [tokens]);
 
@@ -1600,7 +1673,11 @@ export function SmsTemplateTagger({
   // LIVE REQUIRED TAGS CALCULATOR: Rule A + B + C + D (Mode-Specific)
   // --------------------------------------------------------------------------
   const requiredTagsEvaluation = useMemo(() => {
-    const taggedFields = new Set(tokens.filter((t) => t.selectable && t.field).map((t) => t.field!));
+    const taggedFields = new Set<string>(tokens.filter((t) => t.selectable && t.field).map((t) => t.field!));
+    if (taggedFields.has("upiMerchant")) {
+      taggedFields.add("upiId");
+      taggedFields.add("merchant");
+    }
     const rules: Array<{ label: string; passed: boolean }> = [];
 
     // Amount is required for money movements
@@ -1731,7 +1808,9 @@ export function SmsTemplateTagger({
     if (sample.trim()) {
       const sampleLower = sample.toLowerCase();
       for (const msg of CROSS_BANK_TEST_CORPUS) {
-        if (!selectedBank.toLowerCase().includes(msg.bank.toLowerCase())) {
+        const selKey = normalizeBankKey(selectedBank);
+        const msgKey = normalizeBankKey(msg.bank);
+        if (!(selKey && msgKey && (selKey === msgKey || selKey.startsWith(msgKey)))) {
           // If a message from another bank contains identical trigger words without sender lock
           if (
             msg.text.toLowerCase().includes("debited by rs") &&
@@ -1957,6 +2036,12 @@ export function SmsTemplateTagger({
                 <Label className={cn("text-[11px] font-semibold", isBankMissing && "text-rose-600 dark:text-rose-400")}>
                   Bank / Wallet {isBankMissing && "*"}
                 </Label>
+                <Input
+                  className="h-8 text-xs"
+                  placeholder={`Search ${bankCatalog.length} banks / wallets…`}
+                  value={bankSearch}
+                  onChange={(e) => setBankSearch(e.target.value)}
+                />
                 <select
                   className={cn(
                     "h-9 w-full rounded-md border border-input bg-background px-2.5 text-xs font-medium focus:ring-2 focus:ring-primary/40",
@@ -1966,38 +2051,37 @@ export function SmsTemplateTagger({
                   onChange={(e) => setSelectedBank(e.target.value)}
                 >
                   <option value="">-- Select Bank or Wallet (Required) --</option>
-                  <optgroup label="👛 Digital Wallets">
-                    {SEEDED_WALLETS.map((w) => (
-                      <option key={w} value={w}>
-                        {w}
+                  {bankCatalog
+                    .filter((b) => {
+                      const q = normalizeBankKey(bankSearch);
+                      return !q || b === selectedBank || normalizeBankKey(b).includes(q);
+                    })
+                    .map((b) => (
+                      <option key={b} value={b}>
+                        {b}
                       </option>
                     ))}
-                  </optgroup>
-                  <optgroup label="🏦 Commercial & Payments Banks">
-                    {bankCatalog
-                      .filter((b) => !SEEDED_WALLETS.includes(b))
-                      .map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                  </optgroup>
                 </select>
-                {isBankMissing && (
-                  <div className="flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-medium pt-1">
-                    <span className="flex items-center gap-1">
-                      <AlertCircle className="size-3.5 shrink-0" />
-                      Bank or wallet not found in SMS. Select from list or add new.
-                    </span>
-                    <button
-                      type="button"
-                      className="font-bold underline hover:text-rose-700 dark:hover:text-rose-300 flex items-center gap-0.5 ml-2 shrink-0"
-                      onClick={() => setShowAddBankModal(true)}
-                    >
-                      <Plus className="size-3" /> Add Bank / Wallet
-                    </button>
-                  </div>
-                )}
+                <div
+                  className={cn(
+                    "flex items-center justify-between text-[11px] font-medium pt-1",
+                    isBankMissing ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground",
+                  )}
+                >
+                  <span className="flex items-center gap-1">
+                    {isBankMissing && <AlertCircle className="size-3.5 shrink-0" />}
+                    {isBankMissing
+                      ? "Bank or wallet not found in SMS. Select from list or add new."
+                      : "Not in the list? Add a new bank once."}
+                  </span>
+                  <button
+                    type="button"
+                    className="font-bold underline hover:text-foreground flex items-center gap-0.5 ml-2 shrink-0"
+                    onClick={() => setShowAddBankModal(true)}
+                  >
+                    <Plus className="size-3" /> Add new bank
+                  </button>
+                </div>
               </div>
 
               {/* Direction */}
