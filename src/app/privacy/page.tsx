@@ -59,7 +59,7 @@ export default function PrivacyPolicyPage() {
               Public Privacy Policy
             </h1>
             <p className="text-sm text-muted-foreground">
-              Last updated: October 22, 2026 &middot; Effective date: October 22, 2026
+              Last updated: October 30, 2026 &middot; Effective date: October 30, 2026
             </p>
             <p className="text-base leading-relaxed text-muted-foreground md:text-lg">
               SpentX provides a modern personal finance application built to help you track spending, manage accounts, and grow your wealth. We believe your financial data belongs exclusively to you. This policy outlines our exact data practices, on-device parsing architecture, and deletion rights.
@@ -74,7 +74,7 @@ export default function PrivacyPolicyPage() {
               </div>
               <h2 className="text-sm font-bold text-foreground">On-Device Parsing</h2>
               <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-                100% of SMS messages are processed locally on your phone. Raw SMS text is never uploaded to our servers.
+                SMS messages are processed on your phone. Your real SMS is never uploaded automatically; only a masked copy with fake values is shared to improve detection, and you can turn it off.
               </p>
             </div>
 
@@ -114,6 +114,9 @@ export default function PrivacyPolicyPage() {
               <p>
                 <strong>Planning & Wealth:</strong> Account nicknames, opening balances, monthly budget caps, savings targets, and outing split logs.
               </p>
+              <p>
+                <strong>Masked SMS Formats & Device ID:</strong> Masked template requests (fake values only) and a one-way hash of a random app-generated device ID, used only to improve SMS detection and apply daily limits. See section 2.
+              </p>
             </div>
           </section>
 
@@ -141,6 +144,12 @@ export default function PrivacyPolicyPage() {
                 </li>
                 <li>
                   <strong>Ephemeral Review Retention:</strong> Unverified or ignored review items retain locally encrypted text for up to 30 days before being automatically purged by automated retention jobs.
+                </li>
+                <li>
+                  <strong>Template Requests (On by Default):</strong> When SpentX finds a bank SMS format it doesn&apos;t recognise yet, it sends us a masked copy where every personal value (amounts, account numbers, references, UPI IDs, names, balances, dates) is replaced with a fake value of the same shape. Bank name, sender ID and wording are kept. Your real SMS is never sent automatically. This works offline too, uses a hashed random device ID to apply daily limits, and can be turned off anytime in Settings. Reviewed requests are deleted after 30 days without new activity.
+                </li>
+                <li>
+                  <strong>Send to Support (Only When You Tap):</strong> If you tap <em>Send this SMS to SpentX support</em>, that SMS is sent to our support team only to fix its detection. It is visible only to SpentX admins and deleted automatically after 30 days.
                 </li>
                 <li>
                   <strong>Notification Listener:</strong> Optional. SpentX strictly filters notifications to process only user-selected payment or banking apps (e.g., Google Pay, PhonePe, Paytm). Notifications from all other applications are ignored immediately.

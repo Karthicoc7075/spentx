@@ -1,7 +1,7 @@
 # SpentX Public Privacy Policy
 
-**Last Updated:** October 22, 2026  
-**Effective Date:** October 22, 2026
+**Last Updated:** October 30, 2026  
+**Effective Date:** October 30, 2026
 
 SpentX ("we", "our", or "us") provides a personal finance management application designed to give you clarity and control over your spending, accounts, budgets, and savings goals. We are committed to safeguarding your privacy and ensuring transparency regarding how your data is accessed, processed, synchronized, and deleted.
 
@@ -9,7 +9,7 @@ SpentX ("we", "our", or "us") provides a personal finance management application
 
 ## 1. Summary of Core Privacy Principles
 
-- **On-Device SMS Processing:** Transactional bank and payment SMS are parsed locally on your device. Raw SMS messages are **never** uploaded to our cloud servers or shared with any third party.
+- **On-Device SMS Processing:** Transactional bank and payment SMS are parsed locally on your device. Your real SMS is **never** uploaded automatically or shared with any third party. Only a masked copy with fake values (a "template request", which you can turn off) is sent to help us support new SMS formats, and a full SMS is sent only if you tap "Send this SMS to SpentX support".
 - **Zero Raw SMS on Completed Transactions:** Once a transaction is parsed or confirmed, only structured financial fields (amount, date, merchant, category, masked account/reference) and a one-way cryptographic SHA-256 fingerprint (for deduplication) are retained. Raw SMS text is permanently stripped.
 - **Immediate Discard of OTPs and Personal SMS:** One-time passwords (OTPs), authentication codes, and non-financial personal conversations are detected and discarded immediately. They are never stored, logged, or synced.
 - **Encrypted Local Storage:** Local databases on your device are encrypted using industry-standard AES encryption with hardware-backed encryption keys held in the Android Keystore.
@@ -38,13 +38,13 @@ To provide money management features, SpentX maintains your financial ledger:
 If you grant the optional SMS permission (`RECEIVE_SMS` and/or `READ_SMS`):
 - **What is accessed:** The app reads incoming and existing SMS messages sent by registered financial institutions (e.g., banks, credit card issuers, and UPI payment gateways).
 - **Purpose:** Solely to automatically detect financial transactions and keep your expense ledger and balances accurate without manual entry.
-- **On-Device Processing:** 100% of SMS parsing occurs locally on your phone.
+- **On-Device Processing:** All SMS parsing occurs locally on your phone.
 - **Filtering & Dropping:** Messages identified as OTPs, 2-factor authentication codes, personal texts, or non-financial alerts are dropped instantly before any storage or processing.
 - **Raw SMS Text Retention:**
   - Completed transactions: **Zero** raw text stored.
   - Ephemeral review items (unverified detections or ignored alerts): Stored locally in encrypted storage for a maximum of 30 days, after which they are automatically purged by automated retention jobs.
   - Account suggestion samples: A maximum of 3 temporary samples are kept locally for up to 14 days to resolve newly discovered accounts.
-- **Cloud Synchronization:** Raw SMS text is strictly prohibited by our synchronization payload whitelist and is **never** sent to our cloud servers.
+- **Cloud Synchronization:** Raw SMS text is strictly prohibited by our synchronization payload whitelist and is **never** synced to our cloud servers. The only SMS-related data that can leave your phone is described in sections F and G below.
 
 ### D. Payment App Notifications (Optional)
 If you explicitly enable notification access (`NotificationListenerService`):
@@ -54,6 +54,18 @@ If you explicitly enable notification access (`NotificationListenerService`):
 ### E. Contacts (Optional On-Device Matching)
 If you grant contacts access (`READ_CONTACTS`), SpentX uses it solely on-device to match UPI phone numbers or handles to contact names (e.g., Family or Friends) to categorize person-to-person transfers. Your contact list is **never** uploaded to our servers or shared with any third party.
 
+### F. SMS Template Requests (On by Default, Can Be Turned Off)
+When SpentX finds a bank SMS format it does not yet recognise, it can send us a **template request** so we can add support for that format and improve detection for everyone.
+- **What is sent:** A copy of the SMS where every personal value (amounts, account and card numbers, reference numbers, UPI IDs, names, balances and dates) is replaced with a fake value of the same shape. The bank name, sender ID, message wording and format are kept so we can build the template. Your real SMS is **never** sent automatically.
+- **Device identifier:** A random app-generated device ID, stored on our servers only as a one-way hash, is used to apply daily sending limits. If you are signed in, the request is also linked to your account.
+- **Works offline:** Requests can be sent even if you use SpentX in Local Only mode without signing in.
+- **Limits:** A small number of requests per device per day, with a maximum of 500 characters each. Repeated formats are counted, not stored again.
+- **Turning it off:** You can turn template requests off at any time in Settings. Turning it off also clears any requests still waiting to be sent.
+- **Retention:** Requests are kept until our team reviews them. Reviewed requests are deleted automatically after 30 days without new activity.
+
+### G. Send This SMS to SpentX Support (Only When You Tap It)
+If you choose **Send this SMS to SpentX support** for a message, that SMS is sent to our support team only to fix detection for it. This happens only when you tap it, follows the same daily limits, is readable only by SpentX admins, and is deleted automatically after 30 days.
+
 ---
 
 ## 3. How We Use Your Information
@@ -62,8 +74,9 @@ SpentX uses your information exclusively to provide and improve personal financi
 1. Calculating your current account balances, monthly spending, and savings rates.
 2. Categorizing your transactions and alerting you to budget limits.
 3. Automatically detecting incoming transactions from bank alerts to eliminate manual bookkeeping.
-4. Synchronizing your encrypted financial data across your personal devices via our authenticated cloud infrastructure.
-5. Providing secure authentication and brute-force lockout protection.
+4. Improving SMS detection by adding support for new bank SMS formats from masked template requests.
+5. Synchronizing your encrypted financial data across your personal devices via our authenticated cloud infrastructure.
+6. Providing secure authentication and brute-force lockout protection.
 
 ---
 
@@ -82,6 +95,8 @@ SpentX uses your information exclusively to provide and improve personal financi
 ### A. Retention Schedule
 - **Financial Transactions & Accounts:** Retained in your private account until you explicitly edit or delete them, or delete your account.
 - **Pending Review SMS:** Automatically deleted from your local device after 30 days.
+- **Template Requests:** Kept until reviewed, then deleted automatically after 30 days without new activity.
+- **Support SMS:** Deleted automatically from our servers after 30 days.
 - **Diagnostic and Debug Logs:** Automatically purged after 7 days; completely disabled in release builds.
 
 ### B. Account and Data Deletion Rights
