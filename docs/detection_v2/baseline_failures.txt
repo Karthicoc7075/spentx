@@ -21,4 +21,15 @@
 # pre-existing. Fix scheduled for Phase 10.
 
 # FIXED in 6698a85 (P7.5): test/detected_sms_tabs_test.dart: Ignored ignored item whose SMS was already saved under another id is refused
-# No known failures.
+# Confirmed still passing on 2026-10-30 (onboarding-flow @ 03bdb61). It is not a current failure.
+#
+# Oct 30, 2026. Branch onboarding-flow @ f3059d9 (detection 03bdb61 + sync backoff).
+# flutter analyze: no issues.
+# flutter test (full, parallel): 1605 passed, 2 failed.
+# The 2 failures are timing, and the same file passes when run alone
+# (flutter test test/background_single_writer_test.dart: 22 passed):
+#   test/background_single_writer_test.dart: 500-SMS burst through native batches: every one saved once
+#     Timeout after 30s under a parallel full run (413 of 500 saved). Alone it finishes inside 30s.
+#   test/background_single_writer_test.dart: worker yields to the app: stops after the current item
+#     Expected 2, actual 4, only while the burst above is over the 30s limit. Alone it is 2.
+# No known product failures. detected_sms_tabs_test passes.

@@ -599,3 +599,38 @@ Approved by Karthi (steps 1-8, all answers "A"). Supersedes the 48h hidden hold 
   - The app is signed out, so it does not process SMS (by design). The in-app scenarios still need the real phone.
   - Launch, Log in and Create account screens render. FLAG_SECURE is on.
   - A debug cold start takes about 90s on the emulator. Taps during the splash cause an "Input dispatching timed out (no focused window)" ANR.
+
+## 21. Oct-30 decisions (committed in `03bdb61` on `onboarding-flow`)
+- **Unmatched SMS:** the non-transaction, statement and money filters run first. After that, a fallback read with an amount and a saved account gets a "please confirm" card (`fallback_confirm`). Anything else that states money gets an Unparsed card. Nothing that states money is dropped silently.
+- **Template requests:** opt-in, default OFF. There is a one-time Share/No ask on Unparsed and please-confirm cards, plus a Settings toggle ("Help improve SMS reading"). Nothing is queued or sent while it is OFF.
+- **Dedupe:**
+  - Ref and message-hash duplicates are still caught.
+  - Two events from the same source (SMS+SMS or notification+notification) are never merged by the time window, so two ₹10 SMS 2 min apart give 2 transactions.
+  - The window applies only to SMS + notification.
+- **Auto-add:**
+  - A saved merchant auto-adds even when Auto Add is OFF.
+  - An admin category auto-adds only when the setting is ON.
+  - An unknown merchant goes to Verify.
+  - A Swiggy detection that is complete (account last-4 matched) auto-adds.
+- **Category order:** saved choice → description words → admin brand → Needs category.
+- **Toast:** "Added · Undo · Edit".
+- **Lock screen:** the new-account notification uses private visibility. The public (lock-screen) title is "New account detected — Tap to verify", with no bank, digits, or amount.
+- **Wallet top-up:**
+  - An explicit top-up bank debit becomes a bank→wallet transfer. An unsaved wallet gets a Verify card on Transfer.
+  - "At PAYZAPPW" keeps the Yes/No ask.
+  - A wallet credit with added/loaded/top-up words is never income on its own:
+    - with a matching bank debit, it merges;
+    - otherwise it gets a pending card: "₹X added to WALLET. From which account?" with account buttons plus "Someone sent it to me (income)";
+    - a bank debit that arrives later auto-merges with that card.
+  - "Received from" is income. Cashback is income with category Cashback. The wallet is never the FROM account of a credit.
+- **Tests:** `test/detection_decisions_oct30_test.dart`. Two older expectations were updated to these rules: a non-money parked SMS is ignored (`parseFailed`, no card), and "added to your Paytm Wallet" with no bank SMS is the "From which account?" card, not account discovery.
+- **Suite:** `flutter analyze` clean. Full `flutter test` on this commit: 1605 passed, 2 failed. Both failures are the 500-SMS burst timing out at 30s during a parallel run; `test/background_single_writer_test.dart` passes on its own (22). `detected_sms_tabs_test` passes. See `baseline_failures.txt`.
+
+## Phase 9 (planned): template category
+- Admin templates carry an optional category. Order of precedence: the user's saved choice, then description words, then the template category, then the admin brand.
+
+## Future features
+- **Crowd category learning:**
+  - Opt-in. Shares only the business merchant name and the chosen category, never the SMS, amount or account.
+  - When 20+ users agree at 80%+, the pair appears on an admin "Category suggestions" page. Admin approval adds it to the brand list.
+  - The user's own saved choice always wins.
