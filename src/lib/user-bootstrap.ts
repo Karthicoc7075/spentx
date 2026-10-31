@@ -23,14 +23,6 @@ async function throwIfError<T>(
   return data;
 }
 
-function todayDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function monthKey(date = todayDate()) {
-  return date.slice(0, 7);
-}
-
 // Audit/activity logs are bookkeeping, not core workspace data — a schema
 // drift here (missing column, a CHECK constraint that doesn't yet allow a
 // given type) should never block the user from signing in and using the
@@ -457,67 +449,6 @@ export async function bootstrapUserWorkspace(
       templateId,
     );
   }
-
-  const snapshotDate = todayDate();
-  const balanceSnapshots = await throwIfError(
-    db
-      .from("account_balance_history")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("account_id", accountId!)
-      .eq("snapshot_date", snapshotDate)
-      .limit(1),
-  );
-
-  if (accountId && !balanceSnapshots?.length) {
-    const snapshotRow = {
-      account_id: accountId,
-      user_id: userId,
-      balance: 0,
-      snapshot_date: snapshotDate,
-      month_key: monthKey(snapshotDate),
-    };
-    const created = await throwIfError(
-      db
-        .from("account_balance_history")
-        .insert(snapshotRow)
-        .select("id")
-        .single(),
-    );
-    await writeAuditLog(db, userId, "account_balance_history", created.id as string, {
-      id: created.id,
-      ...snapshotRow,
-    });
-  }
-
-  await runOptionalStep("record net worth snapshot", async () => {
-    const netWorthSnapshots = await throwIfError(
-      db
-        .from("net_worth_history")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("snapshot_date", snapshotDate)
-        .limit(1),
-    );
-
-    if (!netWorthSnapshots?.length) {
-      const netWorthRow = {
-        user_id: userId,
-        snapshot_date: snapshotDate,
-        cash_balance: 0,
-        bank_balance: 0,
-        investment_value: 0,
-        net_worth: 0,
-      };
-      const created = await throwIfError(
-        db.from("net_worth_history").insert(netWorthRow).select("id").single(),
-      );
-      await writeAuditLog(db, userId, "net_worth_history", created.id as string, {
-        id: created.id,
-        ...netWorthRow,
-      });
-    }
-  });
 
   if (
     (clientContext?.userAgent || clientContext?.platform) &&
