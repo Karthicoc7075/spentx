@@ -17,11 +17,11 @@ function formatRelativeTime(date: Date | null) {
 
 export function useSyncStatus() {
   const { transactionsError, lastSyncedAt } = useAppData();
-  const [isOffline, setIsOffline] = useState(false);
-  const [offlineDismissed, setOfflineDismissed] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [noInternetDismissed, setNoInternetDismissed] = useState(false);
 
   useEffect(() => {
-    const update = () => setIsOffline(!navigator.onLine);
+    const update = () => setIsOnline(navigator.onLine);
     update();
     window.addEventListener("online", update);
     window.addEventListener("offline", update);
@@ -36,10 +36,15 @@ export function useSyncStatus() {
     [lastSyncedAt],
   );
 
+  // A banner should render only while the browser is offline and the
+  // person has not dismissed it. Nothing in the website reads this yet.
+  const showNoInternetBanner = !isOnline && !noInternetDismissed;
+
   return {
-    isOffline,
-    offlineDismissed,
-    setOfflineDismissed,
+    isOnline,
+    noInternetDismissed,
+    setNoInternetDismissed,
+    showNoInternetBanner,
     syncError: transactionsError,
     lastSyncedAt,
     lastSyncedLabel,
