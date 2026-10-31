@@ -58,7 +58,8 @@ If you grant contacts access (`READ_CONTACTS`), SpentX uses it solely on-device 
 When SpentX finds a bank SMS format it does not yet recognise, it can send us a **template request** so we can add support for that format and improve detection for everyone.
 - **What is sent:** A copy of the SMS where every personal value (amounts, account and card numbers, reference numbers, UPI IDs, names, balances and dates) is replaced with a fake value of the same shape. The bank name, sender ID, message wording and format are kept so we can build the template. Your real SMS is **never** sent automatically.
 - **Device identifier:** A random app-generated device ID, stored on our servers only as a one-way hash, is used to apply daily sending limits. If you are signed in, the request is also linked to your account.
-- **Works offline:** Requests can be sent even if you use SpentX in Local Only mode without signing in.
+- **Phone only:** Requests can be sent even if you use SpentX on this phone only, without signing in.
+- **No internet:** If the phone has no internet, the request waits and is sent when the connection is back.
 - **Limits:** A small number of requests per device per day, with a maximum of 500 characters each. Repeated formats are counted, not stored again.
 - **Turning it off:** You can turn template requests off at any time in Settings. Turning it off also clears any requests still waiting to be sent.
 - **Retention:** Requests are kept until our team reviews them. Reviewed requests are deleted automatically after 30 days without new activity.

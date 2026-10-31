@@ -1,5 +1,5 @@
 -- Migration: Allow anonymous read access to public admin rules and catalogs
--- WHY: Allows offline mode / unauthenticated mobile apps to receive silent background updates
+-- WHY: Allows Phone only / unauthenticated mobile apps to receive silent background updates
 -- for SMS templates, merchant brands, and category catalogs without needing a cloud account.
 -- Security: Read-only (SELECT) on public rule tables only; write operations remain strictly admin-only.
 
