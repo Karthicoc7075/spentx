@@ -76,13 +76,25 @@ export function getDateRangeForDashboardPreset(
   };
 }
 
+export const ASIA_KOLKATA = "Asia/Kolkata";
+
+function formatIstParts(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: ASIA_KOLKATA,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const year = parts.find((p) => p.type === "year")?.value;
+  const month = parts.find((p) => p.type === "month")?.value;
+  const day = parts.find((p) => p.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
 export function toCalendarDate(value: string | Date): string {
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime())) return "";
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    return formatIstParts(value);
   }
 
   const trimmed = value.trim();
@@ -93,10 +105,7 @@ export function toCalendarDate(value: string | Date): string {
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) return "";
 
-  const year = parsed.getFullYear();
-  const month = String(parsed.getMonth() + 1).padStart(2, "0");
-  const day = String(parsed.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return formatIstParts(parsed);
 }
 
 export function getTodayCalendarDate() {
