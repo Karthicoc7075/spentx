@@ -16,7 +16,7 @@ import type { TrendSeries } from "@/lib/dashboard";
 import { cn, formatCurrency } from "@/lib/utils";
 
 type TrendChartProps = {
-  data: Array<Record<string, string | number>>;
+  data: Array<Record<string, string | number | null>>;
   series?: TrendSeries[];
   selectedKey?: string | null;
   onSelectKey?: (key: string | null) => void;
@@ -200,13 +200,14 @@ export function TrendChart({
               <Tooltip
                 contentStyle={tooltipStyle}
                 formatter={(value, name) => [
-                  formatCurrency(Number(value)),
+                  value == null ? "No data" : formatCurrency(Number(value)),
                   String(name),
                 ]}
               />
               {activeSeries.map((item, index) => (
                 <Area
                   key={item.key}
+                  connectNulls={false}
                   activeDot={{
                     r: 5,
                     fill: item.color,
@@ -266,13 +267,14 @@ export function TrendChart({
             <Tooltip
               contentStyle={tooltipStyle}
               formatter={(value, name) => [
-                formatCurrency(Number(value)),
+                value == null ? "No data" : formatCurrency(Number(value)),
                 String(name),
               ]}
             />
             {activeSeries.map((item, index) => (
               <Line
                 key={item.key}
+                connectNulls={false}
                 dataKey={item.key}
                 dot={false}
                 name={item.label}

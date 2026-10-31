@@ -330,8 +330,9 @@ export function DashboardPage() {
         purposes,
         { dateFrom: filters.dateFrom, dateTo: filters.dateTo },
         effectivePurposeId,
+        { accounts },
       ),
-    [filteredTransactions, filters.dateFrom, filters.dateTo, effectivePurposeId, purposes],
+    [filteredTransactions, filters.dateFrom, filters.dateTo, effectivePurposeId, purposes, accounts],
   );
 
   const [selectedTrendKey, setSelectedTrendKey] = useState<string | null>(null);

@@ -452,10 +452,10 @@ export type KpiData = {
   incomeDelta: KpiDelta;
   expenseDelta: KpiDelta;
   savingsDelta: KpiDelta;
-  netWorthSparkline: number[];
-  incomeSparkline: number[];
-  expenseSparkline: number[];
-  savingsSparkline: number[];
+  netWorthSparkline: Array<number | null>;
+  incomeSparkline: Array<number | null>;
+  expenseSparkline: Array<number | null>;
+  savingsSparkline: Array<number | null>;
   outingExpense?: number;
   previousMonthRollover?: number;
 };

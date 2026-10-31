@@ -11,7 +11,7 @@ type KpiCardProps = {
   value: string;
   change?: string;
   delta?: KpiDelta;
-  sparkline?: number[];
+  sparkline?: Array<number | null>;
   inlineMeta?: string;
   icon: LucideIcon;
   onClick?: () => void;

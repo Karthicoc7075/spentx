@@ -103,21 +103,53 @@ function formatChange(current: number, previous: number) {
   return buildDelta(current, previous).label;
 }
 
-function buildSparkline(
+function findTrackedStartDate(
+  accounts: Account[] = [],
+  transactions: Transaction[] = [],
+): string | null {
+  let earliest: string | null = null;
+  for (const acc of accounts) {
+    if (acc.isActive !== false && acc.openingBalanceDate) {
+      const d = acc.openingBalanceDate.slice(0, 10);
+      if (d && (!earliest || d < earliest)) {
+        earliest = d;
+      }
+    }
+  }
+  for (const tx of transactions) {
+    const raw = tx.transactionDate ?? tx.date ?? "";
+    const d = raw.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      if (!earliest || d < earliest) {
+        earliest = d;
+      }
+    }
+  }
+  return earliest;
+}
+
+export function buildSparkline(
   transactions: Transaction[],
   month: string,
   metric: "income" | "expense" | "savings" | "net",
   accounts: Account[],
-) {
+): Array<number | null> {
   const { year, monthIndex } = parseDashboardMonth(month);
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const today = new Date();
   const isCurrentMonth =
     today.getFullYear() === year && today.getMonth() === monthIndex;
   const lastDay = isCurrentMonth ? today.getDate() : daysInMonth;
+  const trackedStart = findTrackedStartDate(accounts, transactions);
 
   return Array.from({ length: lastDay }, (_, index) => {
     const day = index + 1;
+    const dayStr = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+    if (trackedStart && dayStr < trackedStart) {
+      return null;
+    }
+
     const cutoff = new Date(year, monthIndex, day, 23, 59, 59, 999);
     const subset = transactions.filter(
       (transaction) => new Date(transaction.transactionDate) <= cutoff,
@@ -133,12 +165,20 @@ function buildSparkline(
   });
 }
 
-function buildTrendForLastNDays(transactions: Transaction[], days: number) {
+function buildTrendForLastNDays(
+  transactions: Transaction[],
+  days: number,
+  accounts: Account[] = [],
+) {
   const scoped = filterLastNDays(transactions, days);
+  const trackedStart = findTrackedStartDate(accounts, transactions);
 
   return Array.from({ length: days }, (_, index) => {
     const date = new Date();
     date.setDate(date.getDate() - (days - 1 - index));
+    const dayKey = date.toISOString().slice(0, 10);
+    const isUntracked = Boolean(trackedStart && dayKey < trackedStart);
+
     const sameDay = scoped.filter((transaction) => {
       const transactionDate = new Date(transaction.transactionDate);
       return transactionDate.toDateString() === date.toDateString();
@@ -146,8 +186,8 @@ function buildTrendForLastNDays(transactions: Transaction[], days: number) {
 
     return {
       day: date.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
-      income: sumByType(sameDay, "income"),
-      expense: sumByType(sameDay, "expense"),
+      income: isUntracked ? null : sumByType(sameDay, "income"),
+      expense: isUntracked ? null : sumByType(sameDay, "expense"),
     };
   });
 }
@@ -156,17 +196,22 @@ function buildTrendForDateRange(
   transactions: Transaction[],
   dateFrom: string,
   dateTo: string,
+  accounts: Account[] = [],
 ) {
-  const start = new Date(dateFrom);
-  const end = new Date(`${dateTo}T23:59:59`);
+  const start = new Date(`${dateFrom}T12:00:00`);
+  const end = new Date(`${dateTo}T12:00:00`);
   const dayCount = Math.max(
     1,
-    Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
+    Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
   );
+  const trackedStart = findTrackedStartDate(accounts, transactions);
 
   return Array.from({ length: dayCount }, (_, index) => {
     const date = new Date(start);
     date.setDate(start.getDate() + index);
+    const dayKey = date.toISOString().slice(0, 10);
+    const isUntracked = Boolean(trackedStart && dayKey < trackedStart);
+
     const sameDay = transactions.filter((transaction) => {
       const transactionDate = new Date(transaction.transactionDate);
       return transactionDate.toDateString() === date.toDateString();
@@ -174,8 +219,8 @@ function buildTrendForDateRange(
 
     return {
       day: date.toLocaleDateString("en-IN", { day: "numeric", month: "short" }),
-      income: sumByType(sameDay, "income"),
-      expense: sumByType(sameDay, "expense"),
+      income: isUntracked ? null : sumByType(sameDay, "income"),
+      expense: isUntracked ? null : sumByType(sameDay, "expense"),
     };
   });
 }
@@ -285,8 +330,9 @@ export function buildMultiPurposeTrend(
   purposes: Purpose[],
   range: { dateFrom: string; dateTo: string },
   selectedPurposeId = "",
+  options?: { accounts?: Account[] },
 ): {
-  data: Array<Record<string, string | number>>;
+  data: Array<Record<string, string | number | null>>;
   series: TrendSeries[];
 } {
   const activePurposes = getActivePurposes(purposes);
@@ -294,12 +340,13 @@ export function buildMultiPurposeTrend(
     ? activePurposes.filter((purpose) => purpose.id === selectedPurposeId)
     : activePurposes;
 
-  const start = new Date(range.dateFrom);
-  const end = new Date(`${range.dateTo}T23:59:59`);
+  const start = new Date(`${range.dateFrom}T12:00:00`);
+  const end = new Date(`${range.dateTo}T12:00:00`);
   const dayCount = Math.max(
     1,
-    Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
+    Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1,
   );
+  const trackedStart = findTrackedStartDate(options?.accounts ?? [], transactions);
 
   const series: TrendSeries[] = scopedPurposes.flatMap((purpose, index) => {
     const colors = getPurposeTrendColors(purpose, index);
@@ -327,26 +374,36 @@ export function buildMultiPurposeTrend(
       day: "numeric",
       month: "short",
     });
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    const dayKey = `${y}-${m}-${d}`;
+    const isUntracked = Boolean(trackedStart && dayKey < trackedStart);
 
-    const row: Record<string, string | number> = { day: dayLabel };
+    const row: Record<string, string | number | null> = { day: dayLabel };
 
     for (const purpose of scopedPurposes) {
-      const sameDay = transactions.filter((transaction) => {
-        const transactionDate = new Date(transaction.transactionDate);
-        return (
-          transactionDate.toDateString() === date.toDateString() &&
-          transactionMatchesPurpose(transaction.purposeId, purpose.id, purposes)
-        );
-      });
+      if (isUntracked) {
+        row[`${purpose.id}-income`] = null;
+        row[`${purpose.id}-expense`] = null;
+      } else {
+        const sameDay = transactions.filter((transaction) => {
+          const transactionDate = new Date(transaction.transactionDate);
+          return (
+            transactionDate.toDateString() === date.toDateString() &&
+            transactionMatchesPurpose(transaction.purposeId, purpose.id, purposes)
+          );
+        });
 
-      row[`${purpose.id}-income`] = sumByType(
-        sameDay.filter((transaction) => transaction.type === "income"),
-        "income",
-      );
-      row[`${purpose.id}-expense`] = sumByType(
-        sameDay.filter((transaction) => transaction.type === "expense"),
-        "expense",
-      );
+        row[`${purpose.id}-income`] = sumByType(
+          sameDay.filter((transaction) => transaction.type === "income"),
+          "income",
+        );
+        row[`${purpose.id}-expense`] = sumByType(
+          sameDay.filter((transaction) => transaction.type === "expense"),
+          "expense",
+        );
+      }
     }
 
     return row;

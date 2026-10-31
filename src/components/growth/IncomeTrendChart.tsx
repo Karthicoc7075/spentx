@@ -43,7 +43,9 @@ export function IncomeTrendChart({ data, target = 0 }: IncomeTrendChartProps) {
               borderRadius: 8,
               color: "var(--card-foreground)",
             }}
-            formatter={(value) => formatCurrency(Number(value))}
+            formatter={(value) =>
+              value == null ? "No data" : formatCurrency(Number(value))
+            }
           />
           {target > 0 ? (
             <ReferenceLine
@@ -54,6 +56,7 @@ export function IncomeTrendChart({ data, target = 0 }: IncomeTrendChartProps) {
             />
           ) : null}
           <Line
+            connectNulls={false}
             dataKey="income"
             dot={{ r: 3, fill: "var(--chart-1)" }}
             stroke="var(--chart-1)"

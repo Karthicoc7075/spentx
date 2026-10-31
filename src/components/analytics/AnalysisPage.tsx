@@ -92,8 +92,8 @@ export function AnalysisPage() {
       (trend?.current ?? []).map((point) => ({
         day: point.label,
         label: point.label,
-        income: point.income ?? 0,
-        expense: point.expense ?? 0,
+        income: point.income !== undefined ? point.income : null,
+        expense: point.expense !== undefined ? point.expense : null,
       })),
     [trend],
   );
