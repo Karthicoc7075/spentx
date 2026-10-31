@@ -345,6 +345,24 @@ export function netWorthCardAccounts<T extends Pick<Account, "type">>(accounts: 
   return accounts.filter((account) => isLiquidAccount(account));
 }
 
+/**
+ * Canonical credit card breakdown:
+ * amount owed = max(0, startingDebt - ledgerDelta)
+ * surplus = max(0, ledgerDelta - startingDebt)
+ * Owed is subtracted as debt in net worth. Surplus is never added to net worth or liquidity.
+ */
+export function computeCreditCardBreakdown(
+  openingDebt: number,
+  ledgerDelta: number,
+): { owed: number; surplus: number } {
+  const start = openingDebt > 0 ? openingDebt : 0;
+  const rawDebt = start - ledgerDelta;
+  if (rawDebt > 0) {
+    return { owed: rawDebt, surplus: 0 };
+  }
+  return { owed: 0, surplus: Math.abs(rawDebt) };
+}
+
 export function computeNetWorthBreakdown(
   accounts: Account[],
   transactions: Transaction[],
@@ -362,7 +380,7 @@ export function computeNetWorthBreakdown(
   let bankAccounts = 0;
   let wallets = 0;
   let cash = 0;
-  let credit = 0;
+  let creditDebt = 0;
 
   for (let i = 0; i < accounts.length; i++) {
     const account = accounts[i];
@@ -375,9 +393,13 @@ export function computeNetWorthBreakdown(
       case "wallet":
         wallets += balance;
         break;
-      case "credit":
-        credit += balance;
+      case "credit": {
+        const openingDebt = Number(account.openingBalance ?? 0) > 0 ? Number(account.openingBalance) : 0;
+        const ledgerDelta = balance - openingDebt;
+        const { owed } = computeCreditCardBreakdown(openingDebt, ledgerDelta);
+        creditDebt += owed;
         break;
+      }
       case "bank":
         bankAccounts += balance;
         break;
@@ -417,8 +439,6 @@ export function computeNetWorthBreakdown(
       lastMonthSavings += delta;
     }
   }
-
-  const creditDebt = Math.abs(credit);
 
   return {
     total: bankAccounts + wallets + cash - creditDebt,
@@ -601,14 +621,28 @@ export function computeDailyFinancialSnapshots(
       const openDate = accountOpeningDates.get(acc.id) || todayStr;
       if (dateStr >= openDate) {
         const bal = runningBalances.get(acc.id) ?? 0;
-        const rounded = Math.round(bal);
-        totalBalance += rounded;
-        accountsOnThisDate.push({
-          accountId: acc.id,
-          accountName: acc.name,
-          accountType: acc.type,
-          balance: rounded,
-        });
+        const accType = (acc.type ?? "").toLowerCase();
+        if (accType === "credit") {
+          const openingDebt = Number(acc.openingBalance ?? 0) > 0 ? Number(acc.openingBalance) : 0;
+          const ledgerDelta = bal - openingDebt;
+          const { owed } = computeCreditCardBreakdown(openingDebt, ledgerDelta);
+          totalBalance -= Math.round(owed);
+          accountsOnThisDate.push({
+            accountId: acc.id,
+            accountName: acc.name,
+            accountType: acc.type,
+            balance: owed > 0 ? -Math.round(owed) : 0,
+          });
+        } else {
+          const rounded = Math.round(bal);
+          totalBalance += rounded;
+          accountsOnThisDate.push({
+            accountId: acc.id,
+            accountName: acc.name,
+            accountType: acc.type,
+            balance: rounded,
+          });
+        }
       }
     }
 

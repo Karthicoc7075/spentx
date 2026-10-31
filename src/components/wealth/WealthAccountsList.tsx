@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { debitCardsOf, isCreditCard, isDebitCardVirtual } from "@/lib/account-kinds";
 import { cn, formatCurrency } from "@/lib/utils";
-import { computeAccountBalancesMap } from "@/lib/wealth";
+import { computeAccountBalancesMap, computeCreditCardBreakdown } from "@/lib/wealth";
 import { WealthFilteredTransactions } from "@/components/wealth/WealthFilteredTransactions";
 import type { Account, OutingExpense, Transaction, WealthFilter } from "@/types";
 
@@ -201,7 +201,11 @@ export function WealthAccountsList({
           {segmentAccounts.map(({ account, balance }) => {
             const isDebit = isDebitCardVirtual(account);
             const isCredit = isCreditCard(account);
-            const outstanding = isCredit && balance < 0 ? -balance : 0;
+            const openingDebt = Number(account.openingBalance ?? 0) > 0 ? Number(account.openingBalance) : 0;
+            const ledgerDelta = balance - openingDebt;
+            const { owed: outstanding, surplus: extraPaid } = isCredit
+              ? computeCreditCardBreakdown(openingDebt, ledgerDelta)
+              : { owed: 0, surplus: 0 };
             const limit = account.creditLimit ?? 0;
             const usedPct = limit > 0 ? Math.min(100, (outstanding / limit) * 100) : 0;
             const isSelected =
@@ -319,10 +323,24 @@ export function WealthAccountsList({
                     </div>
                   ) : isCredit ? (
                     <div className="pt-2.5 sm:pt-3">
-                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                        Outstanding
-                      </span>
-                      <p className="text-lg sm:text-xl font-bold leading-tight tracking-tight font-mono tabular-nums mt-0.5 truncate text-rose-600 dark:text-rose-400">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                          {outstanding > 0 ? "Outstanding" : extraPaid > 0 ? "Surplus" : "No dues"}
+                        </span>
+                        {extraPaid > 0 ? (
+                          <span className="rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 text-[10px] font-bold">
+                            {formatCurrency(extraPaid)} extra paid
+                          </span>
+                        ) : null}
+                      </div>
+                      <p
+                        className={cn(
+                          "text-lg sm:text-xl font-bold leading-tight tracking-tight font-mono tabular-nums mt-0.5 truncate",
+                          outstanding > 0
+                            ? "text-rose-600 dark:text-rose-400"
+                            : "text-foreground",
+                        )}
+                      >
                         {outstanding > 0 ? "−" : ""}
                         {formatCurrency(outstanding)}
                       </p>
