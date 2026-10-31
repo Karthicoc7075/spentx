@@ -1,5 +1,16 @@
 # SpentX Mobile — Local Database Reference (Hive)
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
 > Source-verified against the actual Dart code (`lib/data/local/`, `lib/core/providers/*.dart`, `lib/models/*.dart`, `lib/core/models/*.dart`, every domain model under `lib/features/*/domain|data/*.dart`, and every `Hive.box(...)`/`Hive.openBox(...)` call site — ~230 call sites checked) as of 2026-07-20, superseding `Mobile app/SpentX/db.md` where they disagree (differences called out inline). See [FLUTTER_APP_DOCUMENTATION.md](./FLUTTER_APP_DOCUMENTATION.md) for the app overview and [SYNC.md](./SYNC.md) for how this local data reaches Supabase.
 
 Everything renders from Hive — even after the Supabase sync layer was added (§ see SYNC.md), **the UI never reads Supabase directly**; Hive stays the single read layer, and Supabase is a durable store local writes eventually reach via a queue.
@@ -32,7 +43,7 @@ Everything renders from Hive — even after the Supabase sync layer was added (�
 | `ignored_sms_box` | No | append-only | Auto-ignored SMS log (OTP, ads, blocked) | Active |
 | `processed_sms_box` | No | dual-use (§ SMS pipeline doc) | Dedupe by referenceId + parse audit log | Active |
 | `master_debug_log_box` | No | `entries` | Developer debug log (lazy-open) | Active |
-| **`sync_queue`** | No | `items` | **Missing from `db.md` entirely.** The offline-first write queue feeding Supabase sync | Active, undocumented in old `db.md` |
+| **`sync_queue`** | No | `items` | **Missing from `db.md` entirely.** The local-first write queue feeding Supabase sync | Active, undocumented in old `db.md` |
 | `vault` | Yes (AES, `hive_encryption_key`) | — | Defined in `HiveService`; **confirmed dead** — `HiveService.init()`/`hiveServiceProvider` are never called or read anywhere; `main.dart` opens all boxes unencrypted and never touches this class | Dead code |
 | `sms_block_rules_box`, `sms_rules_box`, `sms_template_box` | No | — | **Legacy**, migrated to `block_rules_box`/`detection_rules_box`/`sms_template_rules_box` on startup | Migrated away |
 | `user`, `user_state` | No | — | Referenced only in reset logic, unused at runtime | Vestigial |
@@ -61,7 +72,7 @@ Opened in `main.dart:66`; lazily reopened in `plan_provider.dart`. Key `'list'` 
 
 **Migration behavior:** on first load, if `monthly_plans` is empty, `PlanNotifier` migrates from the legacy `budgets` box (`list` key, `category`/`limit` fields) into a single current-month plan; `ensureDraft()` also seeds allocations from legacy budget limits when creating a new month's draft — so pre-existing category limits are carried forward automatically, not lost. Syncs to Supabase via `SyncService.queuePlanUpsert`/`queuePlanDelete` (see SYNC.md §1).
 
-### 2.2 `sync_queue` — the offline write queue (undocumented gap in `db.md`)
+### 2.2 `sync_queue` — the Cloud sync upload queue (undocumented gap in `db.md`)
 
 `lib/core/sync/sync_queue.dart`, opened via `SyncQueue.ensureOpen()` in `main.dart:78`. Key `'items'` → `List<Map>`:
 
@@ -69,7 +80,7 @@ Opened in `main.dart:66`; lazily reopened in `plan_provider.dart`. Key `'list'` 
 { "id": "string", "entity": "transaction|account|outing|friend|friend_delete|user_settings|user_merchant|contributor|category|monthly_plan", "op": "upsert|delete", "localId": "string", "payload": {}, "at": "ISO8601" }
 ```
 
-This box is the concrete evidence that the app is **not local-only** despite an in-app "Master App Prompt" document (`spentx_master_app_prompt.dart:22`, reachable from Developer Options → "Full App Prompt/Specification") still claiming *"All data stays on-device… no cloud sync"* — that in-app spec text is itself stale, same category of drift as the old `db.md`/`hello.md`. Full push/pull semantics for this queue are documented in [SYNC.md](./SYNC.md).
+This queue serves Cloud sync. Phone only money writes do not upload. See [SYNC.md](./SYNC.md) for storage-mode gates and reconciliation.
 
 ### 2.3 `settings` box
 
@@ -107,7 +118,7 @@ Unencrypted general-purpose box; see §3 for the full key table, including sever
 | `accountLast4` | `String` | | |
 | `referenceId` | `String` | | SMS ref / UPI ref, dedupe key |
 | `upiId` | `String` | | |
-| `rawMessage` | `String` | | Original SMS — **never synced to Supabase** |
+| `rawMessage` | `String` | | Original SMS — **excluded from money sync**; explicit Send to support is separate |
 | `note` | `String` | | |
 | `isPendingVerification` | `bool` | | |
 | `isMerchantMapped` | `bool` | | |
@@ -272,10 +283,11 @@ Full parsing algorithm using these boxes is documented in the SMS pipeline secti
 | `pending_custom_expense` / `pending_custom_income` | `List<String>` | Categories | Custom categories awaiting server push |
 | `sync_last_push_error` / `sync_last_push_at` / `sync_last_push_ok` | `String`/`bool` | Sync | Last push result, surfaced in Developer Options |
 | `sms_rules_last_refresh_at` | `String` (ISO8601) | SMS rules pull | Gates the 24h admin-rules refresh |
-| `tx_cache_extended_since` | `String` (ISO8601) | Sync | Remembers how far back "Load older transactions" has fetched, so the periodic 35-day reconcile doesn't prune that extended history |
+| `storage_mode` | `String` (`phoneOnly` / `cloudSync`) | Storage choice | Controls money sync independently of internet availability |
+| `tx_cache_extended_since` | `String` (ISO8601) | Sync | Remembers how far back "Load older transactions" has fetched, as history-fetch metadata; reconciliation never prunes by age |
 | `app_pin_reset_at` (pulled) | `String?` | Sync | Mirrors the web `users.app_pin_reset_at` column — read-only signal consumed by `PinService.applyRemotePinResetIfNeeded` |
 
-`_WealthGoal` and the manual-bill model are local classes private to their own screen files — no shared model, and **neither is queued to `sync_queue`** (both are local-only, not synced to Supabase).
+`_WealthGoal` and the manual-bill model are local classes private to their own screen files — no shared model, and **neither is queued to `sync_queue`** (both are stored locally, not synced to Supabase).
 
 ---
 
@@ -324,7 +336,7 @@ Background worker (`SmsBackgroundInit`) opens a subset of these boxes independen
 
 ## 7. Reset behavior (`AppResetService.resetAll`)
 
-Clears every box in §1 + SharedPreferences (§4) + PIN keys (`pin_hash`, `pin_salt`, `has_pin`). Re-seeds `settings`: `has_seen_onboarding=false`, `isFirstTimeUser=true`, `auto_detection=true`, `lock_screen_enabled=true`. Per the current auth-required flow (see FEATURES.md/WORKFLOWS.md), this now **also signs out of Supabase** — a fresh-install experience on next open lands at `/auth`, not just onboarding.
+Clears every box in §1 + SharedPreferences (§4) + PIN keys (`pin_hash`, `pin_salt`, `has_pin`). Re-seeds `settings`: `has_seen_onboarding=false`, `isFirstTimeUser=true`, `auto_detection=true`, `lock_screen_enabled=true`. This **also signs out of Supabase**; Phone only does not require an account — a fresh-install experience on next open lands at `/auth`, not just onboarding.
 
 ---
 

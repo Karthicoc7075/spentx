@@ -1,5 +1,16 @@
 # SpentX Mobile — End-to-End Workflows
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
 > Source-verified against the actual Dart code as of 2026-07-20. See [FEATURES.md](./FEATURES.md) for what each screen does, [DATABASE.md](./DATABASE.md) for local storage, [SYNC.md](./SYNC.md) for the Supabase sync mechanics referenced throughout.
 
 ---
@@ -61,18 +72,19 @@ App Launch
 
 ```
 Splash
-  → no Supabase session → /auth  (Sign Up / Log In / Forgot password)
+  → Phone only          → onboarding / local PIN / home as applicable
+  → Cloud sync, no session → /auth (preserve unsynced local data)
   → valid session       → has_seen_onboarding?
                             false → /onboarding → /pin-setup → /home
                             true  → /lock (if PIN) → /home
 ```
 
-- Router-level guard (`app_router.dart`): every route except `/` and `/auth/*` redirects to `/auth` while signed out — covers deep links too.
+- Router guards distinguish Phone only access from Cloud sync authentication; signed-out status alone is not a wipe instruction.
 - Signup → `AuthSignUpScreen` validates → `AuthService.signUp()` → if session is immediately present (no email confirmation required), `AuthFlow.continueAfterAuth()` routes onward through the onboarding gate (§3); if `res.session == null`, an inline message is shown instead.
 - Login → `AuthLoginScreen` → `AuthService.signIn()` → `AuthFlow.continueAfterAuth()` → for a device that's already onboarded, this skips straight to PIN/lock/home.
 - Password reset: `/auth/forgot-password` → `AuthService.sendPasswordReset()` → email link → `spentx://reset-password` deep link → `/auth/reset-password` (guarded by an active Supabase recovery session) → `AuthService.updatePassword()` → `AuthService.signOut()` (ends the recovery session so it can't be reused) → back to `/auth/login`.
-- Sign Out (Settings → Security): `SyncService.stop()` then Supabase sign-out — local Hive data is untouched.
-- **Different account signs in over existing local data:** an explicit dialog offers **Keep local data** (now belongs to the new account) or **Erase & start fresh** (local wipe, preserves the new session) — never a silent merge or silent wipe.
+- Sign Out (Settings → Security): requires pending uploads to flush successfully before clearing the local account workspace and ending the session. Failed uploads prevent sign-out.
+- **Switching from Phone only to Cloud sync:** asks **Upload my phone data / Start fresh / Cancel** before any money upload.
 - Reset App Data: wipes all Hive boxes **and** signs out of Supabase (`SyncService.pushPending()` given a 10s best-effort flush window first) → next open is `/auth`.
 
 **Login success on a device that already onboarded** never re-runs the marketing carousel or account setup modal — it goes straight through to PIN/lock/home, with `SyncService.start()` kicking off a `fullSync()` in the background to repopulate Hive.
@@ -103,7 +115,7 @@ AuthFlow.continueAfterAuth()
 
 **Session-restore path (Splash, not fresh login):** a cached `settings.account_has_data == true` short-circuits with **no network call**; an unresolved/false cached flag re-checks the server once via `accountHasExistingData()`.
 
-**Zero-display gotcha** (documented in the mobile project's own `SYNC_WIRING.md`, still valid): if transactions show zero for an existing account *after* confirming onboarding was correctly skipped, that's a distinct sync-pull bug, not an onboarding bug — check `_pullTransactionsWindow` / the schema-map column names (SYNC.md §1/§3). Also remember the pull window is 35 days — an account whose newest transaction is older than that legitimately shows an empty recent view until "Load older" is used.
+**Zero-display gotcha** (documented in the mobile project's own `SYNC_WIRING.md`, still valid): if transactions show zero for an existing account *after* confirming onboarding was correctly skipped, that's a distinct sync-pull bug, not an onboarding bug — check `_pullTransactionsWindow` / the schema-map column names (SYNC.md §1/§3). Full transaction pulls read all active server rows; an empty response is not permission to delete local history.
 
 ---
 
@@ -347,7 +359,7 @@ Every category allocation card independently shows its own spent-vs-planned prog
 ## 8. Sync workflow (summary — full detail in SYNC.md)
 
 ```
-Local write (any entity) ──► Hive (synchronous, always succeeds offline)
+Cloud sync write ──► Hive (local write; no internet required)
                           ──► SyncQueue.enqueue() (upserts coalesce per
                                record; deletes supersede queued upserts)
                           ──► _kickPush() (fire-and-forget)
@@ -365,9 +377,9 @@ pushPending(): priority-ordered drain (accounts → contributors/categories
   onto pushed rows.
 
 pullAll(): accounts/purposes → categories → contributors → plans →
-  merchants → transactions (35-day rolling window) → outings → friends
+  merchants → transactions (all active server rows) → outings → friends
   → user settings. Never overwrites a row that SyncQueue still has
-  pending for (the sole conflict-resolution mechanism — no timestamps).
+  pending for, subject to local/server timestamp guards.
 ```
 
 See [SYNC.md](./SYNC.md) for the exact Hive-field ↔ Supabase-column mapping per table, and for corrections to the mobile project's own (partially inaccurate) `docs/SYNC_WIRING.md`.
@@ -405,8 +417,9 @@ Trip active → Settings (or trip's own settings) → Outing Privacy toggle ON
 
 ```
 Settings → Sign Out
-  → SyncService.stop()
-  → Supabase signOut() — local Hive data untouched
+  → Require successful pending-upload flush; otherwise refuse sign-out
+  → Stop services, recheck pending uploads, clear local account workspace
+  → End Supabase session
   → next launch: Splash sees no session → /auth
 
 Settings → Danger Zone → Reset App Data
@@ -414,16 +427,15 @@ Settings → Danger Zone → Reset App Data
   → PIN or biometric verification required
   → Final "last chance" confirmation
   → SyncService.pushPending() — 10s best-effort flush of any unsynced
-    local edits BEFORE wiping (so nothing is silently lost that hadn't
-    reached Supabase yet)
+    local edits before wiping; this does not guarantee upload success.
+    The explicit reset warning explains that unsynced data will be lost.
   → AppResetService.resetAll():
        - clears every Hive box (DATABASE.md §1)
        - clears SharedPreferences (DATABASE.md §4)
        - clears pin_hash/pin_salt/has_pin
        - re-seeds settings: has_seen_onboarding=false, isFirstTimeUser=true,
          auto_detection=true, lock_screen_enabled=true
-       - signs out of Supabase (current-flow addition — not just a local
-         wipe, since auth is now required)
+       - signs out of Supabase; Phone only does not require an account
   → force-quits the app after a few seconds
   → next open: /auth (fresh-install experience, matches "different
     account signs in" semantics from §2)
@@ -480,10 +492,10 @@ Android SMS          SmsReceiver.kt        EventChannel          Dart
                                     → real Transaction created, queued for push
 ```
 
-### C. Transaction sync push (offline → online)
+### C. Transaction sync push (no internet → online)
 
 ```
-User (offline)         Hive                SyncQueue           Supabase
+User (no internet)         Hive                SyncQueue           Supabase
      |                   |                    |                   |
      |-- add expense --->|                    |                   |
      |                   |-- enqueue -------->|                   |

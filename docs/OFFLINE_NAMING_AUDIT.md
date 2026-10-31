@@ -1,5 +1,7 @@
 # Offline naming audit
 
+Status: fixed in Steps 1–4. Main commits: app `aa31f07`, `82a84c3`, `86cb5b9` (session/data safety), `ed8d973`, `59839ee` (Phone only upload gates and choice), `f85233a`, `c1cfb90`, `7843698` (names); website `daf8ce5`, `574f61e`, `66294f0` (names/privacy). Step 4: app `7aab0f6` (text), `5b28cd5` (docs/comments), and this website documentation commit, recorded in [FEATURE_STATUS.md](./FEATURE_STATUS.md). The original findings below are a historical snapshot, not the current contract.
+
 Audit only. No app code was changed. Date: 2026-10-31.
 
 Two different things share the word **offline** today:

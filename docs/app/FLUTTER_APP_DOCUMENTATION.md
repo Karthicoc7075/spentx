@@ -1,8 +1,19 @@
 # SpentX Mobile — Full Flutter App Documentation
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
 > **Source:** `Mobile app/SpentX/` inside this same repo — a real Flutter project (`pubspec.yaml`, `lib/`, `android/`, etc.), not a separate/external app. This document consolidates and reconciles that project's own docs (`hello.md`, `db.md`, `docs/AUTH_SETUP.md`, `docs/SYNC_WIRING.md`, `fullappworkflow.md`, `DEBUG_FIX_REPORT.md`) into one current reference, placed under the web repo's `docs/` tree for parity with `docs/FULL_APP_DOCUMENTATION.md`.
 >
-> **Important reconciliation note:** `hello.md` (the most detailed page-by-page doc, self-described as "generated from a full read of the source... every screen listed... not inferred") states the app has *"no cloud sync, no backend server"*. That was true when `hello.md` was written, but two docs added **after** it (`docs/AUTH_SETUP.md`, `docs/SYNC_WIRING.md`, both newer by file timestamp) describe Supabase Auth becoming **required** and a full local-first sync layer being wired to the **same Supabase backend the web app uses**. This document treats `hello.md` as authoritative for screens/UI/local-only mechanics, and `AUTH_SETUP.md`/`SYNC_WIRING.md` as authoritative for auth and backend sync — §3 and §8 below carry the corrected, current picture.
+> Updated storage and sync contract: Steps 1–4 (2026-10-31). Historical screen references below are not a requirement to create a cloud account.
 >
 > **Version:** 1.0.0+1 · **Platform:** Flutter (Android primary; iOS/Windows/Linux scaffolding present but unused) · **Currency:** ₹ (INR) · **Theme:** always dark (the Settings "Dark Mode" row is now an honest static label, not a fake toggle)
 >
@@ -14,7 +25,7 @@
 
 1. [Tech stack & dependencies](#1-tech-stack--dependencies)
 2. [App startup sequence](#2-app-startup-sequence)
-3. [Auth flow (Supabase, required)](#3-auth-flow-supabase-required)
+3. [Auth flow (Supabase, required)](#3-auth-flow-supabase-for-cloud-sync)
 4. [Navigation shell & route table](#4-navigation-shell--route-table)
 5. [Screens — page by page](#5-screens--page-by-page)
 6. [SMS auto-detection pipeline](#6-sms-auto-detection-pipeline)
@@ -51,7 +62,7 @@ From `Mobile app/SpentX/pubspec.yaml` (verified against the actual file, not inf
 | Sharing/export | `share_plus: ^12.0.2`, `csv: ^6.0.0` | |
 | Misc | `uuid`, `intl`, `path_provider`, `shimmer`, `shared_preferences`, `url_launcher` | |
 | Fonts/icons | `google_fonts: ^6.3.2`, `lucide_icons: ^0.257.0` | |
-| **Backend auth + sync** | **`supabase_flutter: ^2.8.0`** | Required sign-in; also handles the password-reset deep link via its bundled `app_links` integration |
+| **Backend auth + sync** | **`supabase_flutter: ^2.8.0`** | Cloud sync sign-in; also handles the password-reset deep link via its bundled `app_links` integration |
 | Dev | `flutter_lints`, `build_runner`, `hive_generator` | Two `@HiveType` models exist but their adapters are **not registered** in `main.dart` — runtime uses plain `Map`s for everything except the unused `vault` box |
 
 Bundled assets (SMS parsing seed data, not Hive): `assets/sms/default_template_rules.json`, `assets/sms/bank_sms_templates_v4.json`, `assets/sms/bank_sms_templates_v4_report.json`.
@@ -93,27 +104,28 @@ App Launch
 
 ---
 
-## 3. Auth flow (Supabase, required)
+## 3. Auth flow (Supabase for Cloud sync)
 
-Superseding `hello.md`'s "no cloud sync" framing — per `docs/AUTH_SETUP.md`, **signup/login is mandatory**: the app cannot be used until the user has a Supabase account and is signed in. PIN remains a *second, local* lock layered behind the Supabase session, not a replacement for it.
+Phone only works without a Supabase account. Cloud sync requires account authentication. PIN remains a local app lock.
 
 ### Current flow
 
 ```
 Splash
-  → no Supabase session → /auth  (Sign Up / Log In / Forgot password)
+  → Phone only          → onboarding / local PIN / home as applicable
+  → Cloud sync, no session → /auth (preserve unsynced local data)
   → valid session       → has_seen_onboarding?
                             false → /onboarding → /pin-setup → /home
                             true  → /lock (if PIN) → /home
 ```
 
-- **Router-level guard:** every route except `/` and `/auth/*` redirects to `/auth` while signed out — this covers deep links, not just cold start.
+- Router guards distinguish Phone only access from Cloud sync authentication; signed-out status alone is not a wipe instruction.
 - Signup success → onboarding carousel (welcome moment) → PIN setup.
 - Login success on a device that already onboarded → skips the carousel, straight to PIN/lock/home.
 - Password reset: email link → `spentx://reset-password` deep link (Android intent filter already in the manifest) → in-app "Set new password" screen → back to `/auth/login`. Reuses the **same reset-email template as web** — nothing mobile-specific needed.
-- Sign Out (Settings → Security): ends the Supabase session only; local Hive data stays on-device.
+- Sign Out (Settings → Security): requires pending uploads to flush successfully before clearing the local account workspace and ending the session. Failed uploads prevent sign-out.
 - Reset App Data: wipes everything **and** signs out → next open is `/auth` (fresh-install experience).
-- **Different account signs in over existing local data:** an explicit dialog offers **Keep local data** (now belongs to the new account) or **Erase & start fresh** (local wipe, preserves the new session) — never a silent merge or silent wipe.
+- **Switching from Phone only to Cloud sync:** asks **Upload my phone data / Start fresh / Cancel** before any money upload.
 
 ### One-time project setup (for anyone building this app)
 
@@ -157,7 +169,7 @@ Bottom nav: Home / Activity / Analytics / More, plus a center floating **"+"** b
 | Route | Screen | Notes |
 |---|---|---|
 | `/` | Splash | App launch; decides `/auth` vs onboarding vs lock vs home |
-| `/auth`, `/auth/signup`, `/auth/login`, `/auth/forgot-password`, `/auth/reset-password` | Auth screens (5 distinct files) | Required — router-level guard redirects here for every other route while signed out. See FEATURES.md §1. |
+| `/auth`, `/auth/signup`, `/auth/login`, `/auth/forgot-password`, `/auth/reset-password` | Auth screens (5 distinct files) | Cloud sync authentication routes; Phone only works without signing in. See FEATURES.md §1. |
 | `/onboarding` | Marketing carousel | First launch only, post-auth |
 | `/pin-setup` | PIN Setup | Onboarding / Settings / Reset PIN flow |
 | `/lock` | Lock Screen | Cold start / resume, PIN-only (never re-auth) |
@@ -295,7 +307,7 @@ Investment types: Liquid, Mutual Fund, Fixed Deposit, Stocks, Bonds, Crypto, Gol
 
 ### 5.14 Settings ("More")
 
-**Route:** Tab 4. Profile header (tap to rename). HELP: App Guide. CONFIGURATION: Account Configuration (→ Premium Settings, §5.15). FEATURES: Manage Outing, Outing Privacy Mode switch (turning off requires PIN/name verification), Manage Friends, Manage Merchants. DEVELOPER: SMS Rules Storage, Developer Options. PREFERENCES: Private Mode switch (blocked while Outing Privacy is live, turning off requires verification), Notification History, Automatic SMS Detection switch, Dark Mode switch (hardcoded always-on — now shown as an honest static "Always on" row per the debug-fix pass rather than a fake toggle). SECURITY: Set/Change PIN, Lock Screen switch, Fingerprint Authentication switch, Reset PIN (requires biometric verification, not old PIN), **Sign Out** (ends Supabase session only, local data stays). DANGER ZONE: Reset App Data (confirmation → PIN/biometric → final confirm → wipes all Hive data + signs out → force-quits so first-time setup runs next open).
+**Route:** Tab 4. Profile header (tap to rename). HELP: App Guide. CONFIGURATION: Account Configuration (→ Premium Settings, §5.15). FEATURES: Manage Outing, Outing Privacy Mode switch (turning off requires PIN/name verification), Manage Friends, Manage Merchants. DEVELOPER: SMS Rules Storage, Developer Options. PREFERENCES: Private Mode switch (blocked while Outing Privacy is live, turning off requires verification), Notification History, Automatic SMS Detection switch, Dark Mode switch (hardcoded always-on — now shown as an honest static "Always on" row per the debug-fix pass rather than a fake toggle). SECURITY: Set/Change PIN, Lock Screen switch, Fingerprint Authentication switch, Reset PIN (requires biometric verification, not old PIN), **Sign Out** (requires pending uploads to flush before clearing the local account workspace). DANGER ZONE: Reset App Data (confirmation → PIN/biometric → final confirm → wipes all Hive data + signs out → force-quits so first-time setup runs next open).
 
 ### 5.15 Account Configuration (Premium Settings)
 
@@ -416,7 +428,7 @@ Also: `hive_encryption_key` in `FlutterSecureStorage` (AES key for `vault`), plu
 
 ### Reset behavior
 
-`AppResetService.resetAll()` clears every box above + SharedPreferences + PIN, re-seeds `settings` (`has_seen_onboarding=false`, `isFirstTimeUser=true`, `auto_detection=true`, `lock_screen_enabled=true`), and (per the current auth-required flow) also signs out of Supabase.
+`AppResetService.resetAll()` clears every box above + SharedPreferences + PIN, re-seeds `settings` (`has_seen_onboarding=false`, `isFirstTimeUser=true`, `auto_detection=true`, `lock_screen_enabled=true`), and also signs out of Supabase; Phone only does not require an account.
 
 ---
 
@@ -424,26 +436,26 @@ Also: `hive_encryption_key` in `FlutterSecureStorage` (AES key for `vault`), plu
 
 > **See [SYNC.md](./SYNC.md) for the exhaustive, source-verified version, including exact field mappings and corrections to `docs/SYNC_WIRING.md` itself** — the in-app periodic sync timer is actually **30 minutes**, not 15 (15 minutes only applies to the *separate* WorkManager background task), the resume throttle is a 5-minute pull-skip plus a 45-second global throttle rather than "2 minutes," and the sync layer also covers `categories`, `contributors`, and `monthly_plans` (the Plan feature), none of which are mentioned below.
 
-Superseding `hello.md`'s "no cloud sync, no backend server" claim — per `docs/SYNC_WIRING.md`, the app now wires Home, Transactions, Analysis, Outings, Friends, and Settings to the **same Supabase project the web app uses**. This is explicitly **local-first**: Hive remains the only layer the UI renders from; Supabase is the durable store every local write eventually reaches, not a live source of truth the UI queries directly.
+Cloud sync uses the same Supabase project as the web app. Hive remains the UI read layer; eligible Cloud sync changes queue for upload. Phone only money data stays on the phone.
 
 ### Architecture
 
 ```
-UI  ──reads──►  Hive (always, offline-capable)
-User write ──► Hive first ──► SyncQueue (Hive box 'sync_queue')
+UI  ──reads──►  Hive (always, works with no internet)
+Cloud sync write ──► Hive first ──► SyncQueue (Hive box 'sync_queue')
                                    │  pushPending() — drains when online
                                    ▼
                                Supabase  ──pullAll()──►  merged into Hive
 ```
 
-- **`lib/core/sync/supabase_schema_map.dart`** — built directly against the real web schema (the web repo's `docs/DATABASE_SCHEMA.md` + `supabase/migrations/init.sql`), not guesses. Key facts honored: `transactions` use `total_amount`/`type`/`payment_method`/`account_id` (uuid FK) with purpose+category living on `transaction_splits` (name-keyed categories, matching the web quirk documented in `docs/DATABASE_SCHEMA.md` §5.2); `accounts` use lowercase `type`/`last4` with soft-delete; `purposes` are uuid rows resolved by name via a `RemoteIdCache`; `outings` use `status`/`auto_add_mode` with jsonb member objects; expense `split_type` is text with a `splits` jsonb; settlements are outing-level from/to member rows (mobile's per-expense payments carry `note: "exp:<id>"` to round-trip; web-created settlements apply FIFO on pull); `users` share `private_mode` + `default_account_id`. SMS metadata (bank/last4/upi/transfer flags) rides in `transactions.tags`; **raw SMS text is intentionally never uploaded**. Account/friend deletes are **soft deletes** (`is_active=false`), matching web semantics and the FK shape.
+- **`lib/core/sync/supabase_schema_map.dart`** — built directly against the real web schema (the web repo's `docs/DATABASE_SCHEMA.md` + `supabase/migrations/init.sql`), not guesses. Key facts honored: `transactions` use `total_amount`/`type`/`payment_method`/`account_id` (uuid FK) with purpose+category living on `transaction_splits` (name-keyed categories, matching the web quirk documented in `docs/DATABASE_SCHEMA.md` §5.2); `accounts` use lowercase `type`/`last4` with soft-delete; `purposes` are uuid rows resolved by name via a `RemoteIdCache`; `outings` use `status`/`auto_add_mode` with jsonb member objects; expense `split_type` is text with a `splits` jsonb; settlements are outing-level from/to member rows (mobile's per-expense payments carry `note: "exp:<id>"` to round-trip; web-created settlements apply FIFO on pull); `users` share `private_mode` + `default_account_id`. SMS metadata (bank/last4/upi/transfer flags) rides in `transactions.tags`; **raw SMS text is excluded from money sync**; explicit Send to support is a separate upload. Account/friend deletes are **soft deletes** (`is_active=false`), matching web semantics and the FK shape.
 - **`sync_queue.dart`** — a persisted queue; upserts coalesce per record, deletes supersede queued upserts, failed pushes stay queued for retry.
 - **`sync_service.dart`** — push + pull orchestration:
-  - Transactions pull: a rolling window of `transaction_date >= now - 35 days` (30 + buffer). Nothing already cached is pruned — the window governs what's actively *pulled*, not what may exist locally.
+  - Transactions pull: all active server rows, with confirmed delete-marker reconciliation. Never prune by age or by absence from a response; preserve and requeue eligible unsynced local rows.
   - Accounts / outings (+expenses +settlements) / friends / users shared fields: full pull, no windowing (small datasets).
   - Pull merge **never** overwrites a record that has queued local edits.
-  - `fetchTransactionRange(from, to)` — on-demand older-history fetch that progressively extends the offline cache (drives the Activity screen's "Load older transactions" footer).
-  - Sync triggers: after login, on app start (if already signed in), on every resume (self-throttled to 2 minutes), a periodic 15-minute timer, and a fire-and-forget push after every enqueue.
+  - `fetchTransactionRange(from, to)` — on-demand older-history fetch that progressively extends the local cache (drives the Activity screen's "Load older transactions" footer).
+  - Sync triggers: after login, on app start (if already signed in), on every resume (self-throttled to 2 minutes), a periodic 30-minute in-app timer, and a fire-and-forget push after every enqueue.
 - **`sms_rules_refresh_service.dart`** — **pull-only** admin data path. `sms_template_rules`/`sms_detection_rules`/`sms_block_rules` are fetched from Supabase (**never written** by mobile — these three tables remain admin-managed via the web admin portal, see `docs/DATABASE_SCHEMA.md` §11) and overwrite the local rule boxes only after a successful non-empty fetch, then `SmsRuleEngine.init()` + `BankSmsV4Parser.ensureLoaded()` re-run so an admin's rule edit applies mid-session with **no app restart**. Auto-refreshes daily + a manual "Refresh Detection Rules" button in Developer Options. Merchant rules (`user_merchants` on the web side) remain user-owned and are untouched by this refresh.
 
 ### What actually syncs (write-path hooks: Hive-write-then-enqueue)
@@ -456,13 +468,13 @@ User write ──► Hive first ──► SyncQueue (Hive box 'sync_queue')
 | Accounts | add / update / delete / onboarding completion |
 | Users (shared subset) | `private_mode` (via `PrivateModeService`) and `default_account` (pull-applied to settings) |
 
-**Explicitly local-only, never synced (no schema-map entry, cannot enter the queue):** PIN, biometrics, SMS-detection toggle, debug flags.
+**Explicitly stored locally, never synced (no schema-map entry, cannot enter the queue):** PIN, biometrics, SMS-detection toggle, debug flags.
 
 ### Screen behavior under this architecture
 
 - **Home / Detail / Analysis:** render from Hive exactly as before — no spinners; sync keeps the boxes current underneath.
-- **Activity:** "Load older transactions" footer fetches the next ~30-day slice older than the oldest cached row (offline → shows a clear message instead of silence). Search results carry a note that search covers only the cached window.
-- **Analysis:** switching to Month/Year triggers `_ensureRangeCached` — fetch-then-compute rather than silently charting partial data; offline shows a message.
+- **Activity:** "Load older transactions" footer fetches the next ~30-day slice older than the oldest cached row (no internet → shows a clear message instead of silence). Search results carry a note that search covers only the cached window.
+- **Analysis:** switching to Month/Year triggers `_ensureRangeCached` — fetch-then-compute rather than silently charting partial data; a failed Cloud sync fetch shows a No internet message.
 - **Friends:** contact rows open a pre-filled confirm form (no silent import); phone-number dedup runs before the form and again at save; only the explicitly-saved name+phone syncs.
 
 ### Why this matters for the web/mobile relationship
@@ -556,7 +568,7 @@ See §7 for the full field-level breakdown of `Transaction`, `Outing`/`OutingMem
 | Friends & repayments | ✅ Fully functional, including UPI auto-matching |
 | Analytics | ✅ Fully functional |
 | Investments | ✅ Functional (manual holdings + SMS-assisted allocation) |
-| Auth (Supabase, required) / PIN / biometrics | ✅ Fully functional |
+| Auth (Supabase for Cloud sync) / PIN / biometrics | ✅ Fully functional |
 | Supabase sync (local-first, push+pull) | ✅ Wired — see [SYNC.md](./SYNC.md); device-level end-to-end verification still pending per its own checklist |
 | **Wealth** | ✅ Real balances (shared with Home/Accounts) + persisted goals |
 | **Recurring** | ✅ Reads/creates real transactions |
@@ -578,7 +590,7 @@ This mobile app and `spentx-web` (documented in `docs/FULL_APP_DOCUMENTATION.md`
 
 | Concern | Web side | Mobile side |
 |---|---|---|
-| Auth | Supabase Auth, SSR client | Supabase Auth via `supabase_flutter`, now **required** to use the app (§3) |
+| Auth | Supabase Auth, SSR client | Supabase Auth via `supabase_flutter` for Cloud sync; Phone only needs no account (§3) |
 | New-user bootstrap | `handle_new_user()` trigger + `bootstrapUserWorkspace()` | Same trigger fires for mobile-originated signups; mobile's onboarding gate checks server data (§3) rather than assuming a fresh account |
 | Transactions | `transactions` + `transaction_splits`, written via RPC `create_transaction_with_splits` | Synced via the schema map in §8 — mobile respects the same `total_amount`/`account_id`/split-on-purpose shape |
 | Categories | `category_id` on splits is name-keyed, not a real FK (documented as a deliberate quirk in `docs/DATABASE_SCHEMA.md` §5.2) | Mobile's schema map explicitly honors this same name-keyed convention |
@@ -590,7 +602,7 @@ This mobile app and `spentx-web` (documented in `docs/FULL_APP_DOCUMENTATION.md`
 | Purposes | Personal + Family mandatory since migration `20260724` | Mobile's onboarding Step 3 (Personal pre-selected/locked, Family toggle) matches this exactly — the migration's stated intent was aligning with what mobile already did |
 | Split types | `outing_expenses.split_type` allows `equally`/`solo`/`custom`/`percentage`/`shares` at the DB layer, but the web TS `SplitType` only models `equally`/`solo`/`custom` (flagged as drift in `docs/DATABASE_SCHEMA.md` §19) | Mobile's `OutingExpense.splitType` is an int (`0`=solo, `1`=equally) — mobile doesn't yet use `percentage`/`shares` either; the DB's wider enum is provisioned ahead of both clients |
 
-**Not shared:** raw SMS text (mobile never uploads it — stays local, only structured/parsed transaction data syncs), PIN/biometric state, SMS-detection toggle, debug flags, device contacts (only explicitly-saved friend name+phone leaves the device).
+**Not shared:** raw SMS text in money sync (explicit Send to support is a separate user-initiated upload; template requests send masked formats), PIN/biometric state, SMS-detection toggle, debug flags, device contacts (only explicitly-saved friend name+phone leaves the device).
 
 ---
 

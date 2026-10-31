@@ -1,12 +1,23 @@
 # SpentX Mobile — Supabase Sync Architecture (Deep Reference)
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
 > Source-verified against `lib/core/sync/*.dart` in full, plus `lib/core/services/outing_transaction_sync.dart` and `lib/core/services/auto_detection_native_sync.dart`, as of 2026-07-20. Supersedes `Mobile app/SpentX/docs/SYNC_WIRING.md` where they disagree (§9 lists every correction). Cross-reference: [DATABASE.md](./DATABASE.md) for the local Hive boxes this layer reads/writes, and the web repo's `docs/DATABASE_SCHEMA.md` for the target Postgres schema.
 
-**Architecture in one line:** Hive is the only read layer the UI renders from; every local write goes Hive-first, then enqueues into a persisted `sync_queue` box, which a push loop drains to Supabase; a separate pull loop merges Supabase state back into Hive, but never overwrites a record that still has a queued local edit.
+**Architecture in one line:** Hive is the only read layer the UI renders from; Cloud sync writes go Hive-first, then enqueue into a persisted `sync_queue` box, which a push loop drains to Supabase; a separate pull loop merges Supabase state back into Hive, but never overwrites a record that still has a queued local edit.
 
 ```
-UI  ──reads──►  Hive (always, offline-capable)
-User write ──► Hive first ──► SyncQueue (Hive box 'sync_queue')
+UI  ──reads──►  Hive (always, works with no internet)
+Cloud sync write ──► Hive first ──► SyncQueue (Hive box 'sync_queue')
                                    │  pushPending() — drains when online
                                    ▼
                                Supabase  ──pullAll()──►  merged into Hive
@@ -35,7 +46,7 @@ UUIDv5, namespace `Uuid.NAMESPACE_URL`, so the same local record always maps to 
 
 | Local box/model | Supabase table | Field map | Transform / notes |
 |---|---|---|---|
-| `transactions` | `transactions` | `amount→total_amount`, `isExpense→type` (`'expense'`/`'income'`), `paymentType→payment_method` (`'Cash'` else `'UPI'`), `isAutoDetected→entry_source` (`'sms-auto-detected'`/`'mobile-manual'`), `source='mobile'` fixed, `status='completed'` fixed, `has_splits=false` fixed | `id` = stored `remoteId` else `SyncIds.forTransaction`. `account` (name) → `account_id` via `_resolveRemoteAccountId`. `monthKeyFor(date)` derives `YYYY-MM`. Transfers/bank/last4/upi are encoded as synthetic `tags` entries (`transfer`, `transfer_to:`, `bank:`, `last4:`, `upi:`) — the web schema has no transfer concept, and **raw SMS text is intentionally never uploaded**. |
+| `transactions` | `transactions` | `amount→total_amount`, `isExpense→type` (`'expense'`/`'income'`), `paymentType→payment_method` (`'Cash'` else `'UPI'`), `isAutoDetected→entry_source` (`'sms-auto-detected'`/`'mobile-manual'`), `source='mobile'` fixed, `status='completed'` fixed, `has_splits=false` fixed | `id` = stored `remoteId` else `SyncIds.forTransaction`. `account` (name) → `account_id` via `_resolveRemoteAccountId`. `monthKeyFor(date)` derives `YYYY-MM`. Transfers/bank/last4/upi are encoded as synthetic `tags` entries (`transfer`, `transfer_to:`, `bank:`, `last4:`, `upi:`) — the web schema has no transfer concept, and **raw SMS text is excluded from money sync** (explicit Send to support is a separate upload). |
 | same tx | `transaction_splits` (1 row/tx) | `id=SyncIds.forSplit`, `transaction_id`, `purpose_id` (resolved uuid), `category_id=category` (**name string**, matching web's name-keyed convention — see web `docs/DATABASE_SCHEMA.md` §5.2), `outing_id`, `contributor_id`, `amount`, `note=''` | `category` lives only on the split, never on `transactions`. `contributor_id` resolved only when `isExpense==false` (income). |
 | `accounts` (`settings.onboardingAccounts`) | `accounts` | `name`, `type` (Title Case↔lowercase via `toRemoteType`/`toLocalType`: Bank/Cash/Wallet/Credit), `last4Digits→last4`, `openingBalance→opening_balance`, `isActive→is_active` | Soft delete only. Credit/wallet types are deliberately preserved for net-worth parity with web. |
 | `outings` box | `outings` | `title`, `category→type`, `location`, `startDate→start_date`, `endDate→end_date`, `isActive→status` (`'active'`/`'completed'`), `isAutoMode→auto_add_mode`, `members` jsonb `{id,name,isCurrentUser}` | `created_by=uid` added (NOT NULL). `is_active` is always pushed `true` (it's the soft-delete flag, not running-state — **`status`** is the running-state field). "You" member identified by lowercase name match in both directions. |
@@ -63,7 +74,7 @@ UUIDv5, namespace `Uuid.NAMESPACE_URL`, so the same local record always maps to 
 1. Sorts the queue by `_pushPriority` (`account=0`, `contributor/category=1`, `friend/friendDelete/userMerchant/userSettings=2`, `outing=3`, `transaction=4`, `monthlyPlan=5`, else `9`), then by `at` ascending within a tier — so referenced entities (accounts, categories) push before the transactions/outings that depend on them.
 2. Iterates `_pushEntry` per queued item.
 3. On success: `SyncQueue.remove(id)`.
-4. On exception: the entry is **left in the queue** — implicit retry next cycle, no max-retry count or backoff. `lastError`/`lastEntity` recorded to `settings.sync_last_push_error`/`_at`/`_ok` (surfaced in Developer Options).
+4. On a retryable network failure, the entry is **left in the queue** for retry with backoff; permanent rejections can be parked. `lastError`/`lastEntity` recorded to `settings.sync_last_push_error`/`_at`/`_ok` (surfaced in Developer Options).
 
 **Transaction pushes** go through `_upsertTransactionWithOutingFallback` — retries once with `outing_id=null` if the FK fails, so an outing that hasn't reached the server yet doesn't block the money row from syncing — then stamps `remoteId` back onto the local Hive row via `_stampLocalTransactionRemoteId`.
 
@@ -77,13 +88,13 @@ UUIDv5, namespace `Uuid.NAMESPACE_URL`, so the same local record always maps to 
 
 **Order:** `_pullAccountsAndPurposes` → `_pullCategories` → `_pullContributors` → `_pullMonthlyPlans` → `_pullUserMerchants` → `_pullTransactionsWindow` → `_pullOutings` → `_pullFriends` → `_pullUserSettings`. Merchants intentionally pull **before** transactions so SMS auto-add has fresh merchant rules available immediately after a reinstall/pull.
 
-- **Transactions:** window = `now - 35 days` (`windowDays=35`), extendable backward via `fetchTransactionRange` (used by "Load older transactions" on Activity/Analytics), and remembered in `settings.tx_cache_extended_since` so the periodic 35-day reconcile doesn't prune history that "Load older" already fetched. `_mergeTransactionRows`: upserts every server row (mapped via `TransactionMap.toLocal`, splits joined in chunks of 100 ids); rows with a **pending offline delete are dropped, never resurrected**; rows with any other pending op are left untouched entirely (local wins until pushed). With `reconcileWindow=true`, it removes local rows older than the extended-start, and drops in-window rows absent from the server's remote-id set (server-side delete) — unless they're pending, or `isPendingVerification==true`.
-- **Accounts/purposes:** full pull filtered `is_active=true`, rebuilds the `RemoteIdCache` name→id maps, then reconciles `settings.onboardingAccounts`/`purposeTypes`, keeping only local entries still `SyncQueue.hasPending` (offline creates) — anything else missing server-side is dropped.
+- **Transactions:** `_pullTransactionsWindow` reads all active server transactions despite its historical name. `_mergeTransactionRows` merges returned rows with pending-edit and timestamp guards. Reconciliation checks missing IDs for explicit server delete markers; it retains and requeues eligible rows the server never saw. If the check fails, local rows stay. There is no 35-day prune rule and no deletion merely because a response omitted a row. `fetchTransactionRange` is an additive history fetch.
+- **Accounts/purposes:** merge server rows and rebuild remote ID maps. Missing local entries are retained and eligible entries requeued; removal requires a confirmed server delete marker, with local-edit guards.
 - **Outings:** full pull of outings + expenses + settlements (all by `user_id`, outings additionally `is_active=true`), skips any outing with `SyncQueue.hasPending(outing, id)`; settlement rows are matched to expenses via the `exp:<id>` note marker, and unmatched ("unlinked") settlements apply FIFO across the member's outstanding shares.
-- **Friends/contributors/user_merchants:** server-active rows are authoritative; local-only entries are kept solely if `SyncQueue.hasPending`.
+- **Friends/contributors/user_merchants:** merge active server rows, preserve local edits, and use confirmed delete markers to remove rows. Missing server rows are kept and eligible rows requeued. Tables without delete markers do not lose local rows to a pull.
 - **Users row:** `private_mode`, `profile_name` (skipped if `settings.profile_name_user_set==true`), `default_account_id`→name, and `app_pin_reset_at` → `PinService.applyRemotePinResetIfNeeded` → fires `onPinResetApplied`.
 
-**"Never overwrite local edits" is concretely:** `SyncQueue.hasPending(entity, localId)` (or `hasPendingOp`/`hasPendingDelete`) checked per-row before any local mutation during merge. There is **no timestamp/version-based conflict resolution anywhere in this codebase** — presence in the sync queue is the sole conflict signal.
+**Local edit protection:** pending-operation checks and local/server timestamps protect local edits. A queued edit wins until the server clock is strictly newer; pending local deletes are not resurrected.
 
 ---
 
@@ -94,8 +105,8 @@ UUIDv5, namespace `Uuid.NAMESPACE_URL`, so the same local record always maps to 
 ## 5. `connectivity_sync_listener.dart`
 
 Subscribes to `Connectivity().onConnectivityChanged`; "online" = any of mobile/wifi/ethernet/vpn. Debounced **20 seconds** (`_lastOnlineKick`) to avoid flaky-radio spam triggering repeated syncs. Behavior:
-- Was previously offline this session → transition to online triggers `SyncService.fullSync()` (push + pull).
-- Never seen offline this session, online→online blip → just `SyncService.pushPending()`.
+- Previously had no internet this session → transition to online triggers `SyncService.fullSync()` (push + pull).
+- No loss of internet observed this session, online→online blip → just `SyncService.pushPending()`.
 
 Started/stopped from `main.dart` `_setupSync()`/`dispose()`.
 
@@ -132,7 +143,7 @@ Purpose: native Android code (the SMS `BroadcastReceiver`, the `NotificationList
 | Every entity mutation | `queueTransactionUpsert/Delete`, `queueOutingUpsert/Delete`, `queueAccountUpsert/Delete`, `queueFriendUpsert`, `queueContributorUpsert/Delete`, `queueCategoryUpsert`, `queuePlanUpsert/Delete`, `queueMerchantUpsert/Delete`, `queueUserSettings` (each internally calls `_kickPush()`) | `transaction_provider.dart`, `outing_provider.dart:596,631`, `user_state_provider.dart`, `contributor_provider.dart`, `category_provider.dart`, `plan_provider.dart`, `merchant_learning_service.dart`, `private_mode_provider.dart:16`, `auto_rule_engine.dart:343` (SMS auto-add) |
 | Periodic in-app timer | `Timer.periodic` → `fullSync()`, **every 30 minutes** | `sync_service.dart:63` |
 | Periodic WorkManager (headless) | `registerPeriodic`, task `spentx.syncDataQueue`, **every 15 minutes** | `background_sms_scheduler.dart:44-52` |
-| App reset / logout | `SyncService.pushPending()` — 10s timeout, best-effort flush before wipe | `app_reset_service.dart:24` |
+| Explicit app reset | `SyncService.pushPending()` — 10s timeout, best-effort flush before wipe | `app_reset_service.dart:24` |
 | Settings → sign out | `SyncService.stop()` | `settings_screen.dart:503` |
 | Dev Options "repair" button | `SyncService.requeueAllLocalDataAndPush()` | `developer_options_screen.dart:43` |
 | "Load older" (Activity/Analytics) | `SyncService.fetchTransactionRange()` | `transactions_screen.dart:59`, `analytics_screen.dart:63` |
@@ -148,7 +159,7 @@ The mobile project's own `SYNC_WIRING.md` is a good high-level summary but gets 
 - **Resume throttle:** doc says "self-throttled to 2 min"; the actual logic is `onForeground()` skips the **pull** if `_lastPullAt` was < 5 minutes ago (pushes still run), and `fullSync()` itself has a separate **45-second** global throttle.
 - **Missing tables:** the doc's table list omits `categories`, `contributors`, `monthly_plans`, and `user_merchants` — all four are present and actively synced (§1) — plus it never mentions the deterministic `SyncIds`/`RemoteIdCache` machinery every FK resolution depends on.
 - **Missing push ordering:** the doc doesn't mention `_pushPriority` tiering or the outing-FK/linked-transaction unique-violation fallback logic (§2) — it only vaguely says "upserts prune remote children removed locally."
-- **"Never overwrites local edits" under-specified:** the doc states this as a general property without saying *how* — it's concretely `SyncQueue.hasPending*` checks (§3), not a version/timestamp compare. Worth stating explicitly since there is genuinely no other conflict-resolution algorithm in the codebase.
+- **Local edit protection:** both pending-operation checks and timestamps matter; see §3. An absent server row is not proof of deletion.
 - **Conflates two different "background" mechanisms:** the doc doesn't distinguish the WorkManager background push isolate (`BackgroundDataSync`, §4, 15-min periodic + one-off, network-gated) from the in-app `SyncService` timer (§9, 30-min) — it talks about "background sync" as one thing when it's architecturally two.
 - **Never mentions the native-bridge concept:** `auto_detection_native_sync.dart` (§8) isn't referenced anywhere in the doc — a reader could easily assume all "sync" in this app means Supabase sync; it doesn't, and the two are unrelated mechanisms (SharedPreferences-only vs. Postgres-backed).
 - **Omits the outing-auto-link mechanism:** `OutingTransactionSync`/the auto-link-to-outing logic (§7) and its relationship to `queueOutingUpsert` (full-document push, no incremental total sync) aren't mentioned at all.

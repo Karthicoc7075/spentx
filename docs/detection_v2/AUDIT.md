@@ -1,5 +1,18 @@
 # SpentX Smart Detection Flow v2 — Architectural Audit & Discovery Report
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
+Implementation commits: app `aa31f07`, `82a84c3`, `86cb5b9`, `dc8bc18` (Step 1); `0f6de75`, `ed8d973`, `59839ee` (Step 2); `f85233a` through `7843698` and website `daf8ce5`, `574f61e`, `66294f0` (Step 3). Step 4: app `7aab0f6` (UI/comments), `5b28cd5` (docs/sync comments), and this website documentation commit. All 1,872 Flutter tests passed; analysis has 0 errors, 0 warnings and two existing deprecation infos. Validation is recorded in [FEATURE_STATUS.md](../FEATURE_STATUS.md).
+
 > **Date:** October 24, 2026  
 > **Branch:** `feature/smart-detection-flow-v2`  
 > **Status:** Phase 0 Complete — Approved with Finalized Decisions & Baseline Test Results. Phase 2 done, pending phone test (2026-10-25, see §14).  

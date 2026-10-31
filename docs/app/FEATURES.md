@@ -1,8 +1,19 @@
 # SpentX Mobile — Full Features Reference
 
+## Storage choice and data safety (Steps 1–4, 2026-10-31)
+
+SpentX is **local-first (works with no internet)**: saved money data is read and edited on the phone.
+
+- **Phone only** (`storage_mode = phoneOnly`) keeps money data on this phone and never uploads it. No account is required. Admin rule downloads, masked template requests and user-initiated **Send to support** remain available when internet is available; Phone only does not mean zero network traffic.
+- **Cloud sync** (`storage_mode = cloudSync`) syncs money data with an account. Switching from Phone only asks **Upload my phone data / Start fresh / Cancel**; signing in must not silently upload Phone only data.
+- **No internet** describes a Cloud sync user's temporary connection state, including Wi-Fi without working internet. Local edits wait for upload when requests succeed again.
+- Session drops, failed validation, missing setup rows and unconfirmed account revocation never wipe unsynced data. Destructive removal of unsynced data requires confirmed account deletion or the user's explicit Reset/Delete action. Manual sign-out checks pending uploads and refuses if they cannot be flushed; after successful checks it clears the local account workspace.
+- Reconciliation keeps local rows the server never saw and queues eligible rows for upload. Only confirmed server delete markers (`is_active = false` or `deleted_at`) remove rows during reconciliation, subject to pending-edit/newer-local-edit guards. Missing responses, failed lookups and row age do not authorize deletion. SMS rows awaiting verification retain their upload guard.
+- Current names separate storage choice (`storage_mode`, `phone_only_user`) from connectivity (`hasNoInternet`, website `isOnline`). Legacy names are compatibility details, not user-facing modes.
+
 > Source-verified against the actual Dart code as of 2026-07-20, correcting/superseding `Mobile app/SpentX/hello.md` where it has drifted (the router shows `/budgets` now redirects to `/plan`, `/search` now redirects to `/activity`, and several screens hello.md flagged as pure mock are now wired to real data). Every correction below is called out explicitly. See [DATABASE.md](./DATABASE.md) for storage, [SYNC.md](./SYNC.md) for backend sync, [WORKFLOWS.md](./WORKFLOWS.md) for end-to-end flows.
 
-**Version:** 1.0.0+1 · **Theme:** always dark (Settings "Dark Mode" row is now an honest static "Always on" label, not a fake toggle, per the debug-fix pass) · **Auth:** Supabase, required.
+**Version:** 1.0.0+1 · **Theme:** always dark (Settings "Dark Mode" row is now an honest static "Always on" label, not a fake toggle, per the debug-fix pass) · **Auth:** Supabase for Cloud sync; no account for Phone only.
 
 ---
 
@@ -35,7 +46,7 @@
 
 ## 1. Auth & onboarding
 
-### Auth (required — supersedes flow-diagram-level `docs/AUTH_SETUP.md`)
+### Auth (required for Cloud sync)
 
 Five distinct screens/routes, all under `lib/features/auth/presentation/`, using `AuthService` (Supabase):
 
@@ -47,7 +58,7 @@ Five distinct screens/routes, all under `lib/features/auth/presentation/`, using
 | `/auth/forgot-password` | `AuthForgotPasswordScreen` | Single email field (basic `.contains('@')` check). Calls `AuthService.sendPasswordReset()`; success swaps to a "Check your email" view with "BACK TO LOG IN" (`context.go('/auth/login')`). Reset email deep-links back via `spentx://reset-password`. |
 | `/auth/reset-password` | `AuthResetPasswordScreen` | Reached only via the deep link once Supabase's `passwordRecovery` auth event creates an active recovery session (guards with `AuthService.isSignedIn`, errors "Reset session expired" otherwise). Fields: new password + confirm (same validation as signup). Calls `AuthService.updatePassword()`, then `AuthService.signOut()` (ends the recovery session), shows a confirmation, `context.go('/auth/login')`. No back button (`automaticallyImplyLeading: false`) — it's a dead-end deep-link screen. |
 
-**Router-level guard** (`app_router.dart`): every route except `/` and `/auth/*` redirects to `/auth` while signed out — covers deep links, not just cold start.
+**Router-level guard** (`app_router.dart`): distinguishes Phone only access from Cloud sync authentication, including deep links. A missing session does not authorize deleting unsynced data.
 
 ### Onboarding gate — server-decided, not purely local
 
@@ -110,7 +121,7 @@ Both save + teach the merchant-recognition engine when a UPI/ref is entered.
 
 **Route:** Tab 1, also `/activity` (accepts an optional `?purpose=` query param to pre-filter — not in the old docs). Search icon (live filter over merchant/category/account, real — not the removed mock Search screen) + calendar icon (date-range filter). Purpose tabs (if >1 purpose), Total Expenses summary card, Category filter chips, date-grouped list. Trip expenses roll up into a single "outing summary" row.
 
-"Load older transactions" footer (new, part of the sync layer — see SYNC.md §3) fetches the next ~30-day slice older than the oldest cached row; offline shows a clear message instead of silence.
+"Load older transactions" footer (new, part of the sync layer — see SYNC.md §3) fetches the next ~30-day slice older than the oldest cached row; no internet shows a clear message instead of silence.
 
 ---
 
@@ -152,7 +163,7 @@ Both save + teach the merchant-recognition engine when a UPI/ref is entered.
 
 **Route:** Tab 2. Trip privacy banner (replaces filters when active, title becomes "Trip analytics"). Purpose filter chips (hidden in privacy mode). Time Range tabs (Day/Week/Month default/Year). Hero Savings Card (`income − spent` for the window) with a health badge: >₹50,000 "💎 Wealth Builder Mode" (cyan) · >₹10,000 "✓ Healthy Balance" (green) · >₹0 "📈 On Track" (orange) · <₹0 "⚠️ Overspending" (red). Detailed Stats chips. Cash Flow bar chart (bucketed by hour/weekday/week/month per range). Top Categories (top 5, trip expenses roll up under synthetic "Trip" category). Top Spending Items (top 5 biggest single expenses or trips).
 
-"Ensure range cached" logic (new, sync-related) fetches-then-computes rather than silently charting partial data when switching to Month/Year; offline shows a message.
+"Ensure range cached" logic (new, sync-related) fetches-then-computes rather than silently charting partial data when switching to Month/Year; a failed Cloud sync fetch shows a No internet message.
 
 ---
 
@@ -193,7 +204,7 @@ Types: Liquid, Mutual Fund, Fixed Deposit, Stocks, Bonds, Crypto, Gold, Real Est
 
 Cash/Bank/Credit balances are now computed for real via `_realBalances()`: iterates active accounts, calls `getFullAccountBalance(name)` per account, buckets by account type (`cash`, `credit`, else bank/wallet). Total net worth comes from the same shared `netWorthProvider` Home/Accounts use (explicit source comment: "so Home / Wealth / Accounts never drift"). Investment holdings come from `investmentProvider`. Purpose-split net worth via `netWorthByPurposeProvider`.
 
-**Wealth Goals are now persisted** — `_loadGoals()`/`_saveGoals()` read/write `settings.wealth_goals` (see DATABASE.md §3), surviving app restarts. Not yet synced to Supabase though (no schema-map entry — local-only, see SYNC.md §1).
+**Wealth Goals are now persisted** — `_loadGoals()`/`_saveGoals()` read/write `settings.wealth_goals` (see DATABASE.md §3), surviving app restarts. Not yet synced to Supabase though (no schema-map entry — stored locally, see SYNC.md §1).
 
 "SMS Wealth Events" card (keywords: `salary, bonus, dividend, interest, refund, sale, maturity`, Allocate assigns 10% to first savings goal). Expanded Wealth Features card still has two informational-only demo placeholders (Diversification Score, Financial Freedom Tracker).
 
@@ -207,7 +218,7 @@ Cash/Bank/Credit balances are now computed for real via `_realBalances()`: itera
 
 ## 14. Settings ("More")
 
-**Route:** Tab 4. Profile header (tap to rename). HELP: App Guide. CONFIGURATION: Account Configuration (→ Premium Settings, §17). FEATURES: Manage Outing, Outing Privacy Mode switch (off requires PIN/name verification), Manage Friends, Manage Merchants. DEVELOPER: SMS Rules Storage, Developer Options. PREFERENCES: Private Mode switch (blocked while Outing Privacy live, off requires verification), Notification History, Automatic SMS Detection switch, Dark Mode row (honest static "Always on" label). SECURITY: Set/Change PIN, Lock Screen switch, Fingerprint Authentication switch, Reset PIN (biometric verification required, not old PIN), **Sign Out** (ends Supabase session only — local Hive data stays; calls `SyncService.stop()`, see SYNC.md §9). DANGER ZONE: Reset App Data (confirmation → PIN/biometric → final confirm → wipes all Hive boxes + signs out of Supabase → force-quits so first-time setup + `/auth` run on next open).
+**Route:** Tab 4. Profile header (tap to rename). HELP: App Guide. CONFIGURATION: Account Configuration (→ Premium Settings, §17). FEATURES: Manage Outing, Outing Privacy Mode switch (off requires PIN/name verification), Manage Friends, Manage Merchants. DEVELOPER: SMS Rules Storage, Developer Options. PREFERENCES: Private Mode switch (blocked while Outing Privacy live, off requires verification), Notification History, Automatic SMS Detection switch, Dark Mode row (honest static "Always on" label). SECURITY: Set/Change PIN, Lock Screen switch, Fingerprint Authentication switch, Reset PIN (biometric verification required, not old PIN), **Sign Out** (requires pending uploads to flush before clearing the local account workspace; see SYNC.md). DANGER ZONE: Reset App Data (confirmation → PIN/biometric → final confirm → wipes all Hive boxes + signs out of Supabase → force-quits so first-time setup + `/auth` run on next open).
 
 ---
 
@@ -233,7 +244,7 @@ Cash/Bank/Credit balances are now computed for real via `_realBalances()`: itera
 
 ## 18. Developer Options
 
-**Route:** `/developer-options`. Master Debug Logging + Debug Toast Messages + Log Retention dropdown → Master Debug Log. "Run System Health Check" (live diagnostic across Hive/SMS/notifications/merchant rules/pending queue/outings/balances). SMS Detection Tools (Detection Rules, Rules Storage, Detected SMS, Detection Lab, Real-Time SMS Test). Clear Transaction History (7 destructive one-tap actions with per-action confirmation). Quick SMS Test & Rule Creator — **"Create Test Rule from SMS" now actually creates a rule** (parses the pasted SMS via `SmsRuleEngine`, auto-tags segments, saves via `SmsTemplateEngine.saveRule`) — previously a stub that only showed a SnackBar. SMS Detection Debug Log panel. Disable App Rotation switch. **"Sync repair"** button (new — `SyncService.requeueAllLocalDataAndPush()`, see SYNC.md §2). Full App Prompt/Specification — the entire internal app-spec document, copyable, reachable from within the shipped app (note: that embedded spec still describes the app as fully offline/no-cloud-sync — itself stale, same drift category as the old `hello.md`/`db.md`/`SYNC_WIRING.md`).
+**Route:** `/developer-options`. Master Debug Logging + Debug Toast Messages + Log Retention dropdown → Master Debug Log. "Run System Health Check" (live diagnostic across Hive/SMS/notifications/merchant rules/pending queue/outings/balances). SMS Detection Tools (Detection Rules, Rules Storage, Detected SMS, Detection Lab, Real-Time SMS Test). Clear Transaction History (7 destructive one-tap actions with per-action confirmation). Quick SMS Test & Rule Creator — **"Create Test Rule from SMS" now actually creates a rule** (parses the pasted SMS via `SmsRuleEngine`, auto-tags segments, saves via `SmsTemplateEngine.saveRule`) — previously a stub that only showed a SnackBar. SMS Detection Debug Log panel. Disable App Rotation switch. **"Sync repair"** button (new — `SyncService.requeueAllLocalDataAndPush()`, see SYNC.md §2). Full App Prompt/Specification — the entire internal app-spec document, copyable, reachable from within the shipped app.
 
 ---
 
@@ -315,7 +326,7 @@ No route exists for Loans or Cash Reminder (§20).
 | Friends & repayments | ✅ Fully functional, including UPI auto-matching |
 | Analytics | ✅ Fully functional |
 | Investments | ✅ Functional (manual holdings + SMS-assisted allocation) |
-| Auth (Supabase, required) / PIN / biometrics | ✅ Fully functional |
+| Auth (Supabase for Cloud sync) / PIN / biometrics | ✅ Fully functional |
 | **Supabase sync (push+pull)** | ✅ Wired and detailed in SYNC.md — device-level end-to-end verification still pending per its own checklist |
 | **Wealth** | ✅ **Upgraded from ⚠️ Partial** — real balances (shared with Home/Accounts), persisted goals |
 | **Recurring** | ✅ **Upgraded from ❌ mock** — reads/creates real transactions |
