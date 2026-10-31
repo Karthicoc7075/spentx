@@ -164,8 +164,10 @@ export function computeAccountBalancesMap(
 
     let targetAcc: Account | undefined;
     const txAccountId = tx.accountId?.trim().toLowerCase();
-    if (txAccountId && accountById.has(txAccountId)) {
-      targetAcc = accountById.get(txAccountId);
+    if (txAccountId) {
+      if (accountById.has(txAccountId)) {
+        targetAcc = accountById.get(txAccountId);
+      }
     } else {
       const txName = (tx.accountName ?? tx.account ?? "").trim().toLowerCase();
       if (txName && accountByName.has(txName)) {
@@ -182,8 +184,10 @@ export function computeAccountBalancesMap(
       }
       let destAcc: Account | undefined;
       const txToAccountId = tx.toAccountId?.trim().toLowerCase();
-      if (txToAccountId && accountById.has(txToAccountId)) {
-        destAcc = accountById.get(txToAccountId);
+      if (txToAccountId) {
+        if (accountById.has(txToAccountId)) {
+          destAcc = accountById.get(txToAccountId);
+        }
       } else if (tx.transferTo) {
         const destName = tx.transferTo.trim().toLowerCase();
         if (accountByName.has(destName)) {
@@ -254,15 +258,15 @@ export function getAccountBalance(
     }
 
     const txAccountId = (tx.accountId ?? "").trim().toLowerCase();
-    const isIdMatch = account.id && txAccountId && txAccountId === accountIdLower;
+    const isIdMatch = Boolean(account.id && txAccountId && txAccountId === accountIdLower);
     const isNameMatch =
-      !isIdMatch &&
+      !txAccountId &&
       (tx.accountName ?? tx.account ?? "").trim().toLowerCase() === accountNameLower;
 
     const txToAccountId = (tx.toAccountId ?? "").trim().toLowerCase();
-    const isDestIdMatch = account.id && txToAccountId && txToAccountId === accountIdLower;
+    const isDestIdMatch = Boolean(account.id && txToAccountId && txToAccountId === accountIdLower);
     const isDestNameMatch =
-      !isDestIdMatch &&
+      !txToAccountId &&
       (tx.transferTo ?? "").trim().toLowerCase() === accountNameLower;
 
     const amount = transactionAmount(tx);
