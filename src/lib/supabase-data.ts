@@ -2341,7 +2341,7 @@ function toSharedTransaction(row: Row, purposeId: string): Transaction {
 // same client used everywhere else) always returns zero rows for them.
 // We call /api/share/transactions which validates the token, queries the
 // transactions table to strip soft-deleted transactions and deleted outings,
-// and falls back to get_shared_transactions RPC if offline.
+// and falls back to get_shared_transactions RPC if there is no internet.
 export async function fetchSharedTransactions(
   token: string,
   purposeId: string,
@@ -2852,7 +2852,7 @@ export async function fetchOnboardingState(userId?: string) {
       return { needsOnboarding: false };
     }
   } catch {
-    // Offline/schema drift: fall back to the flag alone rather than either
+    // No internet, or schema drift: fall back to the flag alone rather than either
     // blocking a real user or silently skipping setup.
     return { needsOnboarding: true };
   }

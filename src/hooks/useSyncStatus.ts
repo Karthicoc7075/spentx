@@ -36,7 +36,7 @@ export function useSyncStatus() {
     [lastSyncedAt],
   );
 
-  // A banner should render only while the browser is offline and the
+  // A banner should render only while the browser has no internet and the
   // person has not dismissed it. Nothing in the website reads this yet.
   const showNoInternetBanner = !isOnline && !noInternetDismissed;
 

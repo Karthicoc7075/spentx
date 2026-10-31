@@ -91,8 +91,8 @@ export function defaultToCategory(item: DefaultCategory): Category {
 }
 
 /**
- * Used only when the catalog cannot be read (signed out / offline first
- * load). Deliberately tiny — the real list is the catalog.
+ * Used only when the catalog cannot be read (signed out, or the first load
+ * with no internet). Deliberately tiny — the real list is the catalog.
  */
 export const MINIMAL_FALLBACK_CATEGORIES: Category[] = (
   [

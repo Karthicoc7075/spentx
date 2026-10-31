@@ -9,7 +9,7 @@
 --   2. New table public.goal_contributions + RPC add_goal_contribution():
 --      deposits are added atomically on the server (no read-modify-write of
 --      saved_amount from clients). Replays with the same contribution id are
---      no-ops, so offline outbox retries never double count.
+--      no-ops, so outbox retries with no internet never double count.
 --   3. Trigger: soft-deleting a transaction that funded a goal deposit
 --      reverses that deposit (saved_amount goes back down).
 --   4. savings_goals: checks (target_amount > 0, saved_amount >= 0, added

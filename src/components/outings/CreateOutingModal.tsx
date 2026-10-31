@@ -335,7 +335,7 @@ export function CreateOutingModal({
                         try {
                           await addCategory(n);
                         } catch {
-                          /* offline / RLS — still select locally */
+                          /* no internet or RLS — still select locally */
                         }
                         setCategory(n);
                         setCustomCategory("");

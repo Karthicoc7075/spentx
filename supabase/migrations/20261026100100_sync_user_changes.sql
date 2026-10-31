@@ -12,7 +12,7 @@
 --     policy; only the SECURITY DEFINER trigger function writes.
 --   * Delta pulls by updated_at need a server clock on every write. UPDATE
 --     already sets updated_at = now() (touch triggers); this adds the same on
---     INSERT, so a row created offline and pushed later is not older than the
+--     INSERT, so a row created with no internet and pushed later is not older than the
 --     other device's cursor. Missing UPDATE touch triggers are added too.
 --     Only the updated_at timestamp is set; no other column, no data change.
 --   * (user_id, updated_at) indexes where missing.
